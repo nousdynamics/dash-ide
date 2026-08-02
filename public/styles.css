@@ -338,6 +338,32 @@ tbody tr:hover td { background: var(--surface-card-hover); }
 .convo-right { text-align: right; }
 .convo-right .label { font-size: 12px; color: var(--text-secondary); }
 
+/* Detalhe de campanha */
+.voltar { display: inline-block; font-size: 12px; color: var(--blue-300); text-decoration: none; }
+.voltar:hover { text-decoration: underline; }
+tr.linha-click { cursor: pointer; }
+tr.linha-click:focus-visible { outline: 2px solid var(--blue-400); outline-offset: -2px; }
+
+.anuncio { border-top: 1px solid var(--border-subtle); padding: var(--space-3) 0; }
+.anuncio:first-of-type { border-top: none; padding-top: 0; }
+.anuncio-topo { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.anuncio-grupo { font-size: 13px; font-weight: 600; }
+.anuncio-tipo { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.anuncio-metricas { display: flex; align-items: center; gap: var(--space-3); font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+
+.txt-bloco { margin-top: var(--space-2); }
+.txt-rotulo { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); margin-bottom: var(--space-1); }
+.txt-item { font-size: 12px; color: var(--text-secondary); padding: 2px 0 2px var(--space-3); border-left: 2px solid var(--border-subtle); }
+.txt-url { color: var(--blue-300); word-break: break-all; }
+.txt-fixado { font-size: 9px; background: var(--warning-bg); color: var(--warning); padding: 1px 5px; border-radius: var(--radius-sm); margin-left: 6px; }
+
+.recurso-grupo { margin-bottom: var(--space-3); }
+.recurso-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.chip-recurso {
+  font-size: 11px; padding: 3px var(--space-2); border-radius: var(--radius-sm);
+  background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border-subtle);
+}
+
 /* --------------------------------------------------------------- Controles */
 
 .select, .btn-secondary {

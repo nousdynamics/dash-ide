@@ -397,7 +397,12 @@ const estado = {
   filtro: { preset: '30d', de: null, ate: null, comparar: true },
   // Filtros da tabela de campanhas.
   campanhaBusca: '',
-  campanhaStatus: '',
+  campanhaModoBusca: 'contem',   // 'contem' | 'exata'
+  campanhaStatus: 'nao_removidas',
+  campanhaId: null,              // detalhe aberto
+  kwBusca: '',
+  kwModoBusca: 'contem',
+  kwCorrespondencia: '',
   campanhaOrdem: { coluna: 'investimento', desc: true },
   processoId: null,
   convPagina: 0,
@@ -550,18 +555,26 @@ function celula(item, col) {
 }
 
 async function paginaCampanhas(el) {
+  if (estado.campanhaId) return paginaCampanhaDetalhe(el, estado.campanhaId);
+  return paginaCampanhasLista(el);
+}
+
+async function paginaCampanhasLista(el) {
   el.innerHTML = cabecalho('Campanhas', 'Google Ads') + barraFiltros() + carregando(6);
 
   let d;
-  try { d = await api(`/api/ads/campanhas?${queryPeriodo()}`); }
+  try { d = await api(`/api/ads/campanhas?${queryPeriodo()}&status=${encodeURIComponent(estado.campanhaStatus)}`); }
   catch (e) { return void (el.innerHTML = cabecalho('Campanhas', '') + barraFiltros() + erro(e.message)); }
 
   const busca = estado.campanhaBusca.trim().toLowerCase();
   const ord = estado.campanhaOrdem;
 
-  let itens = d.itens.filter((i) => i.investimento > 0);
-  if (busca) itens = itens.filter((i) => i.nome.toLowerCase().includes(busca));
-  if (estado.campanhaStatus) itens = itens.filter((i) => i.status === estado.campanhaStatus);
+  let itens = d.itens;
+  if (busca) {
+    itens = estado.campanhaModoBusca === 'exata'
+      ? itens.filter((i) => i.nome.toLowerCase() === busca)
+      : itens.filter((i) => i.nome.toLowerCase().includes(busca));
+  }
 
   itens = [...itens].sort((a, b) => {
     const x = a[ord.coluna], y = b[ord.coluna];
@@ -573,9 +586,18 @@ async function paginaCampanhas(el) {
     return ord.desc ? -cmp : cmp;
   });
 
-  const statusDisponiveis = [...new Set(d.itens.filter((i) => i.investimento > 0).map((i) => i.status))].sort();
-  const optsStatus = ['<option value="">Todos os status</option>']
-    .concat(statusDisponiveis.map((st) => `<option value="${esc(st)}"${st === estado.campanhaStatus ? ' selected' : ''}>${esc(st)}</option>`))
+  const OPCOES_STATUS = [
+    ['nao_removidas', 'Ativas e pausadas'],
+    ['ativas', 'Somente ativas'],
+    ['pausadas', 'Somente pausadas'],
+    ['removidas', 'Somente excluídas'],
+    ['todas', 'Todas, inclusive excluídas'],
+  ];
+  const optsStatus = OPCOES_STATUS
+    .map(([v, r]) => `<option value="${v}"${v === estado.campanhaStatus ? ' selected' : ''}>${esc(r)}</option>`)
+    .join('');
+  const optsModo = [['contem', 'contém'], ['exata', 'exata']]
+    .map(([v, r]) => `<option value="${v}"${v === estado.campanhaModoBusca ? ' selected' : ''}>${esc(r)}</option>`)
     .join('');
 
   const cabecalhos = COLUNAS_CAMPANHA.map((c) => {
@@ -585,7 +607,7 @@ async function paginaCampanhas(el) {
               aria-sort="${ativa ? (ord.desc ? 'descending' : 'ascending') : 'none'}">${esc(c.rotulo)}${seta}</button></th>`;
   }).join('');
 
-  const linhas = itens.map((i) => `<tr>${
+  const linhas = itens.map((i) => `<tr class="linha-click" data-camp="${esc(i.id)}" tabindex="0">${
     COLUNAS_CAMPANHA.map((c) => `<td class="${c.id === 'nome' ? '' : 'muted tnum'}">${celula(i, c)}</td>`).join('')
   }</tr>`).join('');
 
@@ -600,6 +622,7 @@ async function paginaCampanhas(el) {
         <div class="filtros">
           <input class="select" id="c-busca" type="search" placeholder="Buscar campanha…"
                  value="${esc(estado.campanhaBusca)}" aria-label="Buscar campanha">
+          <select class="select" id="c-modo" aria-label="Modo da busca">${optsModo}</select>
           <select class="select" id="c-status" aria-label="Filtrar por status">${optsStatus}</select>
         </div>
         <div class="card-title tnum">${itens.length} de ${d.itens.length} · ${fmtBRL(totalInv)} · ${fmtDec(totalRes)} result.</div>
@@ -622,6 +645,14 @@ async function paginaCampanhas(el) {
   }
   const st = document.getElementById('c-status');
   if (st) st.addEventListener('change', (e) => { estado.campanhaStatus = e.target.value; render(); });
+  const mo = document.getElementById('c-modo');
+  if (mo) mo.addEventListener('change', (e) => { estado.campanhaModoBusca = e.target.value; render(); });
+
+  document.querySelectorAll('.linha-click').forEach((tr) => {
+    const abrir = () => { location.hash = `#/campanhas/${tr.dataset.camp}`; };
+    tr.addEventListener('click', abrir);
+    tr.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrir(); } });
+  });
 
   document.querySelectorAll('.th-sort').forEach((b) => {
     b.addEventListener('click', () => {
@@ -760,6 +791,164 @@ function funilVertical(d) {
   });
   return html + '</div>';
 }
+
+
+/** Rótulos legíveis para os enums que o Google devolve em inglês. */
+const ROTULO_STATUS = { ENABLED: 'Ativa', PAUSED: 'Pausada', REMOVED: 'Excluída' };
+const ROTULO_CORRESP = { EXACT: 'Exata', PHRASE: 'Frase', BROAD: 'Ampla' };
+const ROTULO_RECURSO = {
+  SITELINK: 'Sitelink', CALLOUT: 'Frase de destaque', STRUCTURED_SNIPPET: 'Snippet estruturado',
+  BUSINESS_NAME: 'Nome da empresa', HEADLINE: 'Título', DESCRIPTION: 'Descrição',
+  CALL: 'Chamada', PRICE: 'Preço', PROMOTION: 'Promoção', IMAGE: 'Imagem', LOGO: 'Logo',
+};
+const pillEstado = (st) =>
+  `<span class="pill ${st === 'ENABLED' ? 'pill-success' : st === 'PAUSED' ? 'pill-warning' : 'pill-neutral'}">${esc(ROTULO_STATUS[st] || st || '—')}</span>`;
+
+/** Detalhe de uma campanha: anúncios com textos, palavras-chave e recursos. */
+async function paginaCampanhaDetalhe(el, id) {
+  el.innerHTML = cabecalho('Campanha', 'Carregando…') + carregando(6);
+
+  let d;
+  try { d = await api(`/api/ads/campanha/${encodeURIComponent(id)}?${queryPeriodo()}`); }
+  catch (e) { return void (el.innerHTML = voltar() + erro(e.message)); }
+
+  const camp = d.campanha;
+  if (!camp) {
+    return void (el.innerHTML = voltar() + vazio('Campanha sem dados', 'Esta campanha não registrou atividade no período selecionado.'));
+  }
+
+  const kpis = [
+    ['Investimento', fmtBRL(camp.investimento)],
+    ['Resultados', fmtDec(camp.resultados)],
+    ['Cliques', fmtInt(camp.cliques)],
+    ['Impressões', fmtInt(camp.impressoes)],
+    ['Orçamento diário', camp.orcamento_diario === null ? '—' : fmtBRL(camp.orcamento_diario)],
+  ].map(([r, v]) => `<div class="card"><div class="stat-label">${esc(r)}</div><div class="stat-value tnum" style="font-size:18px">${esc(v)}</div></div>`).join('');
+
+  // --- palavras-chave, com busca contém/exata e filtro de correspondência ---
+  const kwBusca = estado.kwBusca.trim().toLowerCase();
+  let palavras = d.palavras;
+  if (kwBusca) {
+    palavras = estado.kwModoBusca === 'exata'
+      ? palavras.filter((k) => k.termo.toLowerCase() === kwBusca)
+      : palavras.filter((k) => k.termo.toLowerCase().includes(kwBusca));
+  }
+  if (estado.kwCorrespondencia) palavras = palavras.filter((k) => k.correspondencia === estado.kwCorrespondencia);
+
+  const corresps = [...new Set(d.palavras.map((k) => k.correspondencia))].sort();
+  const optsCorresp = ['<option value="">Todas as correspondências</option>']
+    .concat(corresps.map((v) => `<option value="${esc(v)}"${v === estado.kwCorrespondencia ? ' selected' : ''}>${esc(ROTULO_CORRESP[v] || v)}</option>`))
+    .join('');
+  const optsKwModo = [['contem', 'contém'], ['exata', 'exata']]
+    .map(([v, r]) => `<option value="${v}"${v === estado.kwModoBusca ? ' selected' : ''}>${esc(r)}</option>`).join('');
+
+  // --- anúncios ---
+  const cartoesAnuncio = d.anuncios.length ? d.anuncios.map((a) => `
+    <div class="anuncio">
+      <div class="anuncio-topo">
+        <div>
+          <div class="anuncio-grupo">${esc(a.grupo)}</div>
+          <div class="anuncio-tipo">${esc(a.tipo || 'Anúncio')} · ${a.titulos.length} títulos · ${a.descricoes.length} descrições</div>
+        </div>
+        <div class="anuncio-metricas tnum">
+          ${pillEstado(a.status)}
+          <span>${esc(fmtBRL(a.investimento))}</span>
+          <span>${esc(fmtDec(a.resultados))} result.</span>
+        </div>
+      </div>
+      ${a.titulos.length ? `<div class="txt-bloco"><div class="txt-rotulo">Títulos</div>${
+        a.titulos.map((t) => `<div class="txt-item">${esc(t.texto)}${t.fixado ? `<span class="txt-fixado" title="Fixado na posição ${esc(t.fixado)}">fixado</span>` : ''}</div>`).join('')
+      }</div>` : ''}
+      ${a.descricoes.length ? `<div class="txt-bloco"><div class="txt-rotulo">Descrições</div>${
+        a.descricoes.map((t) => `<div class="txt-item">${esc(t.texto)}${t.fixado ? `<span class="txt-fixado">fixado</span>` : ''}</div>`).join('')
+      }</div>` : ''}
+      ${a.urls.length ? `<div class="txt-bloco"><div class="txt-rotulo">Destino</div><div class="txt-item txt-url">${esc(a.urls[0])}</div></div>` : ''}
+    </div>`).join('')
+    : `<div class="state"><div class="state-msg">${d.indisponivel.anuncios
+        ? 'Não foi possível carregar os anúncios desta campanha.'
+        : 'Nenhum anúncio ativo nesta campanha no período.'}</div></div>`;
+
+  // --- recursos, agrupados por tipo ---
+  const porTipo = new Map();
+  for (const r of d.recursos) {
+    const t = r.tipo || 'OUTRO';
+    if (!porTipo.has(t)) porTipo.set(t, []);
+    porTipo.get(t).push(r);
+  }
+  const blocosRecurso = porTipo.size ? [...porTipo.entries()].map(([tipo, itens]) => `
+    <div class="recurso-grupo">
+      <div class="txt-rotulo">${esc(ROTULO_RECURSO[tipo] || tipo)} <span class="muted">(${itens.length})</span></div>
+      <div class="recurso-chips">${itens.map((r) => `<span class="chip-recurso">${esc(r.texto || '—')}</span>`).join('')}</div>
+    </div>`).join('')
+    : `<div class="state"><div class="state-msg">${d.indisponivel.recursos
+        ? 'Não foi possível carregar os recursos.'
+        : 'Nenhum recurso associado a esta campanha.'}</div></div>`;
+
+  el.innerHTML = `
+    ${voltar()}
+    <div class="page-head">
+      <div>
+        <div class="page-title">${esc(camp.nome)}</div>
+        <div class="page-sub">${esc(camp.tipo || '—')} · ${fmtDiaMes(d.periodo.de)} a ${fmtDiaMes(d.periodo.ate)}</div>
+      </div>
+      ${pillEstado(camp.status)}
+    </div>
+    <div class="stat-grid">${kpis}</div>
+
+    <div class="card">
+      <div class="card-head"><div class="card-title">Anúncios e textos</div></div>
+      ${cartoesAnuncio}
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="filtros">
+          <input class="select" id="k-busca" type="search" placeholder="Buscar palavra-chave…"
+                 value="${esc(estado.kwBusca)}" aria-label="Buscar palavra-chave">
+          <select class="select" id="k-modo" aria-label="Modo da busca">${optsKwModo}</select>
+          <select class="select" id="k-corresp" aria-label="Filtrar por correspondência">${optsCorresp}</select>
+        </div>
+        <div class="card-title tnum">${palavras.length} de ${d.palavras.length} palavras-chave</div>
+      </div>
+      ${palavras.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Termo</th><th>Correspondência</th><th>Estado</th><th>Grupo</th><th>Investimento</th><th>Resultados</th><th>Cliques</th></tr></thead>
+        <tbody>${palavras.map((k) => `<tr>
+          <td>${esc(k.termo)}</td>
+          <td class="muted">${esc(ROTULO_CORRESP[k.correspondencia] || k.correspondencia)}</td>
+          <td>${pillEstado(k.status)}</td>
+          <td class="muted">${esc(k.grupo)}</td>
+          <td class="muted tnum">${esc(fmtBRL(k.investimento))}</td>
+          <td class="muted tnum">${esc(fmtDec(k.resultados))}</td>
+          <td class="muted tnum">${esc(fmtInt(k.cliques))}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>` : `<div class="state"><div class="state-msg">${d.indisponivel.palavras
+          ? 'Não foi possível carregar as palavras-chave.'
+          : 'Nenhuma palavra-chave bate os filtros. Campanhas Performance Max e Display não usam palavra-chave.'}</div></div>`}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div class="card-title">Recursos da campanha</div></div>
+      ${blocosRecurso}
+    </div>`;
+
+  const kb = document.getElementById('k-busca');
+  if (kb) {
+    let t;
+    kb.addEventListener('input', (e) => {
+      clearTimeout(t); const v = e.target.value;
+      t = setTimeout(() => { estado.kwBusca = v; render(); }, 250);
+    });
+  }
+  const km = document.getElementById('k-modo');
+  if (km) km.addEventListener('change', (e) => { estado.kwModoBusca = e.target.value; render(); });
+  const kc = document.getElementById('k-corresp');
+  if (kc) kc.addEventListener('change', (e) => { estado.kwCorrespondencia = e.target.value; render(); });
+
+  window.__redesenhar = () => render();
+}
+
+const voltar = () =>
+  `<a class="voltar" href="#/campanhas">&larr; Todas as campanhas</a>`;
 
 async function paginaConversas(el) {
   el.innerHTML = cabecalho('Conversas', 'WhatsApp via Evolution API') + carregando(5);
@@ -1021,8 +1210,11 @@ async function render() {
 }
 
 function lerHash() {
-  const r = (location.hash || '').replace(/^#\/?/, '') || 'overview';
+  const bruto = (location.hash || '').replace(/^#\/?/, '') || 'overview';
+  const [r, param] = bruto.split('/');
   estado.rota = RENDERIZADORES[r] ? r : 'overview';
+  // #/campanhas/123 abre o detalhe; #/campanhas volta para a lista.
+  estado.campanhaId = r === 'campanhas' && param ? param : null;
 }
 
 async function carregarUsuario() {

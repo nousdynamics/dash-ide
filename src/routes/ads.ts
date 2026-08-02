@@ -155,9 +155,26 @@ ads.get('/overview', async (c) => {
   });
 });
 
+/**
+ * Traduz o filtro de status da UI em cláusula GAQL.
+ *
+ * `REMOVED` só entra quando pedido explicitamente: campanha excluída costuma
+ * ser a maioria das linhas numa conta antiga e enterraria as ativas.
+ */
+function ondeStatus(filtro: string | undefined): string {
+  switch (filtro) {
+    case 'ativas': return "AND campaign.status = 'ENABLED'";
+    case 'pausadas': return "AND campaign.status = 'PAUSED'";
+    case 'removidas': return "AND campaign.status = 'REMOVED'";
+    case 'todas': return '';
+    default: return "AND campaign.status != 'REMOVED'";
+  }
+}
+
 /** GET /api/ads/campanhas — tabela de campanhas do período. */
 ads.get('/campanhas', async (c) => {
   const { de, ate } = intervalo(c);
+  const filtroStatus = c.req.query('status') ?? undefined;
 
   const linhas = await consultar<{
     campaign: { id: string; name: string; status: string; advertisingChannelType?: string };
@@ -168,7 +185,7 @@ ads.get('/campanhas', async (c) => {
             metrics.cost_micros, metrics.impressions, metrics.clicks,
             metrics.conversions, metrics.all_conversions
      FROM campaign
-     WHERE ${ondeData(de, ate)} AND campaign.status != 'REMOVED'
+     WHERE ${ondeData(de, ate)} ${ondeStatus(filtroStatus)}
      ORDER BY metrics.cost_micros DESC`,
   );
 
@@ -196,7 +213,7 @@ ads.get('/campanhas', async (c) => {
     };
   });
 
-  return c.json({ periodo: { de, ate }, total: itens.length, itens });
+  return c.json({ periodo: { de, ate }, filtro_status: filtroStatus ?? 'nao_removidas', total: itens.length, itens });
 });
 
 /**
@@ -251,6 +268,143 @@ ads.get('/resultados-por-acao', async (c) => {
       tipo: i.primarios > 0 ? 'primaria' : 'secundaria',
       participacao_pct: total > 0 ? (i.resultados / total) * 100 : 0,
     })),
+  });
+});
+
+/**
+ * GET /api/ads/campanha/:id — o que existe dentro de uma campanha.
+ *
+ * Três consultas independentes em paralelo. Se uma falhar (um tipo de campanha
+ * que não tem palavra-chave, por exemplo, como Performance Max), as outras
+ * seguem: devolver o anúncio sem a lista de termos é melhor que devolver erro.
+ */
+ads.get('/campanha/:id', async (c) => {
+  const { de, ate } = intervalo(c);
+  const id = (c.req.param('id') || '').replace(/\D/g, '');
+  if (!id) return c.json({ erro: 'id_invalido' }, 400);
+
+  type Texto = { text?: string; pinnedField?: string };
+
+  const qCampanha =
+    // Sem campaign.start_date / end_date: a v24 não reconhece esses campos.
+    `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type,
+            campaign_budget.amount_micros,
+            metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
+     FROM campaign WHERE campaign.id = ${id} AND ${ondeData(de, ate)}`;
+
+  const qAnuncios =
+    `SELECT ad_group.id, ad_group.name, ad_group.status,
+            ad_group_ad.ad.id, ad_group_ad.ad.type, ad_group_ad.status,
+            ad_group_ad.ad.final_urls,
+            ad_group_ad.ad.responsive_search_ad.headlines,
+            ad_group_ad.ad.responsive_search_ad.descriptions,
+            metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
+     FROM ad_group_ad
+     WHERE campaign.id = ${id} AND ${ondeData(de, ate)} AND ad_group_ad.status != 'REMOVED'`;
+
+  const qPalavras =
+    `SELECT ad_group.name, ad_group_criterion.keyword.text,
+            ad_group_criterion.keyword.match_type, ad_group_criterion.status,
+            metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
+     FROM keyword_view
+     WHERE campaign.id = ${id} AND ${ondeData(de, ate)}
+       AND ad_group_criterion.status != 'REMOVED'
+     ORDER BY metrics.cost_micros DESC`;
+
+  const qRecursos =
+    // `campaign.id` é obrigatório no SELECT quando ele aparece no WHERE de
+    // campaign_asset — o Google devolve EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE.
+    `SELECT campaign.id, campaign_asset.field_type, campaign_asset.status,
+            asset.type, asset.name,
+            asset.sitelink_asset.link_text, asset.callout_asset.callout_text,
+            asset.structured_snippet_asset.header, asset.text_asset.text
+     FROM campaign_asset WHERE campaign.id = ${id}`;
+
+  // `allSettled`: um tipo de campanha sem palavra-chave não pode derrubar a tela.
+  const [rCamp, rAds, rKw, rAsset] = await Promise.allSettled([
+    consultar<{ campaign: Record<string, unknown>; campaignBudget?: Record<string, unknown>; metrics: Record<string, unknown> }>(c.env, qCampanha),
+    consultar<{
+      adGroup: { id: string; name: string; status: string };
+      adGroupAd: { ad: { id: string; type?: string; finalUrls?: string[]; responsiveSearchAd?: { headlines?: Texto[]; descriptions?: Texto[] } }; status: string };
+      metrics: Record<string, unknown>;
+    }>(c.env, qAnuncios),
+    consultar<{
+      adGroup: { name: string };
+      adGroupCriterion: { keyword: { text: string; matchType: string }; status: string };
+      metrics: Record<string, unknown>;
+    }>(c.env, qPalavras),
+    consultar<{ campaignAsset: { fieldType?: string; status?: string }; asset: Record<string, any> }>(c.env, qRecursos),
+  ]);
+
+  const ok = <T>(r: PromiseSettledResult<T[]>): T[] => (r.status === 'fulfilled' ? r.value : []);
+  const falhou = (r: PromiseSettledResult<unknown>) => r.status === 'rejected';
+
+  const camp = ok(rCamp)[0];
+  const met = (m: Record<string, unknown> | undefined) => ({
+    investimento: deMicros(m?.costMicros),
+    resultados: num(m?.allConversions),
+    cliques: num(m?.clicks),
+    impressoes: num(m?.impressions),
+  });
+
+  const anuncios = ok(rAds).map((l) => {
+    const rsa = l.adGroupAd.ad.responsiveSearchAd;
+    return {
+      id: l.adGroupAd.ad.id,
+      tipo: l.adGroupAd.ad.type ?? null,
+      status: l.adGroupAd.status,
+      grupo: l.adGroup.name,
+      grupo_status: l.adGroup.status,
+      urls: l.adGroupAd.ad.finalUrls ?? [],
+      // `pinnedField` diz que o texto está travado numa posição — informação que
+      // explica por que um título aparece sempre no mesmo lugar.
+      titulos: (rsa?.headlines ?? []).map((h) => ({ texto: h.text ?? '', fixado: h.pinnedField ?? null })),
+      descricoes: (rsa?.descriptions ?? []).map((d) => ({ texto: d.text ?? '', fixado: d.pinnedField ?? null })),
+      ...met(l.metrics),
+    };
+  });
+
+  const palavras = ok(rKw).map((l) => ({
+    termo: l.adGroupCriterion.keyword.text,
+    correspondencia: l.adGroupCriterion.keyword.matchType,
+    status: l.adGroupCriterion.status,
+    grupo: l.adGroup.name,
+    ...met(l.metrics),
+  }));
+
+  const recursos = ok(rAsset).map((l) => ({
+    tipo: l.campaignAsset.fieldType ?? l.asset?.type ?? null,
+    status: l.campaignAsset.status ?? null,
+    texto:
+      l.asset?.sitelinkAsset?.linkText ??
+      l.asset?.calloutAsset?.calloutText ??
+      l.asset?.structuredSnippetAsset?.header ??
+      l.asset?.textAsset?.text ??
+      l.asset?.name ??
+      null,
+  }));
+
+  return c.json({
+    periodo: { de, ate },
+    campanha: camp
+      ? {
+          id: camp.campaign.id,
+          nome: camp.campaign.name,
+          status: camp.campaign.status,
+          tipo: camp.campaign.advertisingChannelType ?? null,
+          orcamento_diario: camp.campaignBudget ? deMicros(camp.campaignBudget.amountMicros) : null,
+          ...met(camp.metrics),
+        }
+      : null,
+    anuncios,
+    palavras,
+    recursos,
+    // Transparência sobre o que não veio, em vez de simplesmente mostrar vazio.
+    indisponivel: {
+      anuncios: falhou(rAds),
+      palavras: falhou(rKw),
+      recursos: falhou(rAsset),
+    },
   });
 });
 
