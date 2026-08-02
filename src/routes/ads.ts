@@ -408,7 +408,15 @@ ads.get('/campanha/:id', async (c) => {
   });
 });
 
-/** GET /api/ads/anuncios — desempenho por anúncio. */
+/**
+ * GET /api/ads/anuncios — desempenho por anúncio.
+ *
+ * Filtra `cost_micros > 0` na origem em vez de cortar as 500 primeiras linhas.
+ * Medido nesta conta em 30 dias: 1.032 anúncios têm alguma linha, mas só 17
+ * gastaram. O `LIMIT 500` anterior estourava o teto de verdade e o excedente
+ * sumia em silêncio — a busca respondia "nenhum resultado" para um anúncio que
+ * existia, só estava fora do corte.
+ */
 ads.get('/anuncios', async (c) => {
   const { de, ate } = intervalo(c);
 
@@ -424,7 +432,8 @@ ads.get('/anuncios', async (c) => {
             metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
      FROM ad_group_ad
      WHERE ${ondeData(de, ate)} AND ad_group_ad.status != 'REMOVED'
-     ORDER BY metrics.cost_micros DESC LIMIT 500`,
+       AND metrics.cost_micros > 0
+     ORDER BY metrics.cost_micros DESC`,
   );
 
   return c.json({
@@ -445,7 +454,13 @@ ads.get('/anuncios', async (c) => {
   });
 });
 
-/** GET /api/ads/palavras-chave — termos que a conta compra. */
+/**
+ * GET /api/ads/palavras-chave — termos que a conta compra.
+ *
+ * Mesmo motivo do endpoint de anúncios: 3.721 palavras-chave têm alguma linha
+ * em 30 dias, e 50 gastaram. Filtrar na origem derruba o payload e elimina a
+ * truncagem silenciosa; o `LIMIT` some junto.
+ */
 ads.get('/palavras-chave', async (c) => {
   const { de, ate } = intervalo(c);
 
@@ -460,7 +475,8 @@ ads.get('/palavras-chave', async (c) => {
             metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
      FROM keyword_view
      WHERE ${ondeData(de, ate)} AND ad_group_criterion.status != 'REMOVED'
-     ORDER BY metrics.cost_micros DESC LIMIT 500`,
+       AND metrics.cost_micros > 0
+     ORDER BY metrics.cost_micros DESC`,
   );
 
   return c.json({

@@ -78,9 +78,10 @@ auth própria — o Access barra antes de chegar no Worker.
 | GET | `/api/ads/palavras-chave?de=&ate=` | Termos comprados |
 | GET | `/health` | Sonda de deploy e binding do D1 |
 
-> `/api/ads/anuncios` e `/api/ads/palavras-chave` ainda usam `LIMIT 500`, e a
-> conta já bate nesse teto. Trocar por paginação server-side quando as tabelas
-> ganharem paginação de verdade.
+> `/api/ads/anuncios` e `/api/ads/palavras-chave` filtram `cost_micros > 0` na
+> origem. Medido nesta conta em 30 dias: 3.721 palavras-chave têm alguma linha e
+> 50 gastaram; 1.032 anúncios têm linha e 17 gastaram. Filtrar na origem elimina
+> a truncagem silenciosa que o `LIMIT 500` causava e dispensa paginação.
 
 Corpo inválido devolve `400` com a lista de campos problemáticos. Nenhuma linha
 parcial é gravada.

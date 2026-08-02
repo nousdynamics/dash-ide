@@ -52,15 +52,14 @@ const PAGINAS = [
 const CHAVE_RETRAIDA = 'painel-ide:sidebar-retraida';
 
 /**
- * Rota em hash (#/campanhas/123) de propósito: o Worker serve /api na mesma
+ * Rota em hash de propósito: o Worker serve /api na mesma
  * origem, e rota por path exigiria o roteador de assets em modo SPA, que
  * devolveria index.html para /api/* também.
  */
 function useRota() {
   const ler = () => {
-    const bruto = (location.hash || '').replace(/^#\/?/, '') || 'overview';
-    const [r, param] = bruto.split('/');
-    return { rota: PAGINAS.some((p) => p.id === r) ? r : 'overview', param: param || null };
+    const r = (location.hash || '').replace(/^#\/?/, '').split('/')[0] || 'overview';
+    return { rota: PAGINAS.some((p) => p.id === r) ? r : 'overview' };
   };
   const [rota, setRota] = useState(ler);
   useEffect(() => {
@@ -72,7 +71,7 @@ function useRota() {
 }
 
 export default function App() {
-  const { rota, param } = useRota();
+  const { rota } = useRota();
   const [retraida, setRetraida] = useState(() => {
     try {
       return localStorage.getItem(CHAVE_RETRAIDA) === '1';
