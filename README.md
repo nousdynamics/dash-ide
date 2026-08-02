@@ -123,6 +123,14 @@ dentro dos componentes. Como consequência os cards deixaram de usar
 carregar o próprio gradiente sutil, com a borda de topo clara preservando o
 efeito de superfície pegando luz.
 
+**Nunca checkbox: todo liga/desliga é switch.** É um `<button role="switch">`
+com `aria-checked`, não um input — o botão já traz ativação por teclado e o
+estado em `aria-checked` é anunciado como ligado/desligado pelo leitor de tela.
+
+Com a comparação ligada, cada card mostra o valor do período comparado ("antes:
+R$ 3.734,71") e o subtítulo nomeia o intervalo. Um chip de "+37,3%" sem âncora
+não diz em relação a quê.
+
 A sidebar retrai para uma trilha de 72px só com ícones; a preferência fica em
 `localStorage`. Os ícones são SVG inline com `currentColor`, não emoji — emoji
 vem colorido e com métrica própria de cada sistema, o que desalinha numa fileira

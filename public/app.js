@@ -370,13 +370,16 @@ async function paginaOverview(el) {
 
   const t = ads.totais;
   const dl = ads.comparacao ? ads.comparacao.deltas : {};
+  // Totais da janela anterior: o chip diz "quanto variou", esta linha diz
+  // "variou em relação a quê". Sem ela, +37,3% é um número sem âncora.
+  const ant = ads.comparacao ? ads.comparacao.totais : null;
   const leads = base.cards.leads_periodo;
 
   const cards = [
-    { icone: '💰', cls: '', label: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, rodape: 'Google Ads' },
-    { icone: '✓', cls: 'success', label: 'Resultados', valor: fmtDec(t.resultados), delta: dl.resultados, rodape: 'Todas as conversões da plataforma' },
-    { icone: '⊘', cls: '', label: 'Custo / resultado', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, rodape: 'Investimento ÷ resultados' },
-    { icone: '◐', cls: '', label: 'Taxa de conversão', valor: t.taxa_conversao === null ? '—' : fmtDec(t.taxa_conversao) + '%', delta: dl.taxa_conversao, rodape: 'Resultados ÷ cliques' },
+    { icone: '💰', cls: '', label: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, antes: ant && fmtBRL(ant.investimento), rodape: 'Google Ads' },
+    { icone: '✓', cls: 'success', label: 'Resultados', valor: fmtDec(t.resultados), delta: dl.resultados, antes: ant && fmtDec(ant.resultados), rodape: 'Todas as conversões da plataforma' },
+    { icone: '⊘', cls: '', label: 'Custo / resultado', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, antes: ant && fmtBRL(ant.custo_por_resultado), rodape: 'Investimento ÷ resultados' },
+    { icone: '◐', cls: '', label: 'Taxa de conversão', valor: t.taxa_conversao === null ? '—' : fmtDec(t.taxa_conversao) + '%', delta: dl.taxa_conversao, antes: ant && (ant.taxa_conversao === null ? '—' : fmtDec(ant.taxa_conversao) + '%'), rodape: 'Resultados ÷ cliques' },
     { icone: '◎', cls: '', label: 'Leads no período', valor: fmtInt(leads.valor), delta: leads.delta_pct, rodape: 'Contatos distintos no Rubeus' },
   ].map((k) => `
     <div class="card">
@@ -384,18 +387,25 @@ async function paginaOverview(el) {
       <div class="stat-label">${esc(k.label)}</div>
       <div class="stat-value tnum">${esc(k.valor)}</div>
       ${chipDelta(k.delta, k.inverso)}
+      ${k.antes ? `<span class="comparado">antes: <strong class="tnum">${esc(k.antes)}</strong></span>` : ''}
       <span class="stat-footer">${esc(k.rodape)}</span>
     </div>`).join('');
 
   const secundarios = [
-    ['Impressões', fmtInt(t.impressoes)],
-    ['Cliques', fmtInt(t.cliques)],
-    ['CPC médio', fmtBRL(t.cpc_medio)],
-    ['CTR', t.ctr === null ? '—' : fmtDec(t.ctr) + '%'],
-  ].map(([r, v]) => `<div class="card"><div class="stat-label">${esc(r)}</div><div class="stat-value tnum" style="font-size:20px">${esc(v)}</div></div>`).join('');
+    ['Impressões', fmtInt(t.impressoes), ant && fmtInt(ant.impressoes)],
+    ['Cliques', fmtInt(t.cliques), ant && fmtInt(ant.cliques)],
+    ['CPC médio', fmtBRL(t.cpc_medio), ant && fmtBRL(ant.cpc_medio)],
+    ['CTR', t.ctr === null ? '—' : fmtDec(t.ctr) + '%', ant && (ant.ctr === null ? '—' : fmtDec(ant.ctr) + '%')],
+  ].map(([r, v, a]) => `<div class="card">
+      <div class="stat-label">${esc(r)}</div>
+      <div class="stat-value tnum" style="font-size:18px">${esc(v)}</div>
+      ${a ? `<span class="comparado">antes: <strong class="tnum">${esc(a)}</strong></span>` : ''}
+    </div>`).join('');
 
   el.innerHTML = `
-    ${cabecalho('Visão geral', `${fmtDiaMes(ads.periodo.de)} a ${fmtDiaMes(ads.periodo.ate)} · comparado ao período anterior`)}
+    ${cabecalho('Visão geral', ads.comparacao
+      ? `${fmtDiaMes(ads.periodo.de)} a ${fmtDiaMes(ads.periodo.ate)} · comparado com ${fmtDiaMes(ads.comparacao.periodo.de)} a ${fmtDiaMes(ads.comparacao.periodo.ate)}`
+      : `${fmtDiaMes(ads.periodo.de)} a ${fmtDiaMes(ads.periodo.ate)}`)}
     ${barraFiltros()}
     <div class="stat-grid">${cards}</div>
     <div class="stat-grid">${secundarios}</div>
@@ -733,10 +743,11 @@ function barraFiltros() {
       <span class="filtro-sep">até</span>
       <input class="select" type="date" id="f-ate" value="${esc(f.ate || ate)}" aria-label="Data final">
     </span>
-    <label class="filtro-check">
-      <input type="checkbox" id="f-comparar"${f.comparar ? ' checked' : ''}>
+    <button type="button" class="switch" id="f-comparar" role="switch"
+            aria-checked="${f.comparar ? 'true' : 'false'}">
+      <span class="switch-trilho" aria-hidden="true"><span class="switch-bolinha"></span></span>
       Comparar com período anterior
-    </label>
+    </button>
   </div>`;
 }
 
@@ -767,7 +778,10 @@ function ligarFiltros() {
   if (ate) ate.addEventListener('change', mudouData);
 
   const cmp = document.getElementById('f-comparar');
-  if (cmp) cmp.addEventListener('change', (e) => { estado.filtro.comparar = e.target.checked; render(); });
+  if (cmp) cmp.addEventListener('click', () => {
+    estado.filtro.comparar = cmp.getAttribute('aria-checked') !== 'true';
+    render();
+  });
 }
 
 

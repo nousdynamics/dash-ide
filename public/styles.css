@@ -331,11 +331,44 @@ tbody tr:hover td { background: var(--surface-card-hover); }
 .filtro-datas { display: inline-flex; gap: var(--space-2); align-items: center; }
 .filtro-datas.oculto { display: none; }
 .filtro-sep { color: var(--text-muted); font-size: 11px; }
-.filtro-check {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; color: var(--text-secondary); cursor: pointer; user-select: none;
+/*
+ * Switch, nunca checkbox — padrão do projeto para qualquer liga/desliga.
+ * É um <button role="switch">, não um input: o botão já traz semântica de
+ * ativação por teclado e o estado vive em aria-checked, que o leitor de tela
+ * anuncia como ligado/desligado.
+ */
+.switch {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-family: inherit; font-size: 12px; color: var(--text-secondary);
+  user-select: none;
 }
-.filtro-check input { accent-color: var(--blue-500); cursor: pointer; }
+.switch:hover { color: var(--text-primary); }
+.switch-trilho {
+  position: relative; flex-shrink: 0;
+  width: 30px; height: 17px; border-radius: var(--radius-full);
+  background: var(--surface-card); border: 1px solid var(--border-default);
+  transition: background .15s ease, border-color .15s ease;
+}
+.switch-bolinha {
+  position: absolute; top: 2px; left: 2px;
+  width: 11px; height: 11px; border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform .15s ease, background .15s ease;
+}
+.switch[aria-checked="true"] .switch-trilho { background: var(--blue-600); border-color: var(--blue-600); }
+.switch[aria-checked="true"] .switch-bolinha { transform: translateX(13px); background: #fff; }
+.switch:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 3px; border-radius: var(--radius-sm); }
+@media (prefers-reduced-motion: reduce) {
+  .switch-trilho, .switch-bolinha { transition: none; }
+}
+
+/* Valor do período comparado, sob o chip de variação. */
+.comparado {
+  display: block; margin-top: var(--space-1);
+  font-size: 11px; color: var(--text-muted);
+}
+.comparado strong { color: var(--text-secondary); font-weight: 600; }
 input[type="date"].select { color-scheme: dark; }
 
 /* Cabeçalho de tabela clicável para ordenar. */
