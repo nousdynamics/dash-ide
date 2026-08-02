@@ -142,46 +142,114 @@ function densificarPorDia(dados, chave, deISO, ateISO) {
 const comFolga = (max) => (max > 0 ? max * 1.12 : 1);
 
 /**
+ * Estatísticas que o card mostra sem exigir hover: total, média por dia e os
+ * dois extremos. O gráfico responde "como variou"; estes números respondem
+ * "quanto", que é a pergunta que se faz primeiro.
+ */
+function estatisticas(dados, chave) {
+  const vals = dados.map((d) => Number(d[chave]) || 0);
+  if (!vals.length) return null;
+  const total = vals.reduce((a, b) => a + b, 0);
+  let iMax = 0, iMin = 0;
+  vals.forEach((v, i) => { if (v > vals[iMax]) iMax = i; if (v < vals[iMin]) iMin = i; });
+  return {
+    total,
+    media: total / vals.length,
+    max: vals[iMax], maxData: dados[iMax].data,
+    min: vals[iMin], minData: dados[iMin].data,
+    dias: vals.length,
+  };
+}
+
+/** Cabeçalho do card de gráfico: headline + extremos, tudo visível de relance. */
+function cabecalhoGrafico(titulo, est, fmt, legendaMedia) {
+  if (!est) return `<div class="card-head"><div class="card-title">${esc(titulo)}</div></div>`;
+  return `
+    <div class="graf-head">
+      <div>
+        <div class="card-title">${esc(titulo)}</div>
+        <div class="graf-headline tnum">${esc(fmt(est.media))}</div>
+        <div class="graf-sub">${esc(legendaMedia)} · ${est.dias} dias</div>
+      </div>
+      <div class="graf-extremos tnum">
+        <div>Pico <strong>${esc(fmt(est.max))}</strong> <span class="graf-quando">(${esc(fmtDiaMes(est.maxData))})</span></div>
+        <div>Mín. <strong>${esc(fmt(est.min))}</strong> <span class="graf-quando">(${esc(fmtDiaMes(est.minData))})</span></div>
+      </div>
+    </div>`;
+}
+
+/** Escala "redonda" para o eixo: 1, 2, 2.5 ou 5 vezes uma potência de 10. */
+function tetoBonito(max) {
+  if (max <= 0) return 1;
+  const pot = Math.pow(10, Math.floor(Math.log10(max)));
+  for (const m of [1, 2, 2.5, 5, 10]) {
+    if (max <= m * pot) return m * pot;
+  }
+  return 10 * pot;
+}
+
+/** Grade horizontal + rótulos do eixo Y. É o que torna o gráfico legível sem hover. */
+function eixoY(teto, larg, padL, padT, areaAlt, fmt) {
+  const linhas = [];
+  const n = 4;
+  for (let i = 0; i <= n; i++) {
+    const v = (teto / n) * i;
+    const y = padT + areaAlt - (v / teto) * areaAlt;
+    linhas.push(
+      `<line class="grid-line" x1="${padL}" x2="${larg}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"></line>` +
+      `<text class="axis-label" x="${padL - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end">${esc(fmt(v))}</text>`,
+    );
+  }
+  return linhas.join('');
+}
+
+/**
  * Gráfico de barras. Uma série só, então sem legenda — o título do card nomeia.
  * Topo arredondado em 4px ancorado na linha de base e 2px de respiro entre barras.
  */
-function graficoBarras(container, dados, fmtValor) {
+function graficoBarras(container, dados, fmtValor, fmtEixo) {
   if (!dados.length) return vazioGrafico(container, 'Sem investimento registrado no período.');
 
   const larg = Math.max(280, container.clientWidth);
-  const alt = 180;
-  const padB = 22, padT = 8;
+  const alt = 196;
+  const padB = 22, padT = 10, padL = 48;
   const areaAlt = alt - padB - padT;
-  const max = comFolga(Math.max(...dados.map((d) => d.valor), 0));
-  const passoX = larg / dados.length;
-  const largBarra = Math.max(4, Math.min(40, passoX - 2)); // 2px de gap
+  const est = estatisticas(dados, 'valor');
+  const teto = tetoBonito(Math.max(...dados.map((d) => d.valor), 0));
+  const largUtil = larg - padL;
+  const passoX = largUtil / dados.length;
+  const largBarra = Math.max(3, Math.min(34, passoX - 2)); // 2px de gap
   const passo = passoRotulos(dados.length);
+  const yMedia = padT + areaAlt - (est.media / teto) * areaAlt;
 
   let barras = '', rotulos = '', alvos = '';
   dados.forEach((d, i) => {
-    // Zero não vira toco de 2px: um dia sem investimento tem que ficar vazio,
-    // senão a linha de tocos parece dado que não existe. O piso só vale pra
-    // valor positivo pequeno demais pra render.
-    const h = d.valor > 0 ? Math.max(2, (d.valor / max) * areaAlt) : 0;
-    const x = i * passoX + (passoX - largBarra) / 2;
+    // Zero não vira toco: um dia sem investimento tem que ficar vazio.
+    const h = d.valor > 0 ? Math.max(2, (d.valor / teto) * areaAlt) : 0;
+    const x = padL + i * passoX + (passoX - largBarra) / 2;
     const y = padT + areaAlt - h;
-    barras += `<rect class="bar" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${largBarra.toFixed(1)}" height="${h.toFixed(1)}" rx="4" fill="url(#gradBarra)"></rect>`;
+    const pico = d.valor === est.max && est.max > 0;
+    barras += `<rect class="bar${pico ? ' bar-pico' : ''}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${largBarra.toFixed(1)}" height="${h.toFixed(1)}" rx="4" fill="${pico ? '#7FB0F2' : 'url(#gradBarra)'}"></rect>`;
     if (i % passo === 0) {
-      rotulos += `<text class="axis-label" x="${(i * passoX + passoX / 2).toFixed(1)}" y="${alt - 6}" text-anchor="middle">${esc(fmtDiaMes(d.data))}</text>`;
+      rotulos += `<text class="axis-label" x="${(padL + i * passoX + passoX / 2).toFixed(1)}" y="${alt - 6}" text-anchor="middle">${esc(fmtDiaMes(d.data))}</text>`;
     }
-    alvos += `<rect class="hit" x="${(i * passoX).toFixed(1)}" y="0" width="${passoX.toFixed(1)}" height="${alt}" data-i="${i}"></rect>`;
+    alvos += `<rect class="hit" x="${(padL + i * passoX).toFixed(1)}" y="0" width="${passoX.toFixed(1)}" height="${alt}" data-i="${i}"></rect>`;
   });
 
   container.innerHTML = `
     <div class="chart-wrap">
       <svg class="chart" width="${larg}" height="${alt}" viewBox="0 0 ${larg} ${alt}" role="img"
-           aria-label="Investimento por dia no período selecionado">
+           aria-label="Investimento por dia. Média de ${esc(fmtValor(est.media))}, pico de ${esc(fmtValor(est.max))} em ${esc(fmtDiaMes(est.maxData))}.">
         <defs>
           <linearGradient id="gradBarra" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#4F8FE8"/><stop offset="100%" stop-color="#1D4E89"/>
           </linearGradient>
         </defs>
-        ${barras}${rotulos}${alvos}
+        ${eixoY(teto, larg, padL, padT, areaAlt, fmtEixo || fmtValor)}
+        ${barras}
+        <line class="linha-media" x1="${padL}" x2="${larg}" y1="${yMedia.toFixed(1)}" y2="${yMedia.toFixed(1)}"></line>
+        <text class="rotulo-media" x="${larg - 4}" y="${(yMedia - 5).toFixed(1)}" text-anchor="end">média ${esc(fmtValor(est.media))}</text>
+        ${rotulos}${alvos}
       </svg>
       <div class="tooltip" role="status"></div>
     </div>`;
@@ -193,45 +261,56 @@ function graficoBarras(container, dados, fmtValor) {
  * Gráfico de área/linha. Linha de 2px, preenchimento em gradiente até
  * transparente, marcador de 8px e crosshair no hover.
  */
-function graficoArea(container, dados, fmtValor) {
-  if (!dados.length) return vazioGrafico(container, 'Nenhuma conversão enviada no período.');
+function graficoArea(container, dados, fmtValor, fmtEixo) {
+  if (!dados.length) return vazioGrafico(container, 'Nenhum resultado no período.');
 
   const larg = Math.max(280, container.clientWidth);
-  const alt = 180;
-  const padB = 22, padT = 12, padX = 6;
+  const alt = 196;
+  const padB = 22, padT = 14, padL = 48, padR = 6;
   const areaAlt = alt - padB - padT;
-  const max = comFolga(Math.max(...dados.map((d) => d.total), 0));
+  const est = estatisticas(dados, 'total');
+  const teto = tetoBonito(Math.max(...dados.map((d) => d.total), 0));
   const n = dados.length;
-  const x = (i) => (n === 1 ? larg / 2 : padX + (i * (larg - padX * 2)) / (n - 1));
-  const y = (v) => padT + areaAlt - (v / max) * areaAlt;
+  const x = (i) => (n === 1 ? padL + (larg - padL) / 2 : padL + (i * (larg - padL - padR)) / (n - 1));
+  const y = (v) => padT + areaAlt - (v / teto) * areaAlt;
 
   const pontos = dados.map((d, i) => `${x(i).toFixed(1)},${y(d.total).toFixed(1)}`);
   const linha = 'M' + pontos.join(' L');
   const area = `${linha} L${x(n - 1).toFixed(1)},${(padT + areaAlt).toFixed(1)} L${x(0).toFixed(1)},${(padT + areaAlt).toFixed(1)} Z`;
   const passo = passoRotulos(n);
+  const iPico = dados.findIndex((d) => d.total === est.max);
 
   let rotulos = '', alvos = '';
   dados.forEach((d, i) => {
     if (i % passo === 0) {
       rotulos += `<text class="axis-label" x="${x(i).toFixed(1)}" y="${alt - 6}" text-anchor="middle">${esc(fmtDiaMes(d.data))}</text>`;
     }
-    const larguraAlvo = larg / n;
+    const larguraAlvo = (larg - padL) / n;
     alvos += `<rect class="hit" x="${(x(i) - larguraAlvo / 2).toFixed(1)}" y="0" width="${larguraAlvo.toFixed(1)}" height="${alt}" data-i="${i}"></rect>`;
   });
+
+  // Rótulo direto só no pico — número em todo ponto vira ruído.
+  const rotuloPico = est.max > 0 && iPico >= 0
+    ? `<circle class="ponto-pico" cx="${x(iPico).toFixed(1)}" cy="${y(est.max).toFixed(1)}" r="3.5"></circle>
+       <text class="rotulo-pico" x="${x(iPico).toFixed(1)}" y="${(y(est.max) - 8).toFixed(1)}"
+             text-anchor="${iPico > n * 0.8 ? 'end' : iPico < n * 0.2 ? 'start' : 'middle'}">${esc(fmtValor(est.max))}</text>`
+    : '';
 
   container.innerHTML = `
     <div class="chart-wrap">
       <svg class="chart" width="${larg}" height="${alt}" viewBox="0 0 ${larg} ${alt}" role="img"
-           aria-label="Conversões enviadas por dia no período selecionado">
+           aria-label="Resultados por dia. Média de ${esc(fmtValor(est.media))}, pico de ${esc(fmtValor(est.max))} em ${esc(fmtDiaMes(est.maxData))}.">
         <defs>
           <linearGradient id="gradArea" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#4F8FE8" stop-opacity="0.35"/>
+            <stop offset="0%" stop-color="#4F8FE8" stop-opacity="0.30"/>
             <stop offset="100%" stop-color="#4F8FE8" stop-opacity="0"/>
           </linearGradient>
         </defs>
+        ${eixoY(teto, larg, padL, padT, areaAlt, fmtEixo || fmtValor)}
         <path d="${area}" fill="url(#gradArea)"></path>
         <path d="${linha}" fill="none" stroke="#4F8FE8" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
-        <line class="crosshair" style="display:none" y1="0" y2="${padT + areaAlt}"></line>
+        ${rotuloPico}
+        <line class="crosshair" style="display:none" y1="${padT}" y2="${padT + areaAlt}"></line>
         <circle class="marcador" style="display:none" r="4" fill="#4F8FE8" stroke="#0A0E14" stroke-width="2"></circle>
         ${rotulos}${alvos}
       </svg>
@@ -358,11 +437,12 @@ async function paginaOverview(el) {
 
   // Duas origens distintas: mídia vem da consulta ao vivo ao Google Ads,
   // leads e conversas vêm do D1 (Rubeus e Evolution).
-  let ads, base;
+  let ads, base, acoes;
   try {
-    [ads, base] = await Promise.all([
+    [ads, base, acoes] = await Promise.all([
       api(`/api/ads/overview?${queryPeriodo()}${estado.filtro.comparar ? '&comparar=1' : ''}`),
       api(`/api/overview?dias=${diasDoPeriodo()}`),
+      api(`/api/ads/resultados-por-acao?${queryPeriodo()}`),
     ]);
   } catch (e) {
     return void (el.innerHTML = cabecalho('Visão geral', '') + barraFiltros() + erro(e.message));
@@ -378,6 +458,8 @@ async function paginaOverview(el) {
   const cards = [
     { icone: '💰', cls: '', label: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, antes: ant && fmtBRL(ant.investimento), rodape: 'Google Ads' },
     { icone: '✓', cls: 'success', label: 'Resultados', valor: fmtDec(t.resultados), delta: dl.resultados, antes: ant && fmtDec(ant.resultados), rodape: 'Todas as conversões da plataforma' },
+    { icone: '◆', cls: '', label: 'Conversões primárias', valor: fmtDec(t.resultados_primarios), delta: dl.resultados_primarios, antes: ant && fmtDec(ant.resultados_primarios), rodape: 'Ações marcadas como principais' },
+    { icone: '◇', cls: '', label: 'Conversões secundárias', valor: fmtDec(t.resultados_secundarios), delta: dl.resultados_secundarios, antes: ant && fmtDec(ant.resultados_secundarios), rodape: 'Demais ações da conta' },
     { icone: '⊘', cls: '', label: 'Custo / resultado', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, antes: ant && fmtBRL(ant.custo_por_resultado), rodape: 'Investimento ÷ resultados' },
     { icone: '◐', cls: '', label: 'Taxa de conversão', valor: t.taxa_conversao === null ? '—' : fmtDec(t.taxa_conversao) + '%', delta: dl.taxa_conversao, antes: ant && (ant.taxa_conversao === null ? '—' : fmtDec(ant.taxa_conversao) + '%'), rodape: 'Resultados ÷ cliques' },
     { icone: '◎', cls: '', label: 'Leads no período', valor: fmtInt(leads.valor), delta: leads.delta_pct, rodape: 'Contatos distintos no Rubeus' },
@@ -411,15 +493,22 @@ async function paginaOverview(el) {
     <div class="stat-grid">${secundarios}</div>
     <div class="chart-grid">
       <div class="card">
-        <div class="card-head"><div class="card-title">Investimento diário</div></div>
+        <div id="h-invest"></div>
         <div id="g-invest"></div>
         <div class="chart-caption"><span class="dot"></span> Total de ${fmtBRL(t.investimento)} no período</div>
       </div>
       <div class="card">
-        <div class="card-head"><div class="card-title">Resultados ao longo do tempo</div></div>
+        <div id="h-conv"></div>
         <div id="g-conv"></div>
         <div class="chart-caption"><span class="dot"></span> ${fmtDec(t.resultados)} resultados no período</div>
       </div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">De onde vêm os resultados</div>
+        <div class="graf-extremos">${fmtDec(acoes.total_primarios)} primárias · ${fmtDec(acoes.total_secundarios)} secundárias</div>
+      </div>
+      ${barrasPorAcao(acoes)}
     </div>
     <div class="bottom-grid">
       <div class="card">
@@ -546,13 +635,48 @@ async function paginaCampanhas(el) {
   window.__redesenhar = () => render();
 }
 
+/**
+ * Ranking de ações de conversão em barras horizontais.
+ *
+ * Barra horizontal e não rosca: os nomes das ações são longos ("LeadForm | Lead
+ * PopUp | Site") e comparar comprimento é mais preciso do que comparar ângulo.
+ * A escala é relativa à maior ação, não ao total, senão uma ação dominante
+ * esmagaria visualmente todas as outras.
+ */
+function barrasPorAcao(acoes) {
+  if (!acoes.itens.length) {
+    return '<div class="state"><div class="state-msg">Nenhuma conversão registrada no período.</div></div>';
+  }
+  const maior = Math.max(...acoes.itens.map((i) => i.resultados));
+  return acoes.itens.slice(0, 12).map((i) => `
+    <div class="barra-h">
+      <div class="barra-h-rotulo" title="${esc(i.acao)}">${esc(i.acao)}<span class="tag-tipo tag-${i.tipo}">${i.tipo === 'primaria' ? 'primária' : 'secundária'}</span></div>
+      <div class="barra-h-trilho">
+        <div class="barra-h-preenchimento${i.tipo === 'secundaria' ? ' secundaria' : ''}" style="width:${((i.resultados / maior) * 100).toFixed(1)}%"></div>
+      </div>
+      <div class="barra-h-valor tnum"><strong>${esc(fmtDec(i.resultados))}</strong> · ${esc(fmtDec(i.participacao_pct))}%</div>
+    </div>`).join('');
+}
+
+/** Eixo Y usa forma curta: "R$ 1,2 mil" no lugar de "R$ 1.234,56". */
+function eixoBRL(v) {
+  if (v >= 1000) return 'R$ ' + dec.format(v / 1000) + ' mil';
+  return 'R$ ' + int.format(v);
+}
+
 function desenharGraficos(d) {
   const gi = document.getElementById('g-invest');
   const gc = document.getElementById('g-conv');
   const invest = densificarPorDia(d.series.investimento_diario || [], 'valor', d.periodo.de, d.periodo.ate);
   const conv = densificarPorDia(d.series.conversoes_diarias || [], 'total', d.periodo.de, d.periodo.ate);
-  if (gi) graficoBarras(gi, invest, fmtBRL);
-  if (gc) graficoArea(gc, conv, (v) => `${fmtInt(v)} conv.`);
+
+  const hi = document.getElementById('h-invest');
+  const hc = document.getElementById('h-conv');
+  if (hi) hi.innerHTML = cabecalhoGrafico('Investimento diário', estatisticas(invest, 'valor'), fmtBRL, 'Gasto médio por dia');
+  if (hc) hc.innerHTML = cabecalhoGrafico('Resultados por dia', estatisticas(conv, 'total'), fmtDec, 'Média por dia');
+
+  if (gi) graficoBarras(gi, invest, fmtBRL, eixoBRL);
+  if (gc) graficoArea(gc, conv, fmtDec, (v) => int.format(v));
 }
 
 async function paginaFunil(el) {

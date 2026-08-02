@@ -5,10 +5,11 @@ import { ErroGoogleAds, consultar, dataValida, deMicros, janelaAnterior, num } f
 const ads = new Hono<AppEnv>();
 
 /**
- * "Resultados" é a soma de TODAS as conversões que a plataforma reporta — sem
- * allowlist de ação e sem usar a flag `primary_for_goal` do Google, que na
- * conta da IDE marca como primária coisa como inscrição em canal do YouTube e
- * clique em rota do Maps, e como secundária o "Concluiu Inscrição".
+ * "Resultados" é a soma de TODAS as conversões que a plataforma reporta, sem
+ * allowlist de ação. A separação primária/secundária existe como recorte, não
+ * como filtro do total — nesta conta a flag do Google marca como primária
+ * inscrição em canal do YouTube e clique em rota do Maps, e como secundária o
+ * "Concluiu Inscrição", então filtrar por ela esconderia o que interessa.
  *
  * A métrica nasce agregável por plataforma: quando o Meta Ads entrar, ele soma
  * aqui em vez de virar um card separado.
@@ -16,6 +17,8 @@ const ads = new Hono<AppEnv>();
 type Totais = {
   investimento: number;
   resultados: number;
+  resultados_primarios: number;
+  resultados_secundarios: number;
   impressoes: number;
   cliques: number;
   custo_por_resultado: number | null;
@@ -24,23 +27,38 @@ type Totais = {
   taxa_conversao: number | null;
 };
 
+/*
+ * Primária x secundária, no vocabulário do Google Ads:
+ *   metrics.conversions      -> só ações com primary_for_goal = true
+ *   metrics.all_conversions  -> TODAS as ações, primárias e secundárias
+ *
+ * "Resultados" usa all_conversions, que é o total que a plataforma reporta.
+ * Usar `conversions` esconderia justamente as ações que interessam à IDE: nesta
+ * conta o "Concluiu Inscrição" está marcado como secundário, enquanto inscrição
+ * em canal do YouTube e clique em rota do Maps estão como primárias.
+ */
 function totalizar(metricas: Array<Record<string, unknown>>): Totais {
-  let investimento = 0, resultados = 0, impressoes = 0, cliques = 0;
+  let investimento = 0, todas = 0, primarias = 0, impressoes = 0, cliques = 0;
   for (const m of metricas) {
     investimento += deMicros(m.costMicros);
-    resultados += num(m.conversions);
+    todas += num(m.allConversions);
+    primarias += num(m.conversions);
     impressoes += num(m.impressions);
     cliques += num(m.clicks);
   }
+  // Secundária é derivada: o Google não expõe uma métrica só delas.
+  const secundarias = Math.max(0, todas - primarias);
   return {
     investimento,
-    resultados,
+    resultados: todas,
+    resultados_primarios: primarias,
+    resultados_secundarios: secundarias,
     impressoes,
     cliques,
-    custo_por_resultado: resultados > 0 ? investimento / resultados : null,
+    custo_por_resultado: todas > 0 ? investimento / todas : null,
     cpc_medio: cliques > 0 ? investimento / cliques : null,
     ctr: impressoes > 0 ? (cliques / impressoes) * 100 : null,
-    taxa_conversao: cliques > 0 ? (resultados / cliques) * 100 : null,
+    taxa_conversao: cliques > 0 ? (todas / cliques) * 100 : null,
   };
 }
 
@@ -54,6 +72,8 @@ function deltas(a: Totais, b: Totais): Record<string, number | null> {
   return {
     investimento: delta(a.investimento, b.investimento),
     resultados: delta(a.resultados, b.resultados),
+    resultados_primarios: delta(a.resultados_primarios, b.resultados_primarios),
+    resultados_secundarios: delta(a.resultados_secundarios, b.resultados_secundarios),
     impressoes: delta(a.impressoes, b.impressoes),
     cliques: delta(a.cliques, b.cliques),
     custo_por_resultado: delta(a.custo_por_resultado, b.custo_por_resultado),
@@ -92,11 +112,13 @@ ads.get('/overview', async (c) => {
   const { de, ate, comparar } = intervalo(c);
 
   const qTotais = (d1: string, d2: string) =>
-    `SELECT metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions
+    `SELECT metrics.cost_micros, metrics.impressions, metrics.clicks,
+            metrics.conversions, metrics.all_conversions
      FROM customer WHERE ${ondeData(d1, d2)}`;
 
   const qDiario =
-    `SELECT segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions
+    `SELECT segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks,
+            metrics.conversions, metrics.all_conversions
      FROM customer WHERE ${ondeData(de, ate)} ORDER BY segments.date`;
 
   const anterior = comparar ? janelaAnterior(de, ate) : null;
@@ -114,7 +136,9 @@ ads.get('/overview', async (c) => {
   const serie = linhasDiario.map((l) => ({
     data: l.segments.date,
     investimento: deMicros(l.metrics.costMicros),
-    resultados: num(l.metrics.conversions),
+    resultados: num(l.metrics.allConversions),
+    resultados_primarios: num(l.metrics.conversions),
+    resultados_secundarios: Math.max(0, num(l.metrics.allConversions) - num(l.metrics.conversions)),
     cliques: num(l.metrics.clicks),
     impressoes: num(l.metrics.impressions),
   }));
@@ -141,7 +165,8 @@ ads.get('/campanhas', async (c) => {
   }>(
     c.env,
     `SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type,
-            metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions
+            metrics.cost_micros, metrics.impressions, metrics.clicks,
+            metrics.conversions, metrics.all_conversions
      FROM campaign
      WHERE ${ondeData(de, ate)} AND campaign.status != 'REMOVED'
      ORDER BY metrics.cost_micros DESC`,
@@ -149,7 +174,9 @@ ads.get('/campanhas', async (c) => {
 
   const itens = linhas.map((l) => {
     const investimento = deMicros(l.metrics.costMicros);
-    const resultados = num(l.metrics.conversions);
+    // Mesma definição do card "Resultados": todas as conversões da plataforma.
+    const resultados = num(l.metrics.allConversions);
+    const primarios = num(l.metrics.conversions);
     const cliques = num(l.metrics.clicks);
     const impressoes = num(l.metrics.impressions);
     return {
@@ -159,6 +186,8 @@ ads.get('/campanhas', async (c) => {
       tipo: l.campaign.advertisingChannelType ?? null,
       investimento,
       resultados,
+      resultados_primarios: primarios,
+      resultados_secundarios: Math.max(0, resultados - primarios),
       cliques,
       impressoes,
       custo_por_resultado: resultados > 0 ? investimento / resultados : null,
@@ -189,15 +218,19 @@ ads.get('/resultados-por-acao', async (c) => {
      FROM customer WHERE ${ondeData(de, ate)}`,
   );
 
-  const porAcao = new Map<string, { acao: string; categoria: string | null; resultados: number }>();
+  const porAcao = new Map<string, {
+    acao: string; categoria: string | null; resultados: number; primarios: number;
+  }>();
   for (const l of linhas) {
     const acao = l.segments.conversionActionName ?? '(sem nome)';
     const atual = porAcao.get(acao) ?? {
       acao,
       categoria: l.segments.conversionActionCategory ?? null,
       resultados: 0,
+      primarios: 0,
     };
-    atual.resultados += num(l.metrics.conversions);
+    atual.resultados += num(l.metrics.allConversions);
+    atual.primarios += num(l.metrics.conversions);
     porAcao.set(acao, atual);
   }
 
@@ -207,7 +240,17 @@ ads.get('/resultados-por-acao', async (c) => {
   return c.json({
     periodo: { de, ate },
     total,
-    itens: itens.map((i) => ({ ...i, participacao_pct: total > 0 ? (i.resultados / total) * 100 : 0 })),
+    total_primarios: itens.reduce((s2, i) => s2 + i.primarios, 0),
+    total_secundarios: itens.reduce((s2, i) => s2 + (i.resultados - i.primarios), 0),
+    itens: itens.map((i) => ({
+      acao: i.acao,
+      categoria: i.categoria,
+      resultados: i.resultados,
+      // Uma ação sem nenhuma conversão contada em `conversions` é secundária —
+      // é assim que o Google separa as duas, sem expor a flag no segmento.
+      tipo: i.primarios > 0 ? 'primaria' : 'secundaria',
+      participacao_pct: total > 0 ? (i.resultados / total) * 100 : 0,
+    })),
   });
 });
 
@@ -224,7 +267,7 @@ ads.get('/anuncios', async (c) => {
     c.env,
     `SELECT ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.ad.type, ad_group_ad.status,
             ad_group.name, campaign.name,
-            metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions
+            metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
      FROM ad_group_ad
      WHERE ${ondeData(de, ate)} AND ad_group_ad.status != 'REMOVED'
      ORDER BY metrics.cost_micros DESC LIMIT 500`,
@@ -241,7 +284,7 @@ ads.get('/anuncios', async (c) => {
       grupo: l.adGroup.name,
       campanha: l.campaign.name,
       investimento: deMicros(l.metrics.costMicros),
-      resultados: num(l.metrics.conversions),
+      resultados: num(l.metrics.allConversions),
       cliques: num(l.metrics.clicks),
       impressoes: num(l.metrics.impressions),
     })),
@@ -260,7 +303,7 @@ ads.get('/palavras-chave', async (c) => {
     c.env,
     `SELECT ad_group_criterion.keyword.text, ad_group_criterion.keyword.match_type,
             ad_group_criterion.status, campaign.name,
-            metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions
+            metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.all_conversions
      FROM keyword_view
      WHERE ${ondeData(de, ate)} AND ad_group_criterion.status != 'REMOVED'
      ORDER BY metrics.cost_micros DESC LIMIT 500`,
@@ -273,7 +316,7 @@ ads.get('/palavras-chave', async (c) => {
       correspondencia: l.adGroupCriterion.keyword.matchType,
       campanha: l.campaign.name,
       investimento: deMicros(l.metrics.costMicros),
-      resultados: num(l.metrics.conversions),
+      resultados: num(l.metrics.allConversions),
       cliques: num(l.metrics.clicks),
       impressoes: num(l.metrics.impressions),
     })),
