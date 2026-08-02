@@ -121,6 +121,19 @@ npm run build      # gera public/ a partir de app/
 mantém o deploy automático funcionando sem mexer no CI. Rodar `npm run build`
 antes de commitar mudança de frontend é obrigatório.
 
+Cada tela é um chunk carregado sob demanda (`React.lazy`). Recharts pesa quase
+todo o bundle e só a Visão geral usa, então quem abre Conversas, Funil ou
+Campanhas não baixa a biblioteca de gráficos.
+
+Sem `manualChunks`: forçar Recharts num chunk próprio criou dependência cruzada
+com o chunk de vendor, que é carregado sempre, e o resultado foi Recharts virar
+import estático da entrada — baixado até por quem nunca abria um gráfico. O
+splitting automático segue as fronteiras dos `lazy()` e resolve sozinho.
+
+O detalhe da campanha abre em sanfona dentro da própria lista, não em página
+separada: quem olha campanhas está comparando umas com as outras, e sair da
+lista custa esse contexto.
+
 Navegação por hash (`#/funil`). Não é preferência de estilo: com assets em modo
 SPA o roteador devolveria `index.html` para qualquer path sem asset, inclusive
 `/api/*` e `/webhook/*`.

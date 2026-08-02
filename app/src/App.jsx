@@ -1,11 +1,17 @@
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { buscar } from './lib/api';
 import { iniciais } from './lib/formato';
-import { VisaoGeral } from './paginas/VisaoGeral';
-import { Campanhas } from './paginas/Campanhas';
-import { CampanhaDetalhe } from './paginas/CampanhaDetalhe';
-import { Funil } from './paginas/Funil';
-import { Conversas } from './paginas/Conversas';
+import { Esqueleto } from './componentes/base';
+
+/*
+ * Uma tela por chunk. O peso está concentrado na Visão geral, que é a única
+ * que carrega Recharts — sem separar, quem abre Conversas baixa a biblioteca
+ * de gráficos inteira sem usar nada dela.
+ */
+const VisaoGeral = lazy(() => import('./paginas/VisaoGeral').then((m) => ({ default: m.VisaoGeral })));
+const Campanhas = lazy(() => import('./paginas/Campanhas').then((m) => ({ default: m.Campanhas })));
+const Funil = lazy(() => import('./paginas/Funil').then((m) => ({ default: m.Funil })));
+const Conversas = lazy(() => import('./paginas/Conversas').then((m) => ({ default: m.Conversas })));
 
 const icone = (d) => (
   <svg
@@ -168,11 +174,12 @@ export default function App() {
           </div>
         </div>
 
-        {rota === 'overview' && <VisaoGeral {...props} />}
-        {rota === 'funil' && <Funil />}
-        {rota === 'campanhas' && !param && <Campanhas {...props} />}
-        {rota === 'campanhas' && param && <CampanhaDetalhe id={param} filtro={filtro} />}
-        {rota === 'conversas' && <Conversas />}
+        <Suspense fallback={<Esqueleto linhas={5} />}>
+          {rota === 'overview' && <VisaoGeral {...props} />}
+          {rota === 'funil' && <Funil />}
+          {rota === 'campanhas' && <Campanhas {...props} />}
+          {rota === 'conversas' && <Conversas />}
+        </Suspense>
       </main>
 
       <nav

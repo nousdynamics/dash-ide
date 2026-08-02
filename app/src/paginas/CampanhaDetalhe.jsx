@@ -6,12 +6,12 @@ import { ROTULO_CORRESP, ROTULO_RECURSO, fmtBRL, fmtDec, fmtDiaMes, fmtInt } fro
 
 const OPCOES_MODO = [['contem', 'contém'], ['exata', 'exata']];
 
-const Voltar = () => (
-  <a href="#/campanhas" className="inline-block text-xs text-azul-300 no-underline hover:underline">
-    ← Todas as campanhas
-  </a>
-);
-
+/**
+ * Conteúdo do detalhe, renderizado dentro da própria linha da tabela.
+ *
+ * Sanfona e não página separada: o usuário compara campanhas entre si, e sair
+ * da lista para ver o interior de uma delas custa o contexto de comparação.
+ */
 export function CampanhaDetalhe({ id, filtro }) {
   const [busca, setBusca] = useState('');
   const [buscaAplicada, setBuscaAplicada] = useState('');
@@ -26,21 +26,16 @@ export function CampanhaDetalhe({ id, filtro }) {
   const p = queryPeriodo(filtro);
   const { dados, carregando, erro } = useApi(`/api/ads/campanha/${encodeURIComponent(id)}?${p}`, `${id}|${p}`);
 
-  if (erro) return <><Voltar /><Cartao><Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} /></Cartao></>;
-  if (carregando || !dados) return <><Voltar /><Esqueleto linhas={6} /></>;
+  if (erro) return <Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} />;
+  if (carregando || !dados) return <Esqueleto linhas={4} />;
 
   const camp = dados.campanha;
   if (!camp) {
     return (
-      <>
-        <Voltar />
-        <Cartao>
-          <Estado
-            titulo="Campanha sem dados"
-            mensagem="Esta campanha não registrou atividade no período selecionado."
-          />
-        </Cartao>
-      </>
+      <Estado
+        titulo="Campanha sem dados"
+        mensagem="Esta campanha não registrou atividade no período selecionado."
+      />
     );
   }
 
@@ -72,16 +67,9 @@ export function CampanhaDetalhe({ id, filtro }) {
   ];
 
   return (
-    <>
-      <Voltar />
-      <div className="flex items-baseline justify-between gap-4 flex-wrap">
-        <div>
-          <div className="text-[19px] font-semibold tracking-tight">{camp.nome}</div>
-          <div className="text-tenue text-xs mt-[2px]">
-            {camp.tipo || '—'} · {fmtDiaMes(dados.periodo.de)} a {fmtDiaMes(dados.periodo.ate)}
-          </div>
-        </div>
-        <PillStatus status={camp.status} />
+    <div className="flex flex-col gap-3 py-3">
+      <div className="text-[11px] text-tenue">
+        {camp.tipo || '—'} · {fmtDiaMes(dados.periodo.de)} a {fmtDiaMes(dados.periodo.ate)}
       </div>
 
       <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(158px,1fr))]">
@@ -248,6 +236,6 @@ export function CampanhaDetalhe({ id, filtro }) {
           />
         )}
       </Cartao>
-    </>
+    </div>
   );
 }

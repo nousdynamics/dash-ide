@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Cartao, Estado, Esqueleto, Select } from '../componentes/base';
 import { FiltroPeriodo } from '../componentes/FiltroPeriodo';
 import { useApi } from '../lib/api';
 import { queryPeriodo, resolverPeriodo } from '../lib/periodo';
 import { fmtBRL, fmtDec, fmtDiaMes, fmtInt, fmtPct } from '../lib/formato';
+import { CampanhaDetalhe } from './CampanhaDetalhe';
 
 const COLUNAS = [
   { id: 'nome', rotulo: 'Campanha', fmt: (v) => v },
@@ -30,6 +31,8 @@ export function Campanhas({ filtro, setFiltro }) {
   const [buscaAplicada, setBuscaAplicada] = useState('');
   const [modo, setModo] = useState('contem');
   const [ordem, setOrdem] = useState({ coluna: 'investimento', desc: true });
+  // Sanfona: uma campanha aberta por vez, expandindo dentro da própria lista.
+  const [aberta, setAberta] = useState(null);
 
   // Debounce: sem isso cada tecla re-renderiza a tabela inteira.
   useEffect(() => {
@@ -127,29 +130,58 @@ export function Campanhas({ filtro, setFiltro }) {
                 </tr>
               </thead>
               <tbody>
-                {itens.map((i) => (
-                  <tr
-                    key={i.id}
-                    tabIndex={0}
-                    onClick={() => { location.hash = `#/campanhas/${i.id}`; }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        location.hash = `#/campanhas/${i.id}`;
-                      }
-                    }}
-                    className="cursor-pointer hover:bg-superficie-hover focus-visible:outline-2 focus-visible:outline-azul-400 focus-visible:-outline-offset-2"
-                  >
-                    {COLUNAS.map((c) => (
-                      <td
-                        key={c.id}
-                        className={`py-[7px] px-3 text-xs border-t border-borda ${c.id === 'nome' ? '' : 'text-secundario tnum'}`}
+                {itens.map((i) => {
+                  const expandida = aberta === i.id;
+                  const alternar = () => setAberta(expandida ? null : i.id);
+                  return (
+                    <Fragment key={i.id}>
+                      <tr
+                        tabIndex={0}
+                        role="button"
+                        aria-expanded={expandida}
+                        onClick={alternar}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            alternar();
+                          }
+                        }}
+                        className={`cursor-pointer focus-visible:outline-2 focus-visible:outline-azul-400 focus-visible:-outline-offset-2
+                          ${expandida ? 'bg-superficie-hover' : 'hover:bg-superficie-hover'}`}
                       >
-                        {c.fmt(i[c.id])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
+                        {COLUNAS.map((c) => (
+                          <td
+                            key={c.id}
+                            className={`py-[7px] px-3 text-xs border-t border-borda ${c.id === 'nome' ? '' : 'text-secundario tnum'}`}
+                          >
+                            {c.id === 'nome' ? (
+                              <span className="flex items-center gap-2">
+                                <span
+                                  aria-hidden="true"
+                                  className={`text-tenue text-[10px] transition-transform motion-reduce:transition-none ${expandida ? 'rotate-90' : ''}`}
+                                >
+                                  ▶
+                                </span>
+                                {c.fmt(i[c.id])}
+                              </span>
+                            ) : (
+                              c.fmt(i[c.id])
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                      {expandida && (
+                        <tr>
+                          <td colSpan={COLUNAS.length} className="p-0 border-t border-borda bg-base/40">
+                            <div className="px-3">
+                              <CampanhaDetalhe id={i.id} filtro={filtro} />
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

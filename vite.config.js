@@ -21,6 +21,13 @@ export default defineConfig({
         entryFileNames: 'assets/[name].js',
         chunkFileNames: 'assets/[name].js',
         assetFileNames: 'assets/[name][extname]',
+        /*
+         * Sem manualChunks de propósito. Forçar Recharts num chunk próprio criou
+         * dependência cruzada com o chunk de vendor, que é carregado sempre —
+         * o resultado foi Recharts virar import estático da entrada e ser
+         * baixado até por quem abria Conversas. O splitting automático segue as
+         * fronteiras dos `lazy()` e resolve isso sozinho.
+         */
       },
     },
   },
