@@ -15,12 +15,3 @@ export const ETAPAS_FUNIL = [
 ] as const;
 
 export type EtapaFunil = (typeof ETAPAS_FUNIL)[number];
-
-/** Etapas que disparam conversão offline no Google Ads (via n8n). */
-export const ETAPAS_DE_CONVERSAO = [
-  'Oportunidade paga',
-  'Matrícula comercial concluída',
-] as const;
-
-/** Status possíveis de uma conversão reportada pelo n8n. */
-export const STATUS_CONVERSAO = ['enviada', 'sem_gclid', 'erro_api', 'pendente'] as const;

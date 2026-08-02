@@ -64,26 +64,24 @@ function iniciais(nome) {
   return (a + b).toUpperCase();
 }
 
-function chipDelta(pct) {
+/**
+ * Chip de variação.
+ *
+ * `inverso` marca métrica em que menor é melhor — custo por resultado e CPC.
+ * Sem isso, uma queda de 25% no custo por resultado apareceria em vermelho, que
+ * é o oposto do que aconteceu. A seta continua indicando a direção real do
+ * número; só a cor segue o significado para o negócio.
+ */
+function chipDelta(pct, inverso = false) {
   if (pct === null || pct === undefined) {
     return '<span class="delta flat" title="Sem período anterior para comparar">—</span>';
   }
-  const cls = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat';
+  const bom = inverso ? pct < 0 : pct > 0;
+  const cls = pct === 0 ? 'flat' : bom ? 'up' : 'down';
   const seta = pct > 0 ? '↑' : pct < 0 ? '↓' : '→';
   return `<span class="delta ${cls}">${seta} ${fmtDec(Math.abs(pct))}%</span>`;
 }
 
-/** Mapeia status de conversão para a pill semântica + rótulo legível. */
-const STATUS_CONVERSAO = {
-  enviada:   { cls: 'pill-success', label: 'Enviada' },
-  sem_gclid: { cls: 'pill-warning', label: 'Sem gclid' },
-  erro_api:  { cls: 'pill-danger',  label: 'Erro na API' },
-  pendente:  { cls: 'pill-neutral', label: 'Pendente' },
-};
-function pillStatus(status) {
-  const s = STATUS_CONVERSAO[status] || { cls: 'pill-neutral', label: status || '—' };
-  return `<span class="pill ${s.cls}">${esc(s.label)}</span>`;
-}
 
 // ------------------------------------------------------------------------ API
 
@@ -334,14 +332,14 @@ const svg = (d) =>
 const ICONES = {
   overview: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
   funil: svg('<path d="M3 4h18l-7 8v7l-4 2v-9L3 4Z"/>'),
-  conversoes: svg('<path d="M20 6 9 17l-5-5"/>'),
+  campanhas: svg('<path d="M3 20h4V10H3v10Zm7 0h4V4h-4v16Zm7 0h4v-6h-4v6Z"/>'),
   conversas: svg('<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.7-.8L3 21l1.9-5.2A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/>'),
 };
 
 const PAGINAS = [
   { id: 'overview',   nome: 'Visão geral',    curto: 'Visão' },
   { id: 'funil',      nome: 'Funil de leads', curto: 'Funil' },
-  { id: 'conversoes', nome: 'Conversões',     curto: 'Conv.' },
+  { id: 'campanhas',  nome: 'Campanhas',      curto: 'Camp.' },
   { id: 'conversas',  nome: 'Conversas',      curto: 'Chat' },
 ];
 
@@ -350,60 +348,117 @@ const PAGINAS = [
 async function paginaOverview(el) {
   el.innerHTML = cabecalho('Visão geral', `Últimos ${estado.dias} dias`) + seletorPeriodo() + carregando(4);
 
-  let d;
-  try { d = await api(`/api/overview?dias=${estado.dias}`); }
-  catch (e) { return void (el.innerHTML = cabecalho('Visão geral', '') + seletorPeriodo() + erro(e.message)); }
+  // Duas origens distintas: mídia vem da consulta ao vivo ao Google Ads,
+  // leads e conversas vêm do D1 (Rubeus e Evolution).
+  let ads, base;
+  try {
+    [ads, base] = await Promise.all([
+      api(`/api/ads/overview?comparar=1${janelaQuery()}`),
+      api(`/api/overview?dias=${estado.dias}`),
+    ]);
+  } catch (e) {
+    return void (el.innerHTML = cabecalho('Visão geral', '') + seletorPeriodo() + erro(e.message));
+  }
 
-  const c = d.cards;
-  const semDadoNenhum =
-    !c.leads_periodo.valor && !c.investimento_total.valor &&
-    !d.conversoes_recentes.length && !d.conversas_recentes.length;
+  const t = ads.totais;
+  const dl = ads.comparacao ? ads.comparacao.deltas : {};
+  const leads = base.cards.leads_periodo;
 
   const cards = [
-    { icone: '💰', cls: '', label: 'Investimento total', valor: fmtBRL(c.investimento_total.valor), delta: c.investimento_total.delta_pct, rodape: 'Google Ads' },
-    { icone: '✓', cls: 'success', label: 'Conversões primárias', valor: fmtInt(c.conversoes_primarias.valor), delta: c.conversoes_primarias.delta_pct, rodape: 'Oportunidade paga' },
-    { icone: '◐', cls: '', label: 'Conversões secundárias', valor: fmtInt(c.conversoes_secundarias.valor), delta: c.conversoes_secundarias.delta_pct, rodape: 'Cliques e leads' },
-    { icone: '⊘', cls: '', label: 'Custo por conversão', valor: fmtBRL(c.custo_por_conversao.valor), delta: c.custo_por_conversao.delta_pct, rodape: 'Investimento ÷ primárias' },
-    { icone: '◎', cls: '', label: 'Leads no período', valor: fmtInt(c.leads_periodo.valor), delta: c.leads_periodo.delta_pct, rodape: 'Contatos distintos' },
+    { icone: '💰', cls: '', label: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, rodape: 'Google Ads' },
+    { icone: '✓', cls: 'success', label: 'Resultados', valor: fmtDec(t.resultados), delta: dl.resultados, rodape: 'Todas as conversões da plataforma' },
+    { icone: '⊘', cls: '', label: 'Custo / resultado', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, rodape: 'Investimento ÷ resultados' },
+    { icone: '◐', cls: '', label: 'Taxa de conversão', valor: t.taxa_conversao === null ? '—' : fmtDec(t.taxa_conversao) + '%', delta: dl.taxa_conversao, rodape: 'Resultados ÷ cliques' },
+    { icone: '◎', cls: '', label: 'Leads no período', valor: fmtInt(leads.valor), delta: leads.delta_pct, rodape: 'Contatos distintos no Rubeus' },
   ].map((k) => `
     <div class="card">
       <div class="stat-icon ${k.cls}" aria-hidden="true">${k.icone}</div>
       <div class="stat-label">${esc(k.label)}</div>
       <div class="stat-value tnum">${esc(k.valor)}</div>
-      ${chipDelta(k.delta)}
+      ${chipDelta(k.delta, k.inverso)}
       <span class="stat-footer">${esc(k.rodape)}</span>
     </div>`).join('');
 
+  const secundarios = [
+    ['Impressões', fmtInt(t.impressoes)],
+    ['Cliques', fmtInt(t.cliques)],
+    ['CPC médio', fmtBRL(t.cpc_medio)],
+    ['CTR', t.ctr === null ? '—' : fmtDec(t.ctr) + '%'],
+  ].map(([r, v]) => `<div class="card"><div class="stat-label">${esc(r)}</div><div class="stat-value tnum" style="font-size:20px">${esc(v)}</div></div>`).join('');
+
   el.innerHTML = `
-    ${cabecalho('Visão geral', `Últimos ${estado.dias} dias · comparado ao período anterior`)}
+    ${cabecalho('Visão geral', `${fmtDiaMes(ads.periodo.de)} a ${fmtDiaMes(ads.periodo.ate)} · comparado ao período anterior`)}
     ${seletorPeriodo()}
-    ${semDadoNenhum ? vazio('Nenhum dado ainda', 'O painel começa a preencher assim que o Rubeus, o n8n e a Evolution API enviarem os primeiros eventos para os webhooks do Worker.') : ''}
     <div class="stat-grid">${cards}</div>
+    <div class="stat-grid">${secundarios}</div>
     <div class="chart-grid">
       <div class="card">
         <div class="card-head"><div class="card-title">Investimento diário</div></div>
         <div id="g-invest"></div>
-        <div class="chart-caption"><span class="dot"></span> Total de ${fmtBRL(c.investimento_total.valor)} no período</div>
+        <div class="chart-caption"><span class="dot"></span> Total de ${fmtBRL(t.investimento)} no período</div>
       </div>
       <div class="card">
-        <div class="card-head"><div class="card-title">Conversões ao longo do tempo</div></div>
+        <div class="card-head"><div class="card-title">Resultados ao longo do tempo</div></div>
         <div id="g-conv"></div>
-        <div class="chart-caption"><span class="dot"></span> Só conversões com status "Enviada"</div>
+        <div class="chart-caption"><span class="dot"></span> ${fmtDec(t.resultados)} resultados no período</div>
       </div>
     </div>
     <div class="bottom-grid">
       <div class="card">
-        <div class="card-head"><div class="card-title">Conversões enviadas ao Google Ads</div></div>
-        ${d.conversoes_recentes.length ? tabelaConversoes(d.conversoes_recentes) : `<div class="state"><div class="state-msg">Nenhuma conversão registrada ainda.</div></div>`}
-      </div>
-      <div class="card">
         <div class="card-head"><div class="card-title">Conversas recentes</div></div>
-        ${d.conversas_recentes.length ? listaConversas(d.conversas_recentes) : `<div class="state"><div class="state-msg">Nenhuma conversa capturada ainda.</div></div>`}
+        ${base.conversas_recentes.length ? listaConversas(base.conversas_recentes) : `<div class="state"><div class="state-msg">Nenhuma conversa capturada ainda. Elas chegam pela Evolution API.</div></div>`}
       </div>
     </div>`;
 
-  desenharGraficos(d);
-  window.__redesenhar = () => desenharGraficos(d);
+  const dados = {
+    periodo: { de: ads.periodo.de, ate: ads.periodo.ate },
+    series: {
+      investimento_diario: ads.serie_diaria.map((x) => ({ data: x.data, valor: x.investimento })),
+      conversoes_diarias: ads.serie_diaria.map((x) => ({ data: x.data, total: x.resultados })),
+    },
+  };
+  desenharGraficos(dados);
+  window.__redesenhar = () => desenharGraficos(dados);
+}
+
+/** Converte o seletor de dias no intervalo de datas que /api/ads espera. */
+function janelaQuery() {
+  const iso = (t) => new Date(t).toISOString().slice(0, 10);
+  const agora = Date.now();
+  return `&de=${iso(agora - estado.dias * 86400000)}&ate=${iso(agora - 86400000)}`;
+}
+
+/** Tabela de campanhas — Google Ads ao vivo, sem passar pelo D1. */
+async function paginaCampanhas(el) {
+  el.innerHTML = cabecalho('Campanhas', 'Google Ads') + seletorPeriodo() + carregando(6);
+
+  let d;
+  try { d = await api(`/api/ads/campanhas?${janelaQuery().slice(1)}`); }
+  catch (e) { return void (el.innerHTML = cabecalho('Campanhas', '') + seletorPeriodo() + erro(e.message)); }
+
+  const ativas = d.itens.filter((i) => i.investimento > 0);
+  const linhas = ativas.map((i) => `
+    <tr>
+      <td>${esc(i.nome)}</td>
+      <td class="muted">${esc(i.status)}</td>
+      <td class="muted tnum">${esc(fmtBRL(i.investimento))}</td>
+      <td class="muted tnum">${esc(fmtDec(i.resultados))}</td>
+      <td class="muted tnum">${esc(fmtBRL(i.custo_por_resultado))}</td>
+      <td class="muted tnum">${esc(fmtInt(i.cliques))}</td>
+      <td class="muted tnum">${i.ctr === null ? '—' : esc(fmtDec(i.ctr)) + '%'}</td>
+    </tr>`).join('');
+
+  el.innerHTML = `
+    ${cabecalho('Campanhas', `${fmtDiaMes(d.periodo.de)} a ${fmtDiaMes(d.periodo.ate)} · ${ativas.length} com investimento no período (de ${d.total})`)}
+    ${seletorPeriodo()}
+    <div class="card">
+      ${ativas.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Campanha</th><th>Status</th><th>Investimento</th><th>Resultados</th><th>Custo/result.</th><th>Cliques</th><th>CTR</th></tr></thead>
+        <tbody>${linhas}</tbody>
+      </table></div>` : `<div class="state"><div class="state-title">Sem investimento no período</div><div class="state-msg">Nenhuma campanha registrou gasto no intervalo selecionado.</div></div>`}
+    </div>`;
+
+  window.__redesenhar = () => render();
 }
 
 function desenharGraficos(d) {
@@ -497,39 +552,6 @@ function funilVertical(d) {
   return html + '</div>';
 }
 
-async function paginaConversoes(el) {
-  el.innerHTML = cabecalho('Conversões', 'Resultado de cada envio ao Google Ads') + carregando(5);
-
-  let d;
-  try {
-    const off = estado.convPagina * estado.limite;
-    const fs = estado.convStatus ? `&status=${encodeURIComponent(estado.convStatus)}` : '';
-    d = await api(`/api/conversoes?limite=${estado.limite}&offset=${off}${fs}`);
-  } catch (e) { return void (el.innerHTML = cabecalho('Conversões', '') + erro(e.message)); }
-
-  const filtros = ['', 'enviada', 'sem_gclid', 'erro_api', 'pendente']
-    .map((s) => `<option value="${s}"${s === estado.convStatus ? ' selected' : ''}>${s ? esc(STATUS_CONVERSAO[s].label) : 'Todos os status'}</option>`)
-    .join('');
-
-  el.innerHTML = `
-    ${cabecalho('Conversões', 'Resultado de cada envio ao Google Ads, reportado pelo n8n')}
-    <div class="card">
-      <div class="card-head">
-        <div class="card-title">${fmtInt(d.paginacao.total)} registro(s)</div>
-        <select class="select" id="sel-status" aria-label="Filtrar por status">${filtros}</select>
-      </div>
-      ${d.itens.length ? tabelaConversoes(d.itens) : `<div class="state"><div class="state-title">Nada por aqui</div><div class="state-msg">Nenhuma conversão com esse filtro. Elas aparecem quando o n8n reporta o resultado do envio ao Google Ads.</div></div>`}
-      ${paginador(d.paginacao, estado.convPagina, 'conv')}
-    </div>`;
-
-  const sel = document.getElementById('sel-status');
-  if (sel) sel.addEventListener('change', (ev) => {
-    estado.convStatus = ev.target.value; estado.convPagina = 0; render();
-  });
-  ligarPaginador('conv', (p) => { estado.convPagina = p; render(); });
-  window.__redesenhar = () => render();
-}
-
 async function paginaConversas(el) {
   el.innerHTML = cabecalho('Conversas', 'WhatsApp via Evolution API') + carregando(5);
 
@@ -574,33 +596,6 @@ function seletorPeriodo() {
     .join('')}</div>`;
 }
 
-/** No mobile a tabela vira lista — coluna demais em 390px fica ilegível. */
-function tabelaConversoes(itens) {
-  if (isMobile()) {
-    return itens.map((c) => `
-      <div class="conv-row">
-        <div class="conv-left">
-          <div class="lead-avatar">${esc(iniciais(c.contato_nome))}</div>
-          <div>
-            <div class="conv-name">${esc(c.contato_nome || 'Contato ' + c.contato_id)}</div>
-            <div class="conv-meta">${esc(c.etapa)} · ${esc(fmtDataHora(c.enviado_em || c.criado_em))}</div>
-          </div>
-        </div>
-        ${pillStatus(c.status)}
-      </div>`).join('');
-  }
-  return `<div class="table-wrap"><table>
-    <thead><tr><th>Lead</th><th>Etapa</th><th>gclid</th><th>Data</th><th>Status</th></tr></thead>
-    <tbody>${itens.map((c) => `
-      <tr>
-        <td><div class="lead-cell"><div class="lead-avatar">${esc(iniciais(c.contato_nome))}</div>${esc(c.contato_nome || 'Contato ' + c.contato_id)}</div></td>
-        <td class="muted">${esc(c.etapa)}</td>
-        <td class="muted">${c.gclid ? '✓' : '—'}</td>
-        <td class="muted tnum">${esc(fmtDataHora(c.enviado_em || c.criado_em))}</td>
-        <td>${pillStatus(c.status)}</td>
-      </tr>`).join('')}</tbody>
-  </table></div>`;
-}
 
 function listaConversas(itens) {
   return itens.map((c) => `
@@ -700,7 +695,7 @@ function ligarRetrair() {
 const RENDERIZADORES = {
   overview: paginaOverview,
   funil: paginaFunil,
-  conversoes: paginaConversoes,
+  campanhas: paginaCampanhas,
   conversas: paginaConversas,
 };
 

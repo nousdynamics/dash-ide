@@ -12,10 +12,11 @@ Contexto completo em [ide-painel-plano-implementacao.md](ide-painel-plano-implem
 
 | Fase | Status |
 |---|---|
-| 1 — Worker + D1 | No ar. D1 `dash-ide` criado, migrations aplicadas. |
-| 2 — Fluxo n8n de conversão | Não iniciado (4 nodes finais) |
-| 3 — Fluxo n8n de métricas | Não iniciado |
-| 4 — Frontend | No ar. Falta configurar o Cloudflare Access na frente do domínio. |
+| Worker + D1 | No ar. Só `leads_etapa` e `conversas_whatsapp`. |
+| Google Ads | No ar. Consulta ao vivo em `/api/ads/*`, sem n8n. |
+| Frontend | No ar (JS puro). Port para React/Recharts em andamento. |
+| Cloudflare Access | Pendente — o domínio ainda está público. |
+
 
 Pendente pra tudo funcionar de ponta a ponta: publicar o `WEBHOOK_SECRET`
 (`npx wrangler secret put WEBHOOK_SECRET`) e replicar o mesmo valor no header
@@ -59,6 +60,25 @@ auth própria — o Access barra antes de chegar no Worker.
 
 Corpo inválido devolve `400` com a lista de campos problemáticos. Nenhuma linha
 parcial é gravada.
+
+## Origem de cada número
+
+| Dado | Vem de |
+|---|---|
+| Investimento, resultados, cliques, impressões, CPC, CTR | API do Google Ads, ao vivo (`/api/ads/*`) |
+| Campanhas, anúncios, palavras-chave, resultados por ação | API do Google Ads, ao vivo |
+| Funil por etapa | D1 `leads_etapa`, alimentado pelo webhook do Rubeus |
+| Conversas de WhatsApp | D1 `conversas_whatsapp`, alimentado pela Evolution API |
+
+**O n8n não faz parte desta ferramenta.** Ele segue existindo para enviar
+conversão offline ao Google Ads, mas não escreve nem lê nada aqui. Por isso a
+migration `0003` removeu `metricas_anuncio` (substituída pela consulta ao vivo)
+e `conversoes_ads` (que só o callback do n8n preencheria).
+
+"Resultados" é a soma de TODAS as conversões que a plataforma reporta — sem
+allowlist de ação e sem usar `primary_for_goal`, que nesta conta marca como
+primária inscrição em canal do YouTube e como secundária o "Concluiu Inscrição".
+A métrica já nasce agregável por plataforma, para o Meta Ads somar depois.
 
 ## Frontend
 

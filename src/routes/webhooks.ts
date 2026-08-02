@@ -1,18 +1,25 @@
 import { Hono } from 'hono';
-import type { AppEnv } from '../lib/tipos';
 import type { ZodTypeAny, output as ZodOutput } from 'zod';
 import { exigirSegredoDeWebhook } from '../lib/auth';
 import { CorpoInvalido, lerCorpoJson } from '../lib/corpo';
-import { conversaSchema, conversaoSchema, etapaSchema, metricasSchema } from '../lib/schemas';
+import { conversaSchema, etapaSchema } from '../lib/schemas';
+import type { AppEnv } from '../lib/tipos';
 
+/**
+ * Webhooks de entrada.
+ *
+ * Só existem dois emissores: o Rubeus (mudança de etapa) e a Evolution API
+ * (conversa de WhatsApp). O n8n não tem conexão com esta ferramenta — as
+ * métricas de mídia vêm da consulta ao vivo em /api/ads.
+ */
 const webhooks = new Hono<AppEnv>();
 
 // Nenhuma escrita acontece antes do segredo ser conferido.
 webhooks.use('*', exigirSegredoDeWebhook);
 
 /**
- * Lê + valida o corpo. Devolve `{ ok: false, resposta }` já pronto pro handler
- * retornar, pra que campo faltante vire 400 explícito em vez de linha parcial.
+ * Lê + valida o corpo, para que campo faltante vire 400 explícito em vez de
+ * linha parcial gravada em silêncio.
  */
 async function validarCorpo<S extends ZodTypeAny>(
   req: Request,
@@ -121,86 +128,6 @@ webhooks.post('/evolution/conversa', async (c) => {
     .run();
 
   return c.json({ ok: true }, 201);
-});
-
-/** POST /webhook/n8n/conversao — resultado do envio ao Google Ads, reportado pelo n8n. */
-webhooks.post('/n8n/conversao', async (c) => {
-  const r = await validarCorpo(c.req.raw, conversaoSchema, '/webhook/n8n/conversao');
-  if (!r.ok) return c.json({ erro: r.erro, detalhe: r.detalhe }, 400);
-  const d = r.dados;
-
-  const { meta } = await c.env.DB.prepare(
-    `INSERT INTO conversoes_ads
-       (contato_id, contato_nome, etapa, gclid, conversion_action, valor, status, erro_detalhe, enviado_em)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(
-      d.contato_id,
-      d.contato_nome ?? null,
-      d.etapa,
-      d.gclid ?? null,
-      d.conversion_action ?? null,
-      d.valor ?? null,
-      d.status,
-      d.erro_detalhe ?? null,
-      d.enviado_em ?? null,
-    )
-    .run();
-
-  console.log(JSON.stringify({
-    evento: 'conversao_registrada',
-    contato_id: d.contato_id,
-    etapa: d.etapa,
-    status: d.status,
-    tem_gclid: Boolean(d.gclid),
-  }));
-
-  return c.json({ ok: true, id: meta.last_row_id }, 201);
-});
-
-/** POST /webhook/n8n/metricas — polling agendado do Google Ads; upsert por (data, campanha_id). */
-webhooks.post('/n8n/metricas', async (c) => {
-  const r = await validarCorpo(c.req.raw, metricasSchema, '/webhook/n8n/metricas');
-  if (!r.ok) return c.json({ erro: r.erro, detalhe: r.detalhe }, 400);
-  const linhas = r.dados;
-
-  const stmt = c.env.DB.prepare(
-    `INSERT INTO metricas_anuncio
-       (data, campanha_id, campanha_nome, investimento, impressoes, cliques,
-        cpc_medio, ctr, conversoes_primarias, conversoes_secundarias)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (data, campanha_id) DO UPDATE SET
-       campanha_nome          = excluded.campanha_nome,
-       investimento           = excluded.investimento,
-       impressoes             = excluded.impressoes,
-       cliques                = excluded.cliques,
-       cpc_medio              = excluded.cpc_medio,
-       ctr                    = excluded.ctr,
-       conversoes_primarias   = excluded.conversoes_primarias,
-       conversoes_secundarias = excluded.conversoes_secundarias`,
-  );
-
-  // Lote numa transação implícita: ou o dia inteiro entra, ou nada entra.
-  await c.env.DB.batch(
-    linhas.map((m) =>
-      stmt.bind(
-        m.data,
-        m.campanha_id,
-        m.campanha_nome ?? null,
-        m.investimento ?? null,
-        m.impressoes ?? null,
-        m.cliques ?? null,
-        m.cpc_medio ?? null,
-        m.ctr ?? null,
-        m.conversoes_primarias ?? null,
-        m.conversoes_secundarias ?? null,
-      ),
-    ),
-  );
-
-  console.log(JSON.stringify({ evento: 'metricas_upsert', linhas: linhas.length }));
-
-  return c.json({ ok: true, linhas: linhas.length }, 200);
 });
 
 export default webhooks;
