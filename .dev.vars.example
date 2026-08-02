@@ -1,0 +1,9 @@
+# Copie para `.dev.vars` (ignorado pelo git) antes de rodar `npm run dev`.
+
+# Segredo compartilhado exigido no header X-Webhook-Secret de todo POST vindo de
+# Rubeus / n8n / Evolution API.
+#
+# Produção: gerar com `openssl rand -hex 32` e publicar com
+#   npx wrangler secret put WEBHOOK_SECRET
+# O MESMO valor precisa ser configurado como header customizado nos três lados.
+WEBHOOK_SECRET=""

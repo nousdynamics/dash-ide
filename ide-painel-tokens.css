@@ -1,0 +1,163 @@
+:root {
+  /* Superfícies */
+  --bg-base: #0A0E14;
+  --bg-elevated: #10151D;
+  --surface-card: #161C26;
+  --surface-card-hover: #1C232F;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.10);
+
+  /* Azul institucional (âncora: #2B5797, cor de marca da Faculdade IDE) */
+  --blue-900: #0B2545;
+  --blue-700: #1D4E89;
+  --blue-600: #2B5797;
+  --blue-500: #3B74B8;
+  --blue-400: #4F8FE8;
+  --blue-300: #7FB0F2;
+
+  /* Semânticas */
+  --success: #3DDC84;
+  --success-bg: rgba(61, 220, 132, 0.12);
+  --warning: #F5A623;
+  --warning-bg: rgba(245, 166, 35, 0.12);
+  --danger: #F0553F;
+  --danger-bg: rgba(240, 85, 63, 0.12);
+
+  /* Glassmorphism */
+  --glass-bg: rgba(22, 28, 38, 0.55);
+  --glass-bg-elevated: rgba(16, 21, 29, 0.60);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-border-top: rgba(255, 255, 255, 0.18);
+  --glass-blur: 24px;
+
+  /* Texto */
+  --text-primary: #F5F7FA;
+  --text-secondary: #9AA5B4;
+  --text-muted: #626D7D;
+
+  /* Tipografia */
+  --font-ui: 'Inter', system-ui, sans-serif;
+
+  /* Espaçamento (grid de 4px) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Raio */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-full: 999px;
+}
+
+/* Uso obrigatório em qualquer número financeiro/métrica */
+.tnum {
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Blobs de fundo — sem eles o vidro não tem nada pra desfocar */
+.bg-blob {
+  position: fixed;
+  width: 620px;
+  height: 620px;
+  border-radius: 50%;
+  filter: blur(70px);
+  pointer-events: none;
+  z-index: 0;
+}
+.bg-blob-1 {
+  top: -220px;
+  left: -180px;
+  background: radial-gradient(circle, rgba(79, 143, 232, 0.35), transparent 70%);
+}
+.bg-blob-2 {
+  bottom: -260px;
+  right: -200px;
+  background: radial-gradient(circle, rgba(43, 87, 151, 0.40), transparent 70%);
+}
+
+.card {
+  position: relative;
+  z-index: 1;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-top-color: var(--glass-border-top);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
+.card:hover {
+  background: var(--surface-card-hover);
+}
+
+.pill-success {
+  background: var(--success-bg);
+  color: var(--success);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pill-warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pill-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.btn-primary {
+  background: var(--blue-400);
+  color: #FFFFFF;
+  border: none;
+  border-radius: var(--radius-full);
+  padding: var(--space-3) var(--space-6);
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  background: var(--blue-600);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-6);
+  font-weight: 500;
+}
+
+.btn-secondary:hover {
+  background: var(--surface-card-hover);
+}

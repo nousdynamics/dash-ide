@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dash-ide",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    }
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dash-ide",
+      // TODO: rodar `npx wrangler d1 create dash-ide` e colar o uuid retornado aqui.
+      "database_id": "PREENCHER_APOS_WRANGLER_D1_CREATE",
+      "migrations_dir": "migrations"
+    }
+  ]
+
+  // Secrets (NÃO declarar aqui — usar `npx wrangler secret put <NOME>`):
+  //   WEBHOOK_SECRET — string aleatória compartilhada com Rubeus / n8n / Evolution API.
+  //                    Gerar com: openssl rand -hex 32
+  //                    Localmente vai em .dev.vars (já ignorado pelo git).
+}

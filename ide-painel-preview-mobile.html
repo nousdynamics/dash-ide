@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel Faculdade IDE — Preview Mobile</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-base: #0A0E14;
+    --bg-elevated: #10151D;
+    --surface-card: #161C26;
+    --surface-card-hover: #1C232F;
+    --border-subtle: rgba(255,255,255,0.06);
+    --border-default: rgba(255,255,255,0.10);
+    --blue-700: #1D4E89;
+    --blue-600: #2B5797;
+    --blue-400: #4F8FE8;
+    --blue-300: #7FB0F2;
+    --success: #3DDC84;
+    --success-bg: rgba(61,220,132,0.12);
+    --warning: #F5A623;
+    --warning-bg: rgba(245,166,35,0.12);
+    --danger: #F0553F;
+    --danger-bg: rgba(240,85,63,0.12);
+    --text-primary: #F5F7FA;
+    --text-secondary: #9AA5B4;
+    --text-muted: #626D7D;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 20px;
+    --radius-full: 999px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #05070A;
+    font-family: 'Inter', system-ui, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 32px 12px;
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* Moldura de telefone só para visualização no navegador */
+  .phone {
+    width: 390px;
+    max-width: 100%;
+    height: 844px;
+    background: var(--bg-base);
+    border-radius: 40px;
+    border: 8px solid #1a1d24;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+  }
+  .content { flex: 1; overflow-y: auto; padding: 16px 16px 100px; color: var(--text-primary); }
+  .content::-webkit-scrollbar { display: none; }
+
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 16px; }
+  .menu-btn, .icon-btn { width: 36px; height: 36px; border-radius: var(--radius-full); background: var(--surface-card); display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 15px; }
+  .topbar-title { font-weight: 600; font-size: 15px; }
+  .avatar { width: 34px; height: 34px; border-radius: 50%; background: var(--blue-700); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px; }
+
+  .page-title { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  .page-sub { color: var(--text-secondary); font-size: 12px; margin-top: 2px; margin-bottom: 16px; }
+
+  .range-scroll { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 16px; }
+  .range-scroll span { flex-shrink: 0; padding: 7px 14px; font-size: 12px; font-weight: 500; color: var(--text-secondary); background: var(--surface-card); border-radius: var(--radius-full); }
+  .range-scroll span.active { background: var(--blue-600); color: #fff; }
+
+  .card { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 18px; margin-bottom: 12px; }
+
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .stat-card { padding: 16px; }
+  .stat-icon { width: 34px; height: 34px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 14px; margin-bottom: 10px; background: rgba(79,143,232,0.14); color: var(--blue-400); }
+  .stat-icon.success { background: var(--success-bg); color: var(--success); }
+  .stat-label { color: var(--text-secondary); font-size: 11px; font-weight: 500; }
+  .stat-value { font-size: 20px; font-weight: 700; margin: 4px 0 8px; }
+  .delta { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: var(--radius-sm); }
+  .delta.up { background: var(--success-bg); color: var(--success); }
+  .delta.down { background: var(--danger-bg); color: var(--danger); }
+
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .card-title { font-size: 13px; font-weight: 600; }
+  .toggle-pill { display: flex; gap: 3px; background: var(--bg-elevated); border-radius: var(--radius-full); padding: 3px; }
+  .toggle-pill span { padding: 4px 10px; font-size: 10px; font-weight: 500; color: var(--text-secondary); border-radius: var(--radius-full); }
+  .toggle-pill span.active { background: var(--blue-600); color: #fff; }
+  .chart-caption { color: var(--text-secondary); font-size: 11px; margin-top: 10px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--blue-400); display: inline-block; }
+
+  /* Funil vertical no mobile */
+  .funnel-v { display: flex; flex-direction: column; }
+  .funnel-row { display: flex; align-items: center; justify-content: space-between; padding: 12px; background: var(--bg-elevated); border-radius: var(--radius-md); }
+  .funnel-row.warn { border: 1px solid var(--warning); }
+  .funnel-count { font-size: 17px; font-weight: 700; }
+  .funnel-label { font-size: 11px; color: var(--text-secondary); }
+  .funnel-connector { display: flex; align-items: center; gap: 8px; padding: 6px 0 6px 20px; }
+  .funnel-connector-line { width: 1px; height: 14px; background: var(--border-default); }
+  .funnel-rate { font-size: 11px; font-weight: 600; color: var(--blue-300); }
+
+  /* Lista de conversão (substitui tabela no mobile) */
+  .conv-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--border-subtle); }
+  .conv-row:first-child { border-top: none; padding-top: 0; }
+  .conv-left { display: flex; align-items: center; gap: 10px; }
+  .lead-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--blue-700); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+  .conv-name { font-weight: 600; font-size: 13px; }
+  .conv-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .pill { display: inline-block; padding: 3px 9px; border-radius: var(--radius-sm); font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .pill-success { background: var(--success-bg); color: var(--success); }
+  .pill-warning { background: var(--warning-bg); color: var(--warning); }
+  .pill-danger { background: var(--danger-bg); color: var(--danger); }
+
+  .convo-item { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border-top: 1px solid var(--border-subtle); }
+  .convo-item:first-child { border-top: none; padding-top: 0; }
+  .convo-left { display: flex; align-items: center; gap: 10px; }
+  .convo-name { font-weight: 600; font-size: 13px; }
+  .convo-meta { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+  .convo-time { font-size: 11px; color: var(--text-secondary); }
+
+  /* Tab bar inferior */
+  .tabbar { position: sticky; bottom: 0; background: var(--bg-elevated); border-top: 1px solid var(--border-subtle); display: flex; padding: 10px 8px 14px; }
+  .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--text-muted); font-size: 10px; font-weight: 500; }
+  .tab.active { color: var(--blue-400); }
+  .tab-icon { font-size: 17px; }
+
+  .frame-caption { text-align: center; color: #4a5160; font-size: 11px; margin-top: 14px; }
+</style>
+</head>
+<body>
+
+<div>
+  <div class="phone">
+    <div class="content">
+
+      <div class="topbar">
+        <div class="menu-btn">☰</div>
+        <div class="topbar-title">Painel IDE</div>
+        <div class="avatar">RS</div>
+      </div>
+
+      <div class="page-title">Visão geral</div>
+      <div class="page-sub">Últimos 30 dias</div>
+
+      <div class="range-scroll">
+        <span>7 dias</span>
+        <span class="active">30 dias</span>
+        <span>90 dias</span>
+        <span>Personalizado</span>
+      </div>
+
+      <div class="stat-grid">
+        <div class="card stat-card">
+          <div class="stat-icon">💰</div>
+          <div class="stat-label">Investimento</div>
+          <div class="stat-value tnum">R$ 24.680</div>
+          <span class="delta up">↑ 8,2%</span>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-icon success">✓</div>
+          <div class="stat-label">Conv. primárias</div>
+          <div class="stat-value tnum">142</div>
+          <span class="delta up">↑ 12,4%</span>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-icon">◐</div>
+          <div class="stat-label">Conv. secundárias</div>
+          <div class="stat-value tnum">318</div>
+          <span class="delta down">↓ 3,1%</span>
+        </div>
+        <div class="card stat-card">
+          <div class="stat-icon">⊘</div>
+          <div class="stat-label">Custo/conversão</div>
+          <div class="stat-value tnum">R$ 173,80</div>
+          <span class="delta down">↓ 5,6%</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Investimento diário</div>
+          <div class="toggle-pill"><span class="active">Mês</span><span>Ano</span></div>
+        </div>
+        <svg width="100%" height="120" viewBox="0 0 320 120">
+          <defs>
+            <linearGradient id="barGradM" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#4F8FE8"/>
+              <stop offset="100%" stop-color="#1D4E89"/>
+            </linearGradient>
+          </defs>
+          <rect x="8"   y="65" width="28" height="45" rx="5" fill="#1C232F"/>
+          <rect x="48"  y="50" width="28" height="60" rx="5" fill="#1C232F"/>
+          <rect x="88"  y="25" width="28" height="85" rx="5" fill="url(#barGradM)"/>
+          <rect x="128" y="45" width="28" height="65" rx="5" fill="#1C232F"/>
+          <rect x="168" y="15" width="28" height="95" rx="5" fill="#1C232F"/>
+          <rect x="208" y="40" width="28" height="70" rx="5" fill="#1C232F"/>
+          <rect x="248" y="30" width="28" height="80" rx="5" fill="#1C232F"/>
+        </svg>
+        <div class="chart-caption"><span class="dot"></span> Quarta: R$ 1.240 / 18 conv.</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Conversões no período</div>
+          <div class="toggle-pill"><span>7d</span><span class="active">30d</span></div>
+        </div>
+        <svg width="100%" height="110" viewBox="0 0 320 110">
+          <defs>
+            <linearGradient id="areaGradM" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#4F8FE8" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="#4F8FE8" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path d="M8,85 L52,78 L96,66 L140,70 L184,48 L228,55 L272,28 L312,20 L312,105 L8,105 Z" fill="url(#areaGradM)"/>
+          <path d="M8,85 L52,78 L96,66 L140,70 L184,48 L228,55 L272,28 L312,20" fill="none" stroke="#4F8FE8" stroke-width="2"/>
+          <circle cx="272" cy="28" r="3.5" fill="#4F8FE8"/>
+        </svg>
+        <div class="chart-caption"><span class="dot"></span> Média: 4,7 conversões/dia</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Funil — Pós-Graduação</div>
+        </div>
+        <div class="funnel-v">
+          <div class="funnel-row">
+            <div><div class="funnel-count tnum">44</div><div class="funnel-label">Oportunidade</div></div>
+          </div>
+          <div class="funnel-connector"><div class="funnel-connector-line"></div><span class="funnel-rate">↓ 48%</span></div>
+          <div class="funnel-row warn">
+            <div><div class="funnel-count tnum">21</div><div class="funnel-label">Oportunidade paga</div></div>
+          </div>
+          <div class="funnel-connector"><div class="funnel-connector-line"></div><span class="funnel-rate">↓ 19%</span></div>
+          <div class="funnel-row">
+            <div><div class="funnel-count tnum">4</div><div class="funnel-label">Aptos p/ matrícula</div></div>
+          </div>
+          <div class="funnel-connector"><div class="funnel-connector-line"></div><span class="funnel-rate">—</span></div>
+          <div class="funnel-row">
+            <div><div class="funnel-count tnum">0</div><div class="funnel-label">Matrícula concluída</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Conversões enviadas</div>
+        </div>
+        <div class="conv-row">
+          <div class="conv-left">
+            <div class="lead-avatar">LF</div>
+            <div><div class="conv-name">Laís Favero</div><div class="conv-meta">Oportunidade paga · 29/07</div></div>
+          </div>
+          <span class="pill pill-success">Enviada</span>
+        </div>
+        <div class="conv-row">
+          <div class="conv-left">
+            <div class="lead-avatar">RS</div>
+            <div><div class="conv-name">Ryan Santiago</div><div class="conv-meta">Oportunidade paga · 29/07</div></div>
+          </div>
+          <span class="pill pill-warning">Sem gclid</span>
+        </div>
+        <div class="conv-row">
+          <div class="conv-left">
+            <div class="lead-avatar">MC</div>
+            <div><div class="conv-name">Maria Lidiane</div><div class="conv-meta">Matrícula concluída · 28/07</div></div>
+          </div>
+          <span class="pill pill-danger">Erro na API</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Conversas recentes</div>
+        </div>
+        <div class="convo-item">
+          <div class="convo-left">
+            <div class="lead-avatar">EF</div>
+            <div><div class="convo-name">Eduardo Ferreira</div><div class="convo-meta">Jéssica Viana</div></div>
+          </div>
+          <span class="convo-time tnum">3 min</span>
+        </div>
+        <div class="convo-item">
+          <div class="convo-left">
+            <div class="lead-avatar">KC</div>
+            <div><div class="convo-name">Kátia Ceila</div><div class="convo-meta">Renata Cavalcanti</div></div>
+          </div>
+          <span class="convo-time tnum">18 min</span>
+        </div>
+        <div class="convo-item">
+          <div class="convo-left">
+            <div class="lead-avatar">JV</div>
+            <div><div class="convo-name">Jonas Lopes</div><div class="convo-meta">Jéssica Viana</div></div>
+          </div>
+          <span class="convo-time tnum">1h</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="tabbar">
+      <div class="tab active"><span class="tab-icon">▦</span>Visão</div>
+      <div class="tab"><span class="tab-icon">⬍</span>Funil</div>
+      <div class="tab"><span class="tab-icon">✓</span>Conv.</div>
+      <div class="tab"><span class="tab-icon">💬</span>Chat</div>
+      <div class="tab"><span class="tab-icon">⚙</span>Config</div>
+    </div>
+  </div>
+  <div class="frame-caption">Moldura só para visualização — em produção é 100% da tela</div>
+</div>
+
+</body>
+</html>

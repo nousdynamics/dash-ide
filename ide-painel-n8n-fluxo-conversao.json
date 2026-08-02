@@ -1,0 +1,172 @@
+{
+  "name": "Fluxo Faculdade IDE - Teste Webhook + API Rubeus",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Como usar\n1. Este fluxo é só para o gatilho de 'Oportunidade paga'. NÃO aponte outros webhooks do Rubeus (como 'Criação de contato') para essa mesma URL — o formato do payload é diferente e quebra o parsing.\n2. Ative o workflow, copie a URL de produção do node **Webhook**, cole no webhook 'Novo Lead' do Rubeus (ou crie um dedicado).\n3. O node 'Filtrar: é Oportunidade paga?' só deixa passar quando `etapa_atual` = 'Oportunidade paga'. Confirme antes se mudança de etapa realmente redispara o gatilho 'Novo registro de processo' — se não disparar, procure na lista de gatilhos (role pra baixo) uma opção de atualização/mudança de etapa.\n4. `origem` já está fixo em 222. Só falta trocar `SUBSTITUA_PELO_TOKEN_DO_CANAL` pelo token real.\n5. Doc oficial: https://docs.rubeus.com.br/api_crm/contato/",
+        "height": 420,
+        "width": 480
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        -80
+      ],
+      "id": "sticky-note-instrucoes",
+      "name": "Instruções"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "9497f510-4ef2-48b7-a876-ecbc4224b6ba",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "3a3eac45-8a9a-47cc-b304-7f0db71f3c99",
+      "name": "Webhook",
+      "webhookId": "9497f510-4ef2-48b7-a876-ecbc4224b6ba"
+    },
+    {
+      "parameters": {
+        "jsCode": "// O Rubeus manda Content-Type: application/x-www-form-urlencoded, mas o corpo é JSON puro.\n// Sem '=' ou '&' no texto, o parser de formulário do n8n transforma o JSON inteiro numa\n// única chave com valor vazio. Aqui detectamos esse caso e fazemos o parse manual.\n\nlet raw = $json.body;\n\nif (raw && typeof raw === 'object' && !Array.isArray(raw)) {\n  const keys = Object.keys(raw);\n  if (keys.length === 1 && keys[0].trim().startsWith('{')) {\n    raw = keys[0]; // veio como chave por causa do bug do form-urlencoded\n  }\n}\n\nconst data = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? {});\n\nconst contatos = data.contatos ?? [];\nconst contatoPrincipal = contatos.find(c => c.principal === '1') ?? contatos[0] ?? {};\n\nreturn [{\n  json: {\n    registro_processo_id: data.id ?? null,\n    processo_id: data.processo?.id ?? null,\n    processo_nome: data.processo?.nome ?? null,\n    etapa_atual: data.resumoAtual?.nome ?? null,\n    status: data.status ?? null,\n    contato_id: contatoPrincipal.id ?? null,\n    contato_tipo: contatoPrincipal.tipo ?? null,\n    contato_codigo: contatoPrincipal.codigo ?? null,\n    curso_id: data.cursos?.[0]?.id ?? null,\n    curso_codigo: data.cursos?.[0]?.codCurso ?? null,\n    origem: data.origem?.nome ?? null,\n    modalidade: data.modalidade?.nome ?? null,\n    unidade: data.unidade?.nome ?? null,\n    responsavel_comercial: data.responsavel?.nome ?? null,\n    criacao: data.criacao ?? null,\n    ultima_alteracao_status: data.ultimaAlteracaoStatus ?? null,\n    campos_personalizados: data.camposPersonalizados ?? {},\n    raw: data\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "id": "code-normalizar-payload",
+      "name": "Normalizar Payload"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "cond-etapa-oportunidade-paga",
+              "leftValue": "={{ $json.etapa_atual }}",
+              "rightValue": "Oportunidade paga",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        430,
+        0
+      ],
+      "id": "filter-etapa-oportunidade-paga",
+      "name": "Filtrar: é Oportunidade paga?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://crmide.apprubeus.com.br/api/Contato/dadosPessoa",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ id: $json.contato_id, origem: 222, token: \"SUBSTITUA_PELO_TOKEN_DO_CANAL\" }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        650,
+        0
+      ],
+      "id": "264ddacd-847d-47a8-b883-c9e3a145e732",
+      "name": "Buscar Contato (API Rubeus)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// A resposta de /api/Contato/dadosPessoa vem em { success, dados: {...} }.\n// O Rubeus não retorna Content-Type application/json, então o n8n guarda o corpo\n// como TEXTO dentro de $json.data — precisamos fazer o parse manual primeiro.\n// camposPersonalizados é um ARRAY de objetos { nome, coluna, tipo, valor } — não um objeto direto.\n\nconst processo = $('Normalizar Payload').item.json;\nlet body = $json;\n\nif (typeof body.data === 'string') {\n  try { body = JSON.parse(body.data); } catch (e) { /* mantém body original se falhar */ }\n}\n\nconst contato = body.dados ?? body;\n\nconst camposArray = Array.isArray(contato.camposPersonalizados) ? contato.camposPersonalizados : [];\nconst gclidCampo = camposArray.find(c =>\n  (c.coluna ?? '').toLowerCase().includes('gclid') || (c.nome ?? '').toLowerCase().includes('gclid')\n);\n\nreturn [{\n  json: {\n    ...processo,\n    contato_nome: contato.nome ?? null,\n    contato_email: contato.emails?.principal?.email ?? null,\n    contato_telefone: contato.telefones?.principal?.telefone ?? null,\n    gclid: gclidCampo?.valor ?? null,\n    campos_personalizados_contato: camposArray,\n    consultado_em: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        870,
+        0
+      ],
+      "id": "code-extrair-etapa",
+      "name": "Extrair Etapa Atual"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Payload": {
+      "main": [
+        [
+          {
+            "node": "Filtrar: é Oportunidade paga?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar: é Oportunidade paga?": {
+      "main": [
+        [
+          {
+            "node": "Buscar Contato (API Rubeus)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Contato (API Rubeus)": {
+      "main": [
+        [
+          {
+            "node": "Extrair Etapa Atual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "1a2b3c4d-5e6f-7890-abcd-ef1234567890",
+  "meta": {
+    "instanceId": "8be49a32acfb1dc3363ca1f4399b642b6d27d8cfa33bd1d81cf81e6186d85e35"
+  },
+  "id": "sdg10jfFEgQMdtXt",
+  "tags": []
+}

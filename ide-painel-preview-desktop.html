@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Painel Faculdade IDE — Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-base: #0A0E14;
+    --bg-elevated: #10151D;
+    --surface-card: #161C26;
+    --surface-card-hover: #1C232F;
+    --border-subtle: rgba(255,255,255,0.06);
+    --border-default: rgba(255,255,255,0.10);
+    --blue-900: #0B2545;
+    --blue-700: #1D4E89;
+    --blue-600: #2B5797;
+    --blue-500: #3B74B8;
+    --blue-400: #4F8FE8;
+    --blue-300: #7FB0F2;
+    --success: #3DDC84;
+    --success-bg: rgba(61,220,132,0.12);
+    --warning: #F5A623;
+    --warning-bg: rgba(245,166,35,0.12);
+    --danger: #F0553F;
+    --danger-bg: rgba(240,85,63,0.12);
+    --text-primary: #F5F7FA;
+    --text-secondary: #9AA5B4;
+    --text-muted: #626D7D;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 20px;
+    --radius-full: 999px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+
+  /* Sidebar */
+  .sidebar { background: var(--bg-elevated); padding: 24px 16px; display: flex; flex-direction: column; gap: 32px; border-right: 1px solid var(--border-subtle); }
+  .logo { display: flex; align-items: center; gap: 10px; padding: 0 8px; }
+  .logo-mark { width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--blue-600); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
+  .logo-text { font-weight: 600; font-size: 15px; }
+  .nav { display: flex; flex-direction: column; gap: 4px; }
+  .nav-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-radius: var(--radius-md); color: var(--text-secondary); font-weight: 500; font-size: 14px; cursor: default; }
+  .nav-item.active { background: var(--blue-600); color: #FFFFFF; }
+  .nav-left { display: flex; align-items: center; gap: 10px; }
+  .nav-badge { background: var(--surface-card); color: var(--text-secondary); font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: var(--radius-full); }
+  .nav-item.active .nav-badge { background: rgba(255,255,255,0.2); color: #fff; }
+
+  /* Main */
+  .main { padding: 24px 32px 48px; display: flex; flex-direction: column; gap: 24px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; }
+  .search { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-full); padding: 10px 16px; color: var(--text-muted); font-size: 13px; width: 280px; display: flex; justify-content: space-between; }
+  .kbd { background: var(--bg-elevated); padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+  .topbar-actions { display: flex; align-items: center; gap: 12px; }
+  .icon-btn { width: 36px; height: 36px; border-radius: var(--radius-full); background: var(--surface-card); display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-size: 14px; }
+  .avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: var(--blue-700); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; }
+  .user-block { display: flex; align-items: center; gap: 10px; }
+  .user-name { font-weight: 600; font-size: 13px; }
+  .user-role { color: var(--text-muted); font-size: 12px; }
+
+  .page-head { display: flex; align-items: baseline; justify-content: space-between; }
+  .page-title { font-size: 24px; font-weight: 600; }
+  .page-sub { color: var(--text-secondary); font-size: 13px; margin-top: 4px; }
+  .range-pill { display: flex; gap: 4px; background: var(--surface-card); border-radius: var(--radius-full); padding: 4px; }
+  .range-pill span { padding: 6px 14px; font-size: 12px; font-weight: 500; color: var(--text-secondary); border-radius: var(--radius-full); }
+  .range-pill span.active { background: var(--blue-600); color: #fff; }
+
+  .card { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 24px; }
+
+  /* Stat cards */
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .stat-icon { width: 40px; height: 40px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 16px; margin-bottom: 16px; }
+  .stat-icon.blue { background: rgba(79,143,232,0.14); color: var(--blue-400); }
+  .stat-icon.success { background: var(--success-bg); color: var(--success); }
+  .stat-label { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+  .stat-value { font-size: 28px; font-weight: 700; margin: 6px 0 10px; }
+  .delta { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: var(--radius-sm); }
+  .delta.up { background: var(--success-bg); color: var(--success); }
+  .delta.down { background: var(--danger-bg); color: var(--danger); }
+  .stat-footer { display: block; margin-top: 14px; font-size: 12px; color: var(--blue-300); font-weight: 500; }
+
+  /* Chart cards */
+  .chart-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .card-title { font-size: 15px; font-weight: 600; }
+  .toggle-pill { display: flex; gap: 4px; background: var(--bg-elevated); border-radius: var(--radius-full); padding: 3px; }
+  .toggle-pill span { padding: 5px 12px; font-size: 11px; font-weight: 500; color: var(--text-secondary); border-radius: var(--radius-full); }
+  .toggle-pill span.active { background: var(--blue-600); color: #fff; }
+  .chart-caption { color: var(--text-secondary); font-size: 12px; margin-top: 12px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue-400); display: inline-block; }
+
+  /* Funnel */
+  .funnel { display: flex; align-items: stretch; gap: 0; }
+  .funnel-step { flex: 1; background: var(--bg-elevated); border-radius: var(--radius-md); padding: 16px; text-align: center; }
+  .funnel-step.warn { border: 1px solid var(--warning); }
+  .funnel-count { font-size: 22px; font-weight: 700; }
+  .funnel-label { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+  .funnel-arrow { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 8px; min-width: 56px; }
+  .funnel-rate { font-size: 11px; font-weight: 600; color: var(--blue-300); }
+  .funnel-arrow-glyph { color: var(--text-muted); font-size: 14px; }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; padding: 0 12px 12px; }
+  td { padding: 14px 12px; font-size: 13px; border-top: 1px solid var(--border-subtle); }
+  tr:hover td { background: var(--surface-card-hover); }
+  .lead-cell { display: flex; align-items: center; gap: 10px; }
+  .lead-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--blue-700); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; }
+  .pill { display: inline-block; padding: 4px 10px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 600; }
+  .pill-success { background: var(--success-bg); color: var(--success); }
+  .pill-warning { background: var(--warning-bg); color: var(--warning); }
+  .pill-danger { background: var(--danger-bg); color: var(--danger); }
+  .muted { color: var(--text-secondary); }
+
+  /* Conversations */
+  .convo-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-top: 1px solid var(--border-subtle); }
+  .convo-item:first-child { border-top: none; padding-top: 0; }
+  .convo-left { display: flex; align-items: center; gap: 12px; }
+  .convo-name { font-weight: 600; font-size: 13px; }
+  .convo-meta { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+  .convo-right { text-align: right; }
+  .convo-right .label { font-size: 12px; color: var(--text-secondary); }
+
+  .bottom-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-mark">IDE</div>
+      <div class="logo-text">Painel IDE</div>
+    </div>
+    <nav class="nav">
+      <div class="nav-item active"><span class="nav-left">Visão geral</span></div>
+      <div class="nav-item"><span class="nav-left">Funil de leads</span><span class="nav-badge">4</span></div>
+      <div class="nav-item"><span class="nav-left">Conversões</span><span class="nav-badge">128</span></div>
+      <div class="nav-item"><span class="nav-left">Conversas</span><span class="nav-badge">32</span></div>
+      <div class="nav-item"><span class="nav-left">Configurações</span></div>
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <div class="topbar">
+      <div class="search"><span>Buscar lead, curso, processo…</span><span class="kbd">⌘K</span></div>
+      <div class="topbar-actions">
+        <div class="icon-btn">?</div>
+        <div class="icon-btn">🔔</div>
+        <div class="user-block">
+          <div class="avatar">RS</div>
+          <div>
+            <div class="user-name">Ryan Santiago</div>
+            <div class="user-role">Nous Dynamics</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page-head">
+      <div>
+        <div class="page-title">Visão geral</div>
+        <div class="page-sub">Últimos 7 dias · atualizado automaticamente</div>
+      </div>
+      <div class="range-pill">
+        <span>7 dias</span>
+        <span class="active">30 dias</span>
+        <span>90 dias</span>
+      </div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="card">
+        <div class="stat-icon blue">💰</div>
+        <div class="stat-label">Investimento total</div>
+        <div class="stat-value tnum">R$ 24.680</div>
+        <span class="delta up">↑ 8,2%</span>
+        <span class="stat-footer">Ver por campanha →</span>
+      </div>
+      <div class="card">
+        <div class="stat-icon success">✓</div>
+        <div class="stat-label">Conversões primárias</div>
+        <div class="stat-value tnum">142</div>
+        <span class="delta up">↑ 12,4%</span>
+        <span class="stat-footer">Finalizar Inscrição →</span>
+      </div>
+      <div class="card">
+        <div class="stat-icon blue">◐</div>
+        <div class="stat-label">Conversões secundárias</div>
+        <div class="stat-value tnum">318</div>
+        <span class="delta down">↓ 3,1%</span>
+        <span class="stat-footer">Cliques e leads →</span>
+      </div>
+      <div class="card">
+        <div class="stat-icon blue">⊘</div>
+        <div class="stat-label">Custo por conversão</div>
+        <div class="stat-value tnum">R$ 173,80</div>
+        <span class="delta down">↓ 5,6%</span>
+        <span class="stat-footer">Oportunidade paga →</span>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Investimento diário</div>
+          <div class="toggle-pill"><span class="active">Mensal</span><span>Anual</span></div>
+        </div>
+        <svg width="100%" height="160" viewBox="0 0 460 160">
+          <defs>
+            <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#4F8FE8"/>
+              <stop offset="100%" stop-color="#1D4E89"/>
+            </linearGradient>
+          </defs>
+          <rect x="10"  y="90"  width="36" height="60" rx="6" fill="#1C232F"/>
+          <rect x="66"  y="70"  width="36" height="80" rx="6" fill="#1C232F"/>
+          <rect x="122" y="40"  width="36" height="110" rx="6" fill="url(#barGrad)"/>
+          <rect x="178" y="60"  width="36" height="90" rx="6" fill="#1C232F"/>
+          <rect x="234" y="30"  width="36" height="120" rx="6" fill="#1C232F"/>
+          <rect x="290" y="55"  width="36" height="95" rx="6" fill="#1C232F"/>
+          <rect x="346" y="45"  width="36" height="105" rx="6" fill="#1C232F"/>
+          <text x="28"  y="158" fill="#626D7D" font-size="10">Seg</text>
+          <text x="84"  y="158" fill="#626D7D" font-size="10">Ter</text>
+          <text x="140" y="158" fill="#4F8FE8" font-size="10">Qua</text>
+          <text x="196" y="158" fill="#626D7D" font-size="10">Qui</text>
+          <text x="252" y="158" fill="#626D7D" font-size="10">Sex</text>
+          <text x="308" y="158" fill="#626D7D" font-size="10">Sáb</text>
+          <text x="364" y="158" fill="#626D7D" font-size="10">Dom</text>
+        </svg>
+        <div class="chart-caption"><span class="dot"></span> Quarta-feira: R$ 1.240 investidos, 18 conversões</div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Conversões ao longo do tempo</div>
+          <div class="toggle-pill"><span>7d</span><span class="active">30d</span><span>90d</span></div>
+        </div>
+        <svg width="100%" height="160" viewBox="0 0 420 160">
+          <defs>
+            <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#4F8FE8" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="#4F8FE8" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path d="M10,120 L60,110 L110,95 L160,100 L210,70 L260,80 L310,45 L360,55 L410,30 L410,150 L10,150 Z" fill="url(#areaGrad)"/>
+          <path d="M10,120 L60,110 L110,95 L160,100 L210,70 L260,80 L310,45 L360,55 L410,30" fill="none" stroke="#4F8FE8" stroke-width="2"/>
+          <circle cx="310" cy="45" r="4" fill="#4F8FE8"/>
+          <rect x="270" y="8" width="110" height="30" rx="8" fill="#0A0E14" stroke="#1C232F"/>
+          <text x="325" y="23" fill="#F5F7FA" font-size="10" text-anchor="middle" font-weight="600">18 conv.</text>
+          <text x="325" y="34" fill="#9AA5B4" font-size="9" text-anchor="middle">22 jul</text>
+        </svg>
+        <div class="chart-caption"><span class="dot"></span> Taxa média mensal: 4,7 conversões/dia</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <div class="card-title">Funil — Pós-Graduação</div>
+        <span class="stat-footer" style="margin:0">Ver todos os processos →</span>
+      </div>
+      <div class="funnel">
+        <div class="funnel-step">
+          <div class="funnel-count tnum">44</div>
+          <div class="funnel-label">Oportunidade</div>
+        </div>
+        <div class="funnel-arrow"><span class="funnel-arrow-glyph">→</span><span class="funnel-rate">48%</span></div>
+        <div class="funnel-step warn">
+          <div class="funnel-count tnum">21</div>
+          <div class="funnel-label">Oportunidade paga</div>
+        </div>
+        <div class="funnel-arrow"><span class="funnel-arrow-glyph">→</span><span class="funnel-rate">19%</span></div>
+        <div class="funnel-step">
+          <div class="funnel-count tnum">4</div>
+          <div class="funnel-label">Aptos p/ matrícula</div>
+        </div>
+        <div class="funnel-arrow"><span class="funnel-arrow-glyph">→</span><span class="funnel-rate">—</span></div>
+        <div class="funnel-step">
+          <div class="funnel-count tnum">0</div>
+          <div class="funnel-label">Matrícula concluída</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-grid">
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Conversões enviadas ao Google Ads</div>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Lead</th><th>Etapa</th><th>Canal</th><th>Data</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="lead-cell"><div class="lead-avatar">LF</div>Laís Favero</td>
+              <td class="muted">Oportunidade paga</td>
+              <td class="muted">Ficha de Inscrição</td>
+              <td class="muted tnum">29/07 16:12</td>
+              <td><span class="pill pill-success">Enviada</span></td>
+            </tr>
+            <tr>
+              <td class="lead-cell"><div class="lead-avatar">RS</div>Ryan Santiago</td>
+              <td class="muted">Oportunidade paga</td>
+              <td class="muted">Ficha de Inscrição</td>
+              <td class="muted tnum">29/07 14:50</td>
+              <td><span class="pill pill-warning">Sem gclid</span></td>
+            </tr>
+            <tr>
+              <td class="lead-cell"><div class="lead-avatar">MC</div>Maria Lidiane</td>
+              <td class="muted">Matrícula concluída</td>
+              <td class="muted">Ficha de Inscrição</td>
+              <td class="muted tnum">28/07 09:31</td>
+              <td><span class="pill pill-danger">Erro na API</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">Conversas recentes</div>
+        </div>
+        <div class="convo-item">
+          <div class="convo-left">
+            <div class="lead-avatar">EF</div>
+            <div><div class="convo-name">Eduardo Ferreira</div><div class="convo-meta">Jéssica Viana</div></div>
+          </div>
+          <div class="convo-right"><div class="label tnum">3 min</div></div>
+        </div>
+        <div class="convo-item">
+          <div class="convo-left">
+            <div class="lead-avatar">KC</div>
+            <div><div class="convo-name">Kátia Ceila</div><div class="convo-meta">Renata Cavalcanti</div></div>
+          </div>
+          <div class="convo-right"><div class="label tnum">18 min</div></div>
+        </div>
+        <div class="convo-item">
+          <div class="convo-left">
+            <div class="lead-avatar">JV</div>
+            <div><div class="convo-name">Jonas Lopes</div><div class="convo-meta">Jéssica Viana</div></div>
+          </div>
+          <div class="convo-right"><div class="label tnum">1h</div></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+</body>
+</html>
