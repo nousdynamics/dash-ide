@@ -33,6 +33,13 @@ function delta(atual: number, anterior: number): number | null {
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v ?? 0) || 0);
 
 /**
+ * GET /api/me — quem está logado, segundo o header que o Cloudflare Access
+ * injeta. Em desenvolvimento local não há Access, então volta `null` e a topbar
+ * cai num rótulo genérico.
+ */
+api.get('/me', (c) => c.json({ email: c.get('usuarioEmail') ?? null }));
+
+/**
  * GET /api/overview?dias=30 — cards, séries e listas curtas da Visão Geral.
  *
  * Investimento e conversões de Ads vêm de `metricas_anuncio` (agregado por dia

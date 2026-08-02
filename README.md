@@ -12,10 +12,14 @@ Contexto completo em [ide-painel-plano-implementacao.md](ide-painel-plano-implem
 
 | Fase | Status |
 |---|---|
-| 1 — Worker + D1 | Implementado, validado localmente. Falta criar o D1 remoto e deployar. |
+| 1 — Worker + D1 | No ar. D1 `dash-ide` criado, migrations aplicadas. |
 | 2 — Fluxo n8n de conversão | Não iniciado (4 nodes finais) |
 | 3 — Fluxo n8n de métricas | Não iniciado |
-| 4 — Frontend + Cloudflare Access | Não iniciado |
+| 4 — Frontend | No ar. Falta configurar o Cloudflare Access na frente do domínio. |
+
+Pendente pra tudo funcionar de ponta a ponta: publicar o `WEBHOOK_SECRET`
+(`npx wrangler secret put WEBHOOK_SECRET`) e replicar o mesmo valor no header
+`X-Webhook-Secret` do Rubeus, do n8n e da Evolution API.
 
 ## Setup
 
@@ -55,6 +59,28 @@ auth própria — o Access barra antes de chegar no Worker.
 
 Corpo inválido devolve `400` com a lista de campos problemáticos. Nenhuma linha
 parcial é gravada.
+
+## Frontend
+
+Servido como asset estático pelo mesmo Worker (`public/`), então painel e API
+compartilham origem — sem CORS e com um só hostname pro Access proteger.
+
+Navegação por hash (`#/funil`). Não é preferência de estilo: com assets em modo
+SPA o roteador devolveria `index.html` para qualquer path sem asset, inclusive
+`/api/*` e `/webhook/*`.
+
+Layout dos mockups aprovados, com o tratamento de vidro + blobs que o design
+system define. Breakpoint único em 768px: abaixo vira tabbar inferior, funil
+vertical e listas no lugar da tabela.
+
+Dois detalhes de leitura de dado que valem saber:
+
+- **As séries dos gráficos são preenchidas com zero nos dias sem registro.** A
+  API só devolve dias que têm linha; plotar isso direto espaça os pontos por
+  índice em vez de por data, e a linha mente sobre o ritmo.
+- **O funil é sempre de um processo só.** Somar processos gera taxa acima de
+  100%, porque cada processo usa um conjunto diferente de etapas. Na primeira
+  visita o painel assume o processo com mais leads.
 
 ## Decisões de implementação que não estavam no plano
 

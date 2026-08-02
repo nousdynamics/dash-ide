@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel Faculdade IDE</title>
+<meta name="description" content="Acompanhamento de admissões: investimento em mídia, funil do Rubeus, conversões enviadas ao Google Ads e conversas de WhatsApp.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<!-- Luz ambiente atrás de tudo: é o que o backdrop-filter dos cards desfoca. -->
+<div class="bg-blob bg-blob-1" aria-hidden="true"></div>
+<div class="bg-blob bg-blob-2" aria-hidden="true"></div>
+
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="logo">
+      <div class="logo-mark">IDE</div>
+      <div class="logo-text">Painel IDE</div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Navegação principal"></nav>
+  </aside>
+
+  <main class="main">
+
+    <div class="topbar">
+      <div class="search desktop-only" aria-hidden="true">
+        <span>Buscar lead, curso, processo…</span><span class="kbd">⌘K</span>
+      </div>
+      <div class="topbar-title mobile-only" id="mobile-title">Painel IDE</div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="btn-refresh" title="Atualizar dados" aria-label="Atualizar dados">↻</button>
+        <div class="user-block">
+          <div class="avatar" id="user-avatar">—</div>
+          <div class="desktop-only">
+            <div class="user-name" id="user-name">Carregando…</div>
+            <div class="user-role">Faculdade IDE</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page" aria-live="polite"></div>
+
+  </main>
+</div>
+
+<nav class="tabbar" id="tabbar" aria-label="Navegação"></nav>
+
+<script src="/app.js"></script>
+</body>
+</html>

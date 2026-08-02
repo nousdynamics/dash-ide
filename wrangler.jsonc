@@ -5,6 +5,17 @@
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
 
+  // Frontend servido pelo mesmo Worker: mesma origem das rotas /api (sem CORS) e
+  // um único hostname pro Cloudflare Access proteger.
+  //
+  // `not_found_handling` fica no padrão (404). Em modo SPA o roteador de assets
+  // devolveria index.html para QUALQUER caminho sem asset — inclusive /api/* e
+  // /webhook/*, que passariam a responder HTML. Por isso a navegação do painel
+  // usa rotas em hash (#/funil), que nunca chegam ao servidor.
+  "assets": {
+    "directory": "./public"
+  },
+
   "observability": {
     "enabled": true,
     "logs": {
