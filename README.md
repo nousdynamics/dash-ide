@@ -143,8 +143,19 @@ Navegação por hash (`#/funil`). Não é preferência de estilo: com assets em 
 SPA o roteador devolveria `index.html` para qualquer path sem asset, inclusive
 `/api/*` e `/webhook/*`.
 
-Layout dos mockups aprovados. Breakpoint único em 768px: abaixo vira tabbar
-inferior, funil vertical e listas no lugar da tabela.
+Layout dos mockups aprovados. Breakpoint único em 768px. Abaixo dele:
+
+- Tabbar inferior no lugar da sidebar, e funil na vertical.
+- **Toda tabela vira lista.** Campanhas tem 7 colunas e palavras-chave tem 6;
+  em 390px isso só caberia com rolagem horizontal, que esconde coluna atrás de
+  gesto. A lista mostra o mesmo dado empilhado.
+- Cabeçalho de sanfona empilha título e resumo, para o nome do conjunto ter a
+  linha inteira em vez de truncar em "Enfermagem em D…".
+- Eixo Y dos gráficos encolhe de 52px para 34px e o rótulo da média sai: em
+  390px a área de plotagem é o recurso escasso.
+
+Verificado com emulação de device em 390px nas quatro telas, com o detalhe da
+campanha aberto: nenhuma delas transborda na horizontal.
 
 **Desvio consciente da seção 2.5 do design system:** o fundo da página é chapado
 e não tem os dois blobs de gradiente. Decisão do projeto — degradê existe só

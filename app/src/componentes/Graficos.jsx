@@ -12,7 +12,22 @@ import {
   YAxis,
 } from 'recharts';
 import { Cartao, Estado } from './base';
+import { useEffect, useState } from 'react';
 import { fmtDiaMes } from '../lib/formato';
+
+/** Em 390px o eixo Y largo come a área de plotagem; aqui ele encolhe. */
+function useEstreito() {
+  const [estreito, setEstreito] = useState(
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const aoMudar = (e) => setEstreito(e.matches);
+    mq.addEventListener('change', aoMudar);
+    return () => mq.removeEventListener('change', aoMudar);
+  }, []);
+  return estreito;
+}
 
 const EIXO = { fill: '#626d7d', fontSize: 10 };
 
@@ -45,7 +60,7 @@ export function estatisticas(dados, chave) {
 function Cabecalho({ titulo, est, fmt, legenda }) {
   if (!est) return <div className="text-[13px] font-semibold mb-3">{titulo}</div>;
   return (
-    <div className="flex items-start justify-between gap-4 mb-3">
+    <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-1 md:gap-4 mb-3">
       <div>
         <div className="text-[13px] font-semibold">{titulo}</div>
         <div className="text-xl font-bold tnum mt-[2px] tracking-tight">{fmt(est.media)}</div>
@@ -53,7 +68,7 @@ function Cabecalho({ titulo, est, fmt, legenda }) {
           {legenda} · {est.dias} dias
         </div>
       </div>
-      <div className="text-[11px] text-tenue text-right leading-relaxed tnum whitespace-nowrap">
+      <div className="text-[11px] text-tenue md:text-right leading-relaxed tnum">
         <div>
           Pico <strong className="text-secundario font-semibold">{fmt(est.max)}</strong>{' '}
           ({fmtDiaMes(est.maxData)})
@@ -79,6 +94,7 @@ function DicaCustom({ active, payload, label, fmt }) {
 
 /** Barras diárias, com grade, média e destaque no pico. */
 export function GraficoBarras({ titulo, dados, chave, fmt, fmtEixo, legenda }) {
+  const estreito = useEstreito();
   const est = estatisticas(dados, chave);
   if (!est) {
     return (
@@ -91,7 +107,7 @@ export function GraficoBarras({ titulo, dados, chave, fmt, fmtEixo, legenda }) {
   return (
     <Cartao>
       <Cabecalho titulo={titulo} est={est} fmt={fmt} legenda={legenda} />
-      <ResponsiveContainer width="100%" height={190}>
+      <ResponsiveContainer width="100%" height={estreito ? 165 : 190}>
         <BarChart data={dados} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <defs>
             <linearGradient id="gradBarra" x1="0" y1="0" x2="0" y2="1">
@@ -106,15 +122,19 @@ export function GraficoBarras({ titulo, dados, chave, fmt, fmtEixo, legenda }) {
             tick={EIXO}
             axisLine={false}
             tickLine={false}
-            minTickGap={28}
+            minTickGap={estreito ? 44 : 28}
           />
-          <YAxis tickFormatter={fmtEixo} tick={EIXO} axisLine={false} tickLine={false} width={52} />
+          <YAxis tickFormatter={fmtEixo} tick={EIXO} axisLine={false} tickLine={false} width={estreito ? 34 : 52} />
           <Tooltip content={<DicaCustom fmt={fmt} />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
           <ReferenceLine
             y={est.media}
             stroke="#626d7d"
             strokeDasharray="4 4"
-            label={{ value: `média ${fmt(est.media)}`, fill: '#626d7d', fontSize: 10, position: 'right' }}
+            label={
+              estreito
+                ? undefined
+                : { value: `média ${fmt(est.media)}`, fill: '#626d7d', fontSize: 10, position: 'right' }
+            }
           />
           <Bar dataKey={chave} radius={[4, 4, 0, 0]} maxBarSize={34}>
             {dados.map((d) => (
@@ -130,6 +150,7 @@ export function GraficoBarras({ titulo, dados, chave, fmt, fmtEixo, legenda }) {
 
 /** Área/linha diária, com grade e preenchimento em gradiente. */
 export function GraficoArea({ titulo, dados, chave, fmt, fmtEixo, legenda }) {
+  const estreito = useEstreito();
   const est = estatisticas(dados, chave);
   if (!est) {
     return (
@@ -142,7 +163,7 @@ export function GraficoArea({ titulo, dados, chave, fmt, fmtEixo, legenda }) {
   return (
     <Cartao>
       <Cabecalho titulo={titulo} est={est} fmt={fmt} legenda={legenda} />
-      <ResponsiveContainer width="100%" height={190}>
+      <ResponsiveContainer width="100%" height={estreito ? 165 : 190}>
         <AreaChart data={dados} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <defs>
             <linearGradient id="gradArea" x1="0" y1="0" x2="0" y2="1">
@@ -157,9 +178,9 @@ export function GraficoArea({ titulo, dados, chave, fmt, fmtEixo, legenda }) {
             tick={EIXO}
             axisLine={false}
             tickLine={false}
-            minTickGap={28}
+            minTickGap={estreito ? 44 : 28}
           />
-          <YAxis tickFormatter={fmtEixo} tick={EIXO} axisLine={false} tickLine={false} width={52} />
+          <YAxis tickFormatter={fmtEixo} tick={EIXO} axisLine={false} tickLine={false} width={estreito ? 34 : 52} />
           <Tooltip content={<DicaCustom fmt={fmt} />} cursor={{ stroke: 'rgba(255,255,255,0.12)' }} />
           <Area
             type="monotone"

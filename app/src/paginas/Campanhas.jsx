@@ -109,7 +109,9 @@ export function Campanhas({ filtro, setFiltro }) {
         </div>
 
         {itens.length ? (
-          <div className="overflow-x-auto">
+          <>
+          {/* Tabela de 7 colunas não cabe em 390px; no mobile vira lista. */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
                 <tr>
@@ -185,6 +187,43 @@ export function Campanhas({ filtro, setFiltro }) {
               </tbody>
             </table>
           </div>
+
+          <div className="md:hidden flex flex-col">
+            {itens.map((i) => {
+              const expandida = aberta === i.id;
+              return (
+                <div key={i.id} className="border-t border-borda first:border-t-0">
+                  <button
+                    type="button"
+                    aria-expanded={expandida}
+                    onClick={() => setAberta(expandida ? null : i.id)}
+                    className="w-full text-left py-3 bg-transparent border-0 cursor-pointer"
+                  >
+                    <div className="flex items-start gap-2">
+                      <span
+                        aria-hidden="true"
+                        className={`text-tenue text-[10px] mt-1 shrink-0 transition-transform motion-reduce:transition-none ${expandida ? 'rotate-90' : ''}`}
+                      >
+                        ▶
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-medium">{i.nome}</div>
+                        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-tenue tnum">
+                          <span>{fmtBRL(i.investimento)}</span>
+                          <span>{fmtDec(i.resultados)} result.</span>
+                          <span>{fmtBRL(i.custo_por_resultado)}/result.</span>
+                          <span>{fmtInt(i.cliques)} cliques</span>
+                          <span>{fmtPct(i.ctr)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                  {expandida && <CampanhaDetalhe id={i.id} filtro={filtro} />}
+                </div>
+              );
+            })}
+          </div>
+          </>
         ) : (
           <Estado
             titulo="Nenhuma campanha"

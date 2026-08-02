@@ -77,7 +77,25 @@ function ChipsDeRecurso({ recursos }) {
 
 function TabelaPalavras({ palavras }) {
   return (
-    <div className="overflow-x-auto">
+    <>
+      {/* Tabela de 6 colunas não cabe em 390px; no mobile vira lista. */}
+      <div className="md:hidden flex flex-col">
+        {palavras.map((k, i) => (
+          <div key={`m-${k.termo}-${i}`} className={`py-2 ${i ? 'border-t border-borda' : ''}`}>
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-xs min-w-0 break-words">{k.termo}</span>
+              <PillStatus status={k.status} />
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-tenue tnum">
+              <span>{ROTULO_CORRESP[k.correspondencia] || k.correspondencia}</span>
+              <span>{fmtBRL(k.investimento)}</span>
+              <span>{fmtDec(k.resultados)} result.</span>
+              <span>{fmtInt(k.cliques)} cliques</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    <div className="hidden md:block overflow-x-auto">
       <table className="w-full border-collapse">
         <thead>
           <tr>
@@ -115,6 +133,7 @@ function TabelaPalavras({ palavras }) {
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
@@ -276,12 +295,12 @@ export function CampanhaDetalhe({ id, filtro }) {
                   {c.anuncios.length ? (
                     c.anuncios.map((a, i) => (
                       <div key={a.id} className={`py-2 ${i ? 'border-t border-borda' : ''}`}>
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-1 md:gap-3">
                           <div className="text-xs text-secundario">
                             {a.tipo || 'Anúncio'} · {a.titulos.length} títulos ·{' '}
                             {a.descricoes.length} descrições
                           </div>
-                          <div className="flex items-center gap-3 text-xs text-secundario tnum whitespace-nowrap">
+                          <div className="flex items-center gap-3 text-xs text-secundario tnum flex-wrap">
                             <PillStatus status={a.status} />
                             <span>{fmtBRL(a.investimento)}</span>
                             <span>{fmtDec(a.resultados)} result.</span>
