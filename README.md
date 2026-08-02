@@ -69,9 +69,26 @@ Navegação por hash (`#/funil`). Não é preferência de estilo: com assets em 
 SPA o roteador devolveria `index.html` para qualquer path sem asset, inclusive
 `/api/*` e `/webhook/*`.
 
-Layout dos mockups aprovados, com o tratamento de vidro + blobs que o design
-system define. Breakpoint único em 768px: abaixo vira tabbar inferior, funil
-vertical e listas no lugar da tabela.
+Layout dos mockups aprovados. Breakpoint único em 768px: abaixo vira tabbar
+inferior, funil vertical e listas no lugar da tabela.
+
+**Desvio consciente da seção 2.5 do design system:** o fundo da página é chapado
+e não tem os dois blobs de gradiente. Decisão do projeto — degradê existe só
+dentro dos componentes. Como consequência os cards deixaram de usar
+`backdrop-filter` (não havia mais nada colorido pra desfocar) e passaram a
+carregar o próprio gradiente sutil, com a borda de topo clara preservando o
+efeito de superfície pegando luz.
+
+A sidebar retrai para uma trilha de 72px só com ícones; a preferência fica em
+`localStorage`. Os ícones são SVG inline com `currentColor`, não emoji — emoji
+vem colorido e com métrica própria de cada sistema, o que desalinha numa fileira
+vertical de ícones.
+
+A logo tem duas variantes: `logo-IDE-faculdade.svg` (original, para fundo claro)
+e `logo-IDE-faculdade-dark.svg`, usada no painel. O azul-marinho da marca
+(`#01335e`) rende ~1,4:1 de contraste sobre o fundo escuro — ilegível —, então
+na variante escura ele vira branco de texto. O teal do brasão tem contraste
+suficiente e permanece.
 
 Dois detalhes de leitura de dado que valem saber:
 

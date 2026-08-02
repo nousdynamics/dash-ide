@@ -35,13 +35,6 @@
   --danger: #F0553F;
   --danger-bg: rgba(240, 85, 63, 0.12);
 
-  /* Glassmorphism */
-  --glass-bg: rgba(22, 28, 38, 0.55);
-  --glass-bg-elevated: rgba(16, 21, 29, 0.60);
-  --glass-border: rgba(255, 255, 255, 0.10);
-  --glass-border-top: rgba(255, 255, 255, 0.18);
-  --glass-blur: 24px;
-
   /* Texto */
   --text-primary: #F5F7FA;
   --text-secondary: #9AA5B4;
@@ -62,6 +55,12 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/*
+ * Fundo chapado, por decisão de projeto: degradê existe só dentro dos
+ * componentes. Isso substitui os blobs de ambiente da seção 2.5 do design
+ * system — como não há mais nada colorido atrás, os cards também deixam de usar
+ * backdrop-filter e passam a carregar o próprio gradiente.
+ */
 body {
   background: var(--bg-base);
   color: var(--text-primary);
@@ -75,41 +74,27 @@ body {
 /* Números de métrica nunca "dançam" ao atualizar. */
 .tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
 
-/*
- * Blobs de fundo. Obrigatórios: sem algo colorido atrás, o backdrop-filter dos
- * cards não tem o que desfocar e o vidro vira uma cor semitransparente sem graça.
- */
-.bg-blob {
-  position: fixed;
-  width: 620px; height: 620px;
-  border-radius: 50%;
-  filter: blur(70px);
-  pointer-events: none;
-  z-index: 0;
-}
-.bg-blob-1 { top: -220px; left: -180px; background: radial-gradient(circle, rgba(79,143,232,0.35), transparent 70%); }
-.bg-blob-2 { bottom: -260px; right: -200px; background: radial-gradient(circle, rgba(43,87,151,0.40), transparent 70%); }
-
 /* ---------------------------------------------------------------- Estrutura */
 
 .app { position: relative; z-index: 1; min-height: 100vh; }
 
 .sidebar {
-  background: var(--glass-bg-elevated);
-  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
-  border-right: 1px solid var(--glass-border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0) 30%), var(--bg-elevated);
+  border-right: 1px solid var(--border-subtle);
   padding: var(--space-6) var(--space-4);
   display: flex; flex-direction: column; gap: var(--space-8);
 }
-.logo { display: flex; align-items: center; gap: 10px; padding: 0 var(--space-2); }
+.sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.logo { display: flex; align-items: center; gap: 10px; padding: 0 var(--space-2); min-width: 0; }
 .logo-mark {
   width: 32px; height: 32px; border-radius: var(--radius-sm);
   background: var(--blue-600); color: #fff;
   display: flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: 13px; flex-shrink: 0;
 }
-.logo-text { font-weight: 600; font-size: 15px; }
+.logo-img { height: 34px; width: auto; display: block; }
+/* Expandida mostra a assinatura completa; retraída, só a marca quadrada. */
+.logo-mark { display: none; }
 
 .nav { display: flex; flex-direction: column; gap: var(--space-1); }
 .nav-item {
@@ -122,7 +107,19 @@ body {
 .nav-item:hover { background: var(--surface-card-hover); color: var(--text-primary); }
 /* Item ativo é sólido de propósito: precisa ser o ponto mais opaco da tela. */
 .nav-item.active { background: var(--blue-600); color: #fff; }
-.nav-left { display: flex; align-items: center; gap: 10px; }
+.nav-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.nav-icone { width: 18px; height: 18px; flex-shrink: 0; display: block; }
+.nav-rotulo { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Botão de retrair — fica escondido no mobile, onde a navegação é a tabbar. */
+.btn-retrair {
+  width: 28px; height: 28px; flex-shrink: 0;
+  border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);
+  background: var(--surface-card); color: var(--text-secondary);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-family: inherit; font-size: 13px; line-height: 1;
+}
+.btn-retrair:hover { background: var(--surface-card-hover); color: var(--text-primary); }
 .nav-badge {
   background: var(--surface-card); color: var(--text-secondary);
   font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: var(--radius-full);
@@ -130,6 +127,13 @@ body {
 .nav-item.active .nav-badge { background: rgba(255,255,255,0.2); color: #fff; }
 
 .main { padding: var(--space-6) var(--space-8) var(--space-12); display: flex; flex-direction: column; gap: var(--space-6); }
+
+/*
+ * O gap da .main só separa topbar de #page. Tudo que o usuário vê fica DENTRO
+ * de #page, que precisa do próprio ritmo vertical — sem isso os blocos ficam
+ * colados e o espaçamento vira margem solta espalhada pelo JS.
+ */
+#page { display: flex; flex-direction: column; gap: var(--space-6); }
 
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
 .search {
@@ -173,15 +177,20 @@ body {
 
 /* ------------------------------------------------------------------- Cards */
 
+/*
+ * O degradê vive aqui, não no fundo da página: um brilho sutil descendo do
+ * canto superior esquerdo sobre a superfície sólida, mais a borda de topo
+ * clara. É o que dá o efeito de superfície pegando luz sem depender de blur.
+ */
 .card {
   position: relative; z-index: 1;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-top-color: var(--glass-border-top);
+  background:
+    linear-gradient(155deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 42%),
+    var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-top-color: rgba(255,255,255,0.14);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
-  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
   box-shadow: 0 8px 32px rgba(0,0,0,0.35);
 }
 
@@ -347,9 +356,26 @@ tbody tr:hover td { background: var(--surface-card-hover); }
 /* ================================================= Desktop — a partir de 768px */
 
 @media (min-width: 768px) {
-  .app { display: grid; grid-template-columns: 240px 1fr; }
+  .app { display: grid; grid-template-columns: 240px 1fr; transition: grid-template-columns .18s ease; }
   .sidebar { position: sticky; top: 0; height: 100vh; }
   .mobile-only { display: none !important; }
+
+  /* Retraída: só a trilha de ícones. O rótulo vira `title`, não some do alcance. */
+  .app.retraida { grid-template-columns: 72px 1fr; }
+  .app.retraida .sidebar { padding-left: var(--space-3); padding-right: var(--space-3); align-items: center; }
+  .app.retraida .sidebar-head { flex-direction: column; gap: var(--space-3); }
+  .app.retraida .logo { padding: 0; }
+  .app.retraida .logo-img,
+  .app.retraida .nav-rotulo,
+  .app.retraida .nav-badge { display: none; }
+  .app.retraida .logo-mark { display: flex; }
+  .app.retraida .nav { width: 100%; }
+  .app.retraida .nav-item { justify-content: center; padding: 10px 0; }
+  .app.retraida .nav-left { gap: 0; }
+}
+
+@media (min-width: 768px) and (prefers-reduced-motion: reduce) {
+  .app { transition: none; }
 }
 
 /* ==================================================== Mobile — abaixo de 768px */
@@ -359,6 +385,7 @@ tbody tr:hover td { background: var(--surface-card-hover); }
   .desktop-only { display: none !important; }
 
   .main { padding: var(--space-4) var(--space-4) 96px; gap: var(--space-4); }
+  #page { gap: var(--space-4); }
   .topbar { padding-bottom: var(--space-2); }
   .search { display: none; }
   .page-title { font-size: 20px; font-weight: 700; }
@@ -380,10 +407,8 @@ tbody tr:hover td { background: var(--surface-card-hover); }
 
   .tabbar {
     display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
-    background: var(--glass-bg-elevated);
-    backdrop-filter: blur(var(--glass-blur)) saturate(140%);
-    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
-    border-top: 1px solid var(--glass-border);
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border-subtle);
     padding: 10px var(--space-2) calc(14px + env(safe-area-inset-bottom));
   }
   .tab {
@@ -392,5 +417,6 @@ tbody tr:hover td { background: var(--surface-card-hover); }
     background: none; border: none; cursor: pointer; font-family: inherit;
   }
   .tab.active { color: var(--blue-400); }
-  .tab-icon { font-size: 17px; }
+  .tab-icon { display: flex; }
+  .tab-icon .nav-icone { width: 20px; height: 20px; }
 }

@@ -321,11 +321,28 @@ const estado = {
   limite: 25,
 };
 
+/*
+ * Ícones em SVG inline, não emoji: a sidebar retraída é uma trilha só de
+ * ícones, e emoji vem colorido e com métrica própria de cada sistema — numa
+ * fileira vertical isso aparece como desalinhamento. `currentColor` faz o
+ * ícone seguir o estado do item (ativo/inativo) sem regra extra.
+ */
+const svg = (d) =>
+  `<svg class="nav-icone" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+
+const ICONES = {
+  overview: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+  funil: svg('<path d="M3 4h18l-7 8v7l-4 2v-9L3 4Z"/>'),
+  conversoes: svg('<path d="M20 6 9 17l-5-5"/>'),
+  conversas: svg('<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.7-.8L3 21l1.9-5.2A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/>'),
+};
+
 const PAGINAS = [
-  { id: 'overview',   nome: 'Visão geral', curto: 'Visão', icone: '▦' },
-  { id: 'funil',      nome: 'Funil de leads', curto: 'Funil', icone: '⬍' },
-  { id: 'conversoes', nome: 'Conversões', curto: 'Conv.', icone: '✓' },
-  { id: 'conversas',  nome: 'Conversas', curto: 'Chat', icone: '💬' },
+  { id: 'overview',   nome: 'Visão geral',    curto: 'Visão' },
+  { id: 'funil',      nome: 'Funil de leads', curto: 'Funil' },
+  { id: 'conversoes', nome: 'Conversões',     curto: 'Conv.' },
+  { id: 'conversas',  nome: 'Conversas',      curto: 'Chat' },
 ];
 
 // --------------------------------------------------------------------- páginas
@@ -362,7 +379,7 @@ async function paginaOverview(el) {
     ${seletorPeriodo()}
     ${semDadoNenhum ? vazio('Nenhum dado ainda', 'O painel começa a preencher assim que o Rubeus, o n8n e a Evolution API enviarem os primeiros eventos para os webhooks do Worker.') : ''}
     <div class="stat-grid">${cards}</div>
-    <div class="chart-grid" style="margin-top:var(--space-4)">
+    <div class="chart-grid">
       <div class="card">
         <div class="card-head"><div class="card-title">Investimento diário</div></div>
         <div id="g-invest"></div>
@@ -374,7 +391,7 @@ async function paginaOverview(el) {
         <div class="chart-caption"><span class="dot"></span> Só conversões com status "Enviada"</div>
       </div>
     </div>
-    <div class="bottom-grid" style="margin-top:var(--space-4)">
+    <div class="bottom-grid">
       <div class="card">
         <div class="card-head"><div class="card-title">Conversões enviadas ao Google Ads</div></div>
         ${d.conversoes_recentes.length ? tabelaConversoes(d.conversoes_recentes) : `<div class="state"><div class="state-msg">Nenhuma conversão registrada ainda.</div></div>`}
@@ -530,7 +547,7 @@ async function paginaConversas(el) {
       <div class="card"><div class="stat-label">Respondidas</div><div class="stat-value tnum">${fmtInt(r.respondidas)}</div></div>
       <div class="card"><div class="stat-label">Tempo médio de resposta</div><div class="stat-value tnum">${r.total ? fmtDec(r.tempo_medio_min) + ' min' : '—'}</div></div>
     </div>
-    <div class="card" style="margin-top:var(--space-4)">
+    <div class="card">
       <div class="card-head"><div class="card-title">Conversas recentes</div></div>
       ${d.itens.length ? listaConversas(d.itens) : `<div class="state"><div class="state-title">Nenhuma conversa</div><div class="state-msg">As conversas aparecem aqui conforme a Evolution API envia eventos para o Worker.</div></div>`}
       ${paginador(d.paginacao, estado.conversasPagina, 'conversas')}
@@ -624,15 +641,22 @@ function ligarPaginador(ns, aoMudar) {
 // ---------------------------------------------------------------- navegação
 
 function montarNav() {
-  document.getElementById('nav').innerHTML = PAGINAS.map((p) =>
-    `<button class="nav-item${p.id === estado.rota ? ' active' : ''}" data-rota="${p.id}">
-       <span class="nav-left">${esc(p.nome)}</span>
-     </button>`).join('');
+  document.getElementById('nav').innerHTML = PAGINAS.map((p) => {
+    const ativo = p.id === estado.rota;
+    // O title é o que dá o nome do item quando a sidebar está retraída.
+    return `<button class="nav-item${ativo ? ' active' : ''}" data-rota="${p.id}"
+              title="${esc(p.nome)}" aria-current="${ativo ? 'page' : 'false'}">
+        <span class="nav-left">${ICONES[p.id] || ''}<span class="nav-rotulo">${esc(p.nome)}</span></span>
+      </button>`;
+  }).join('');
 
-  document.getElementById('tabbar').innerHTML = PAGINAS.map((p) =>
-    `<button class="tab${p.id === estado.rota ? ' active' : ''}" data-rota="${p.id}">
-       <span class="tab-icon" aria-hidden="true">${p.icone}</span>${esc(p.curto)}
-     </button>`).join('');
+  document.getElementById('tabbar').innerHTML = PAGINAS.map((p) => {
+    const ativo = p.id === estado.rota;
+    return `<button class="tab${ativo ? ' active' : ''}" data-rota="${p.id}"
+              aria-current="${ativo ? 'page' : 'false'}">
+        <span class="tab-icon">${ICONES[p.id] || ''}</span>${esc(p.curto)}
+      </button>`;
+  }).join('');
 
   document.querySelectorAll('[data-rota]').forEach((b) => {
     b.addEventListener('click', () => { location.hash = `#/${b.dataset.rota}`; });
@@ -640,6 +664,37 @@ function montarNav() {
 
   const atual = PAGINAS.find((p) => p.id === estado.rota);
   document.getElementById('mobile-title').textContent = atual ? atual.nome : 'Painel IDE';
+}
+
+/**
+ * Retrair/expandir a sidebar. A preferência persiste porque é escolha de espaço
+ * de trabalho — reabrir o painel e achar o menu de volta expandido é irritante.
+ */
+const CHAVE_RETRAIDA = 'painel-ide:sidebar-retraida';
+
+function aplicarRetraida(retraida) {
+  const app = document.getElementById('app');
+  const btn = document.getElementById('btn-retrair');
+  app.classList.toggle('retraida', retraida);
+  btn.textContent = retraida ? '»' : '«';
+  btn.setAttribute('aria-expanded', String(!retraida));
+  const rotulo = retraida ? 'Expandir menu' : 'Retrair menu';
+  btn.setAttribute('title', rotulo);
+  btn.setAttribute('aria-label', rotulo);
+  // A sidebar mudou de largura: os gráficos são desenhados em pixels reais.
+  if (window.__redesenhar) setTimeout(window.__redesenhar, 220);
+}
+
+function ligarRetrair() {
+  let retraida = false;
+  try { retraida = localStorage.getItem(CHAVE_RETRAIDA) === '1'; } catch { /* modo restrito */ }
+  aplicarRetraida(retraida);
+
+  document.getElementById('btn-retrair').addEventListener('click', () => {
+    const agora = !document.getElementById('app').classList.contains('retraida');
+    aplicarRetraida(agora);
+    try { localStorage.setItem(CHAVE_RETRAIDA, agora ? '1' : '0'); } catch { /* modo restrito */ }
+  });
 }
 
 const RENDERIZADORES = {
@@ -688,6 +743,7 @@ window.addEventListener('resize', () => {
   tResize = setTimeout(() => { if (window.__redesenhar) window.__redesenhar(); }, 200);
 });
 
+ligarRetrair();
 lerHash();
 render();
 carregarUsuario();

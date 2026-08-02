@@ -12,16 +12,21 @@
 </head>
 <body>
 
-<!-- Luz ambiente atrás de tudo: é o que o backdrop-filter dos cards desfoca. -->
-<div class="bg-blob bg-blob-1" aria-hidden="true"></div>
-<div class="bg-blob bg-blob-2" aria-hidden="true"></div>
-
-<div class="app">
+<div class="app" id="app">
 
   <aside class="sidebar">
-    <div class="logo">
-      <div class="logo-mark">IDE</div>
-      <div class="logo-text">Painel IDE</div>
+    <div class="sidebar-head">
+      <div class="logo">
+        <!--
+          Marca quadrada só aparece com a sidebar retraída (72px): a assinatura
+          horizontal ficaria com ~18px de altura ali e deixaria de ser legível.
+        -->
+        <div class="logo-mark" aria-hidden="true">IDE</div>
+        <img class="logo-img" src="/logo-IDE-faculdade-dark.svg"
+             alt="Faculdade IDE" width="106" height="40">
+      </div>
+      <button class="btn-retrair" id="btn-retrair" aria-expanded="true" aria-controls="nav"
+              title="Retrair menu" aria-label="Retrair menu">«</button>
     </div>
     <nav class="nav" id="nav" aria-label="Navegação principal"></nav>
   </aside>
