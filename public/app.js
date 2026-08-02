@@ -311,7 +311,15 @@ const erro = (msg) =>
 
 const estado = {
   rota: 'overview',
-  dias: 30,
+  /**
+   * Filtro de período compartilhado por todas as telas. `preset` guarda a
+   * escolha do usuário; `de`/`ate` só valem quando preset === 'custom'.
+   */
+  filtro: { preset: '30d', de: null, ate: null, comparar: true },
+  // Filtros da tabela de campanhas.
+  campanhaBusca: '',
+  campanhaStatus: '',
+  campanhaOrdem: { coluna: 'investimento', desc: true },
   processoId: null,
   convPagina: 0,
   convStatus: '',
@@ -346,18 +354,18 @@ const PAGINAS = [
 // --------------------------------------------------------------------- páginas
 
 async function paginaOverview(el) {
-  el.innerHTML = cabecalho('Visão geral', `Últimos ${estado.dias} dias`) + seletorPeriodo() + carregando(4);
+  el.innerHTML = cabecalho('Visão geral', '') + barraFiltros() + carregando(4);
 
   // Duas origens distintas: mídia vem da consulta ao vivo ao Google Ads,
   // leads e conversas vêm do D1 (Rubeus e Evolution).
   let ads, base;
   try {
     [ads, base] = await Promise.all([
-      api(`/api/ads/overview?comparar=1${janelaQuery()}`),
-      api(`/api/overview?dias=${estado.dias}`),
+      api(`/api/ads/overview?${queryPeriodo()}${estado.filtro.comparar ? '&comparar=1' : ''}`),
+      api(`/api/overview?dias=${diasDoPeriodo()}`),
     ]);
   } catch (e) {
-    return void (el.innerHTML = cabecalho('Visão geral', '') + seletorPeriodo() + erro(e.message));
+    return void (el.innerHTML = cabecalho('Visão geral', '') + barraFiltros() + erro(e.message));
   }
 
   const t = ads.totais;
@@ -388,7 +396,7 @@ async function paginaOverview(el) {
 
   el.innerHTML = `
     ${cabecalho('Visão geral', `${fmtDiaMes(ads.periodo.de)} a ${fmtDiaMes(ads.periodo.ate)} · comparado ao período anterior`)}
-    ${seletorPeriodo()}
+    ${barraFiltros()}
     <div class="stat-grid">${cards}</div>
     <div class="stat-grid">${secundarios}</div>
     <div class="chart-grid">
@@ -421,42 +429,109 @@ async function paginaOverview(el) {
   window.__redesenhar = () => desenharGraficos(dados);
 }
 
-/** Converte o seletor de dias no intervalo de datas que /api/ads espera. */
-function janelaQuery() {
-  const iso = (t) => new Date(t).toISOString().slice(0, 10);
-  const agora = Date.now();
-  return `&de=${iso(agora - estado.dias * 86400000)}&ate=${iso(agora - 86400000)}`;
+
+/** Tabela de campanhas — Google Ads ao vivo, com busca, filtro e ordenação. */
+const COLUNAS_CAMPANHA = [
+  { id: 'nome', rotulo: 'Campanha', tipo: 'texto' },
+  { id: 'status', rotulo: 'Status', tipo: 'texto' },
+  { id: 'investimento', rotulo: 'Investimento', tipo: 'brl' },
+  { id: 'resultados', rotulo: 'Resultados', tipo: 'dec' },
+  { id: 'custo_por_resultado', rotulo: 'Custo/result.', tipo: 'brl' },
+  { id: 'cliques', rotulo: 'Cliques', tipo: 'int' },
+  { id: 'ctr', rotulo: 'CTR', tipo: 'pct' },
+];
+
+function celula(item, col) {
+  const v = item[col.id];
+  if (col.tipo === 'brl') return fmtBRL(v);
+  if (col.tipo === 'dec') return fmtDec(v);
+  if (col.tipo === 'int') return fmtInt(v);
+  if (col.tipo === 'pct') return v === null || v === undefined ? '—' : fmtDec(v) + '%';
+  return esc(v ?? '—');
 }
 
-/** Tabela de campanhas — Google Ads ao vivo, sem passar pelo D1. */
 async function paginaCampanhas(el) {
-  el.innerHTML = cabecalho('Campanhas', 'Google Ads') + seletorPeriodo() + carregando(6);
+  el.innerHTML = cabecalho('Campanhas', 'Google Ads') + barraFiltros() + carregando(6);
 
   let d;
-  try { d = await api(`/api/ads/campanhas?${janelaQuery().slice(1)}`); }
-  catch (e) { return void (el.innerHTML = cabecalho('Campanhas', '') + seletorPeriodo() + erro(e.message)); }
+  try { d = await api(`/api/ads/campanhas?${queryPeriodo()}`); }
+  catch (e) { return void (el.innerHTML = cabecalho('Campanhas', '') + barraFiltros() + erro(e.message)); }
 
-  const ativas = d.itens.filter((i) => i.investimento > 0);
-  const linhas = ativas.map((i) => `
-    <tr>
-      <td>${esc(i.nome)}</td>
-      <td class="muted">${esc(i.status)}</td>
-      <td class="muted tnum">${esc(fmtBRL(i.investimento))}</td>
-      <td class="muted tnum">${esc(fmtDec(i.resultados))}</td>
-      <td class="muted tnum">${esc(fmtBRL(i.custo_por_resultado))}</td>
-      <td class="muted tnum">${esc(fmtInt(i.cliques))}</td>
-      <td class="muted tnum">${i.ctr === null ? '—' : esc(fmtDec(i.ctr)) + '%'}</td>
-    </tr>`).join('');
+  const busca = estado.campanhaBusca.trim().toLowerCase();
+  const ord = estado.campanhaOrdem;
+
+  let itens = d.itens.filter((i) => i.investimento > 0);
+  if (busca) itens = itens.filter((i) => i.nome.toLowerCase().includes(busca));
+  if (estado.campanhaStatus) itens = itens.filter((i) => i.status === estado.campanhaStatus);
+
+  itens = [...itens].sort((a, b) => {
+    const x = a[ord.coluna], y = b[ord.coluna];
+    // null sempre no fim, independente da direção — "sem valor" não é o menor
+    // valor, é ausência de valor.
+    if (x === null || x === undefined) return 1;
+    if (y === null || y === undefined) return -1;
+    const cmp = typeof x === 'string' ? x.localeCompare(y, 'pt-BR') : x - y;
+    return ord.desc ? -cmp : cmp;
+  });
+
+  const statusDisponiveis = [...new Set(d.itens.filter((i) => i.investimento > 0).map((i) => i.status))].sort();
+  const optsStatus = ['<option value="">Todos os status</option>']
+    .concat(statusDisponiveis.map((st) => `<option value="${esc(st)}"${st === estado.campanhaStatus ? ' selected' : ''}>${esc(st)}</option>`))
+    .join('');
+
+  const cabecalhos = COLUNAS_CAMPANHA.map((c) => {
+    const ativa = ord.coluna === c.id;
+    const seta = ativa ? (ord.desc ? ' ↓' : ' ↑') : '';
+    return `<th><button class="th-sort${ativa ? ' ativa' : ''}" data-col="${c.id}"
+              aria-sort="${ativa ? (ord.desc ? 'descending' : 'ascending') : 'none'}">${esc(c.rotulo)}${seta}</button></th>`;
+  }).join('');
+
+  const linhas = itens.map((i) => `<tr>${
+    COLUNAS_CAMPANHA.map((c) => `<td class="${c.id === 'nome' ? '' : 'muted tnum'}">${celula(i, c)}</td>`).join('')
+  }</tr>`).join('');
+
+  const totalInv = itens.reduce((s2, i) => s2 + i.investimento, 0);
+  const totalRes = itens.reduce((s2, i) => s2 + i.resultados, 0);
 
   el.innerHTML = `
-    ${cabecalho('Campanhas', `${fmtDiaMes(d.periodo.de)} a ${fmtDiaMes(d.periodo.ate)} · ${ativas.length} com investimento no período (de ${d.total})`)}
-    ${seletorPeriodo()}
+    ${cabecalho('Campanhas', `${fmtDiaMes(d.periodo.de)} a ${fmtDiaMes(d.periodo.ate)}`)}
+    ${barraFiltros()}
     <div class="card">
-      ${ativas.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>Campanha</th><th>Status</th><th>Investimento</th><th>Resultados</th><th>Custo/result.</th><th>Cliques</th><th>CTR</th></tr></thead>
+      <div class="card-head">
+        <div class="filtros">
+          <input class="select" id="c-busca" type="search" placeholder="Buscar campanha…"
+                 value="${esc(estado.campanhaBusca)}" aria-label="Buscar campanha">
+          <select class="select" id="c-status" aria-label="Filtrar por status">${optsStatus}</select>
+        </div>
+        <div class="card-title tnum">${itens.length} de ${d.itens.length} · ${fmtBRL(totalInv)} · ${fmtDec(totalRes)} result.</div>
+      </div>
+      ${itens.length ? `<div class="table-wrap"><table>
+        <thead><tr>${cabecalhos}</tr></thead>
         <tbody>${linhas}</tbody>
-      </table></div>` : `<div class="state"><div class="state-title">Sem investimento no período</div><div class="state-msg">Nenhuma campanha registrou gasto no intervalo selecionado.</div></div>`}
+      </table></div>` : `<div class="state"><div class="state-title">Nenhuma campanha</div><div class="state-msg">Nenhuma campanha com investimento bate os filtros deste período.</div></div>`}
     </div>`;
+
+  const bu = document.getElementById('c-busca');
+  if (bu) {
+    // Debounce: sem isso cada tecla re-renderiza a tabela inteira.
+    let t;
+    bu.addEventListener('input', (e) => {
+      clearTimeout(t);
+      const v = e.target.value;
+      t = setTimeout(() => { estado.campanhaBusca = v; render(); }, 250);
+    });
+  }
+  const st = document.getElementById('c-status');
+  if (st) st.addEventListener('change', (e) => { estado.campanhaStatus = e.target.value; render(); });
+
+  document.querySelectorAll('.th-sort').forEach((b) => {
+    b.addEventListener('click', () => {
+      const col = b.dataset.col;
+      if (ord.coluna === col) ord.desc = !ord.desc;
+      else { ord.coluna = col; ord.desc = true; }
+      render();
+    });
+  });
 
   window.__redesenhar = () => render();
 }
@@ -589,11 +664,110 @@ const cabecalho = (titulo, sub) => `
     </div>
   </div>`;
 
-function seletorPeriodo() {
-  const ops = [7, 30, 90];
-  return `<div class="range-pill" role="group" aria-label="Período">${ops
-    .map((n) => `<button data-dias="${n}" class="${n === estado.dias ? 'active' : ''}">${n} dias</button>`)
-    .join('')}</div>`;
+const PRESETS = [
+  { id: '7d',  nome: 'Últimos 7 dias' },
+  { id: '30d', nome: 'Últimos 30 dias' },
+  { id: '90d', nome: 'Últimos 90 dias' },
+  { id: 'mes', nome: 'Este mês' },
+  { id: 'mes_anterior', nome: 'Mês passado' },
+  { id: 'custom', nome: 'Período personalizado' },
+];
+
+const isoDia = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/**
+ * Traduz o filtro em datas concretas.
+ *
+ * "Últimos N dias" termina ONTEM, não hoje: o Google Ads fecha o dia no fuso da
+ * conta e o parcial de hoje entraria como queda falsa no último ponto da série.
+ */
+function resolverPeriodo() {
+  const f = estado.filtro;
+  const hoje = new Date();
+  const ontem = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - 1);
+
+  /*
+   * Trava de sanidade: nenhum preset pode devolver início depois do fim. O caso
+   * real é "Este mês" no dia 1º — o mês começa hoje, mas "ontem" ainda é do mês
+   * anterior, e o intervalo saía invertido (ex.: 01/08 a 31/07). Quando isso
+   * acontece o período colapsa no próprio dia 1º.
+   */
+  const ordenado = (de, ate) => (de > ate ? { de, ate: de } : { de, ate });
+
+  if (f.preset === 'custom' && f.de && f.ate) return ordenado(f.de, f.ate);
+
+  if (f.preset === 'mes') {
+    return ordenado(isoDia(new Date(hoje.getFullYear(), hoje.getMonth(), 1)), isoDia(ontem));
+  }
+  if (f.preset === 'mes_anterior') {
+    const ini = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+    const fim = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+    return ordenado(isoDia(ini), isoDia(fim));
+  }
+  const dias = { '7d': 7, '30d': 30, '90d': 90 }[f.preset] ?? 30;
+  const ini = new Date(ontem.getFullYear(), ontem.getMonth(), ontem.getDate() - (dias - 1));
+  return ordenado(isoDia(ini), isoDia(ontem));
+}
+
+/** Quantos dias o período cobre — o /api/overview do D1 ainda pensa em dias. */
+function diasDoPeriodo() {
+  const { de, ate } = resolverPeriodo();
+  const d = Math.round((new Date(`${ate}T00:00:00Z`) - new Date(`${de}T00:00:00Z`)) / 86400000) + 1;
+  return Math.min(365, Math.max(1, d));
+}
+
+const queryPeriodo = () => {
+  const { de, ate } = resolverPeriodo();
+  return `de=${de}&ate=${ate}`;
+};
+
+function barraFiltros() {
+  const f = estado.filtro;
+  const { de, ate } = resolverPeriodo();
+  const opts = PRESETS.map((p) => `<option value="${p.id}"${p.id === f.preset ? ' selected' : ''}>${esc(p.nome)}</option>`).join('');
+
+  return `<div class="filtros">
+    <select class="select" id="f-preset" aria-label="Período">${opts}</select>
+    <span class="filtro-datas${f.preset === 'custom' ? '' : ' oculto'}">
+      <input class="select" type="date" id="f-de" value="${esc(f.de || de)}" aria-label="Data inicial">
+      <span class="filtro-sep">até</span>
+      <input class="select" type="date" id="f-ate" value="${esc(f.ate || ate)}" aria-label="Data final">
+    </span>
+    <label class="filtro-check">
+      <input type="checkbox" id="f-comparar"${f.comparar ? ' checked' : ''}>
+      Comparar com período anterior
+    </label>
+  </div>`;
+}
+
+/** Liga os controles do filtro. Chamado depois de cada render. */
+function ligarFiltros() {
+  const preset = document.getElementById('f-preset');
+  if (preset) preset.addEventListener('change', (e) => {
+    estado.filtro.preset = e.target.value;
+    if (e.target.value === 'custom' && !estado.filtro.de) {
+      const p = resolverPeriodo();
+      estado.filtro.de = p.de; estado.filtro.ate = p.ate;
+    }
+    render();
+  });
+
+  const de = document.getElementById('f-de');
+  const ate = document.getElementById('f-ate');
+  // Só re-renderiza com as duas pontas preenchidas e na ordem certa; senão o
+  // primeiro caractere digitado já dispararia uma consulta com data inválida.
+  const mudouData = () => {
+    if (!de.value || !ate.value) return;
+    if (de.value > ate.value) return;
+    estado.filtro.de = de.value; estado.filtro.ate = ate.value;
+    estado.filtro.preset = 'custom';
+    render();
+  };
+  if (de) de.addEventListener('change', mudouData);
+  if (ate) ate.addEventListener('change', mudouData);
+
+  const cmp = document.getElementById('f-comparar');
+  if (cmp) cmp.addEventListener('change', (e) => { estado.filtro.comparar = e.target.checked; render(); });
 }
 
 
@@ -705,9 +879,7 @@ async function render() {
   const fn = RENDERIZADORES[estado.rota] || paginaOverview;
   await fn(el);
 
-  document.querySelectorAll('[data-dias]').forEach((b) => {
-    b.addEventListener('click', () => { estado.dias = Number(b.dataset.dias); render(); });
-  });
+  ligarFiltros();
 }
 
 function lerHash() {
