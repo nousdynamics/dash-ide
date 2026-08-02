@@ -1,10 +1,8 @@
 # Painel Faculdade IDE — Worker + D1
 
-Backend do painel de admissões. Recebe eventos de Rubeus, n8n e Evolution API,
-grava no Cloudflare D1 e serve os agregados pro frontend.
-
-Escopo: **só o dashboard**. Quem fala com a API do Google Ads é o fluxo do n8n —
-este Worker apenas registra o resultado que o n8n reporta.
+Painel de acompanhamento de admissões. Recebe eventos do Rubeus e da Evolution
+API, guarda no Cloudflare D1, consulta a API do Google Ads ao vivo e serve o
+frontend — tudo no mesmo Worker.
 
 Contexto completo em [ide-painel-plano-implementacao.md](ide-painel-plano-implementacao.md).
 
@@ -18,27 +16,24 @@ Contexto completo em [ide-painel-plano-implementacao.md](ide-painel-plano-implem
 | Cloudflare Access | Pendente — o domínio ainda está público. |
 
 
-Pendente pra tudo funcionar de ponta a ponta: publicar o `WEBHOOK_SECRET`
-(`npx wrangler secret put WEBHOOK_SECRET`) e replicar o mesmo valor no header
-`X-Webhook-Secret` do Rubeus, do n8n e da Evolution API.
+O `WEBHOOK_SECRET` e as credenciais do Google Ads já estão publicados como
+secret. Falta configurar o mesmo `X-Webhook-Secret` nos headers do Rubeus e da
+Evolution API, e pôr o Cloudflare Access na frente do domínio.
 
 ## Setup
 
 ```bash
 npm install
-cp .dev.vars.example .dev.vars   # e preencher WEBHOOK_SECRET
+cp .dev.vars.example .dev.vars   # preencher WEBHOOK_SECRET e as chaves do Google Ads
 npm run db:local                 # aplica as migrations no SQLite local
 npm run dev
 ```
 
 ### Deploy
 
-```bash
-npx wrangler d1 create dash-ide          # copiar o uuid pro wrangler.jsonc
-npx wrangler secret put WEBHOOK_SECRET   # openssl rand -hex 32
-npm run db:remote
-npm run deploy
-```
+O deploy é automático: o Workers Builds publica a cada push na `main`.
+As migrations não são aplicadas pelo build — rodar `npm run db:remote` à mão
+quando houver migration nova.
 
 ## Endpoints
 
@@ -50,13 +45,20 @@ auth própria — o Access barra antes de chegar no Worker.
 |---|---|---|
 | POST | `/webhook/rubeus/etapa` | Fluxo de automação do Rubeus |
 | POST | `/webhook/evolution/conversa` | Evolution API (upsert por contato+início) |
-| POST | `/webhook/n8n/conversao` | n8n, após tentar o envio ao Google Ads |
-| POST | `/webhook/n8n/metricas` | n8n agendado (upsert por data+campanha) |
-| GET | `/api/overview?dias=30` | Cards, séries e listas da Visão Geral |
-| GET | `/api/funil?processo_id=&dias=90` | Contagem por etapa + taxas |
-| GET | `/api/conversoes?limite=&offset=&status=` | Lista paginada |
-| GET | `/api/conversas?limite=&offset=` | Lista paginada |
+| GET | `/api/overview?dias=30` | Leads e conversas (D1) |
+| GET | `/api/funil?processo_id=&dias=90` | Contagem por etapa + taxas (D1) |
+| GET | `/api/conversas?limite=&offset=` | Lista paginada (D1) |
+| GET | `/api/me` | E-mail injetado pelo Cloudflare Access |
+| GET | `/api/ads/overview?de=&ate=&comparar=1` | Cards, comparação e série diária |
+| GET | `/api/ads/campanhas?de=&ate=` | Tabela de campanhas |
+| GET | `/api/ads/resultados-por-acao?de=&ate=` | De onde vêm os resultados |
+| GET | `/api/ads/anuncios?de=&ate=` | Desempenho por anúncio |
+| GET | `/api/ads/palavras-chave?de=&ate=` | Termos comprados |
 | GET | `/health` | Sonda de deploy e binding do D1 |
+
+> `/api/ads/anuncios` e `/api/ads/palavras-chave` ainda usam `LIMIT 500`, e a
+> conta já bate nesse teto. Trocar por paginação server-side quando as tabelas
+> ganharem paginação de verdade.
 
 Corpo inválido devolve `400` com a lista de campos problemáticos. Nenhuma linha
 parcial é gravada.
@@ -123,10 +125,10 @@ Dois detalhes de leitura de dado que valem saber:
 
 Registradas aqui porque afetam quem for continuar:
 
-1. **`contato_nome` em `leads_etapa` e `conversoes_ads`** (migration `0002`). O
-   schema da seção 4 não guardava o nome do lead em lugar nenhum além de
-   `conversas_whatsapp`, mas os mockups exibem o nome nas duas tabelas. O n8n já
-   extrai esse campo da API do Rubeus — só precisa repassar no callback.
+1. **`contato_nome` em `leads_etapa`** (migration `0002`). O schema da seção 4
+   não guardava o nome do lead em lugar nenhum além de `conversas_whatsapp`,
+   mas os mockups exibem o nome nas listas. O Rubeus precisa mandar esse campo
+   no payload da etapa.
 
 2. **Índice único em `conversas_whatsapp (contato_id, iniciada_em)`.** A Evolution
    reemite eventos da mesma conversa; sem isso cada mensagem viraria uma linha
@@ -142,7 +144,8 @@ Registradas aqui porque afetam quem for continuar:
 
 5. **Parsing de corpo tolerante a `form-urlencoded`.** O Rubeus manda JSON com
    `Content-Type: application/x-www-form-urlencoded` — mesma armadilha já
-   contornada no node "Normalizar Payload" do fluxo n8n. Ver `src/lib/corpo.ts`.
+   contornada no node "Normalizar Payload" do fluxo n8n original, e que vale
+   igual aqui porque o Rubeus dispara para os dois destinos. Ver `src/lib/corpo.ts`.
 
 6. **Comparação do secret em tempo constante** via SHA-256 + `timingSafeEqual`,
    com falha fechada se `WEBHOOK_SECRET` não estiver configurado.
