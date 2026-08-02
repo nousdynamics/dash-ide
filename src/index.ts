@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { AppEnv } from './lib/tipos';
+import ads from './routes/ads';
 import api from './routes/api';
 import webhooks from './routes/webhooks';
 
@@ -23,6 +24,9 @@ app.use('/api/*', async (c, next) => {
   if (email) c.set('usuarioEmail', email);
   await next();
 });
+// Consultas ao vivo no Google Ads. Montado antes de /api pra que as rotas
+// específicas de mídia não passem pelo roteador de agregados do D1.
+app.route('/api/ads', ads);
 app.route('/api', api);
 
 /** Sonda de saúde — útil pra confirmar deploy e binding do D1 sem tocar em dado. */

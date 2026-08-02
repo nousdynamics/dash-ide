@@ -7,3 +7,14 @@
 #   npx wrangler secret put WEBHOOK_SECRET
 # O MESMO valor precisa ser configurado como header customizado nos três lados.
 WEBHOOK_SECRET=""
+
+# --- Google Ads ---
+# O Worker consulta a API ao vivo (o n8n não alimenta estes números).
+# Em produção: `npx wrangler secret bulk <arquivo.json>`.
+# GOOGLE_ADS_LOGIN_CUSTOMER_ID é a conta de anúncios em si, não um MCC.
+GOOGLE_ADS_DEVELOPER_TOKEN=""
+GOOGLE_ADS_CLIENT_ID=""
+GOOGLE_ADS_CLIENT_SECRET=""
+GOOGLE_ADS_REFRESH_TOKEN=""
+GOOGLE_ADS_API_VERSION="v24"
+GOOGLE_ADS_LOGIN_CUSTOMER_ID=""
