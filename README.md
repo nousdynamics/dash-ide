@@ -133,7 +133,11 @@ splitting automático segue as fronteiras dos `lazy()` e resolve sozinho.
 
 O detalhe da campanha abre em sanfona dentro da própria lista, não em página
 separada: quem olha campanhas está comparando umas com as outras, e sair da
-lista custa esse contexto.
+lista custa esse contexto. Dentro dele, o conteúdo é organizado por conjunto de
+anúncios — que é como o Google Ads estrutura a conta —, com sub-sanfonas de
+anúncios e de palavras-chave em cada um. Lista plana de termos não responde
+"qual conjunto está comprando esse termo", que é a pergunta que se faz ao
+investigar custo. Cada nível só monta o conteúdo quando aberto.
 
 Navegação por hash (`#/funil`). Não é preferência de estilo: com assets em modo
 SPA o roteador devolveria `index.html` para qualquer path sem asset, inclusive

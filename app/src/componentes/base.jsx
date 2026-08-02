@@ -111,6 +111,40 @@ export const PillStatus = ({ status }) => (
   </Pill>
 );
 
+/**
+ * Sanfona reutilizável.
+ *
+ * O cabeçalho é um <button aria-expanded> e o conteúdo só é montado quando
+ * aberto — em campanha com muitos conjuntos, montar tudo de uma vez custa caro
+ * e nada disso está visível.
+ */
+export function Sanfona({ titulo, resumo, aberta, aoAlternar, children, nivel = 1 }) {
+  return (
+    <div className={nivel === 1 ? 'border border-borda rounded-[12px] overflow-hidden' : 'border-t border-borda'}>
+      <button
+        type="button"
+        aria-expanded={aberta}
+        onClick={aoAlternar}
+        className={`w-full flex items-center justify-between gap-3 text-left cursor-pointer border-0
+          ${nivel === 1 ? 'bg-elevado px-3 py-[10px]' : 'bg-transparent px-0 py-2'}
+          hover:bg-superficie-hover focus-visible:outline-2 focus-visible:outline-azul-400 focus-visible:-outline-offset-2`}
+      >
+        <span className="flex items-center gap-2 min-w-0">
+          <span
+            aria-hidden="true"
+            className={`text-tenue text-[10px] shrink-0 transition-transform motion-reduce:transition-none ${aberta ? 'rotate-90' : ''}`}
+          >
+            ▶
+          </span>
+          <span className="min-w-0 truncate">{titulo}</span>
+        </span>
+        {resumo && <span className="text-[11px] text-tenue tnum whitespace-nowrap shrink-0">{resumo}</span>}
+      </button>
+      {aberta && <div className={nivel === 1 ? 'px-3 pb-3' : 'pb-2'}>{children}</div>}
+    </div>
+  );
+}
+
 export function Estado({ titulo, mensagem, tipo = 'vazio' }) {
   return (
     <div className="text-center py-10 px-6 text-secundario">
