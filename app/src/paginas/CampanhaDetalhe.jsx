@@ -48,6 +48,33 @@ function TextosDoAnuncio({ anuncio }) {
   );
 }
 
+/** Chips de recurso agrupados por tipo. Serve para campanha e para conjunto. */
+function ChipsDeRecurso({ recursos }) {
+  const porTipo = new Map();
+  for (const r of recursos) {
+    const t = r.tipo || 'OUTRO';
+    if (!porTipo.has(t)) porTipo.set(t, []);
+    porTipo.get(t).push(r);
+  }
+  return [...porTipo.entries()].map(([tipo, itens]) => (
+    <div key={tipo} className="mb-3">
+      <div className="text-[10px] uppercase tracking-wider text-tenue mb-1">
+        {ROTULO_RECURSO[tipo] || tipo} <span className="text-secundario">({itens.length})</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {itens.map((r, i) => (
+          <span
+            key={i}
+            className="text-[11px] px-2 py-[3px] rounded-[8px] bg-elevado text-secundario border border-borda"
+          >
+            {r.texto || '—'}
+          </span>
+        ))}
+      </div>
+    </div>
+  ));
+}
+
 function TabelaPalavras({ palavras }) {
   return (
     <div className="overflow-x-auto">
@@ -129,6 +156,7 @@ export function CampanhaDetalhe({ id, filtro }) {
           nome,
           anuncios: [],
           palavras: [],
+          recursos: [],
           investimento: 0,
           resultados: 0,
         });
@@ -143,6 +171,7 @@ export function CampanhaDetalhe({ id, filtro }) {
     }
     // Conjunto sem anúncio no período ainda pode ter palavra-chave gastando.
     for (const k of dados.palavras) pegar(k.grupo).palavras.push(k);
+    for (const r of dados.recursos_por_conjunto ?? []) pegar(r.grupo).recursos.push(r);
     return [...mapa.values()].sort((a, b) => b.investimento - a.investimento);
   }, [dados]);
 
@@ -174,13 +203,6 @@ export function CampanhaDetalhe({ id, filtro }) {
 
   const corresps = [...new Set(dados.palavras.map((k) => k.correspondencia))].sort();
   const totalFiltradas = conjuntos.reduce((s, c) => s + filtrarPalavras(c.palavras).length, 0);
-
-  const porTipo = new Map();
-  for (const r of dados.recursos) {
-    const t = r.tipo || 'OUTRO';
-    if (!porTipo.has(t)) porTipo.set(t, []);
-    porTipo.get(t).push(r);
-  }
 
   const kpis = [
     ['Investimento', fmtBRL(camp.investimento)],
@@ -296,6 +318,24 @@ export function CampanhaDetalhe({ id, filtro }) {
                     </div>
                   )}
                 </Sanfona>
+
+                <Sanfona
+                  nivel={2}
+                  aberta={!!abertos[`${chave}:rec`]}
+                  aoAlternar={() => alternar(`${chave}:rec`)}
+                  titulo={
+                    <span className="text-xs font-semibold">Recursos do conjunto ({c.recursos.length})</span>
+                  }
+                >
+                  {c.recursos.length ? (
+                    <ChipsDeRecurso recursos={c.recursos} />
+                  ) : (
+                    <div className="text-xs text-tenue py-2">
+                      Nenhum recurso próprio deste conjunto. Os anúncios daqui servem com os
+                      recursos da campanha e da conta.
+                    </div>
+                  )}
+                </Sanfona>
               </Sanfona>
             );
           })}
@@ -314,26 +354,10 @@ export function CampanhaDetalhe({ id, filtro }) {
         aberta={!!abertos.recursos}
         aoAlternar={() => alternar('recursos')}
         titulo={<span className="text-[13px] font-semibold">Recursos da campanha</span>}
-        resumo={`${dados.recursos.length} recurso(s)`}
+        resumo={`${dados.recursos.length} recurso(s) · valem para todos os conjuntos`}
       >
-        {porTipo.size ? (
-          [...porTipo.entries()].map(([tipo, itens]) => (
-            <div key={tipo} className="mb-3">
-              <div className="text-[10px] uppercase tracking-wider text-tenue mb-1">
-                {ROTULO_RECURSO[tipo] || tipo} <span className="text-secundario">({itens.length})</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {itens.map((r, i) => (
-                  <span
-                    key={i}
-                    className="text-[11px] px-2 py-[3px] rounded-[8px] bg-elevado text-secundario border border-borda"
-                  >
-                    {r.texto || '—'}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))
+        {dados.recursos.length ? (
+          <ChipsDeRecurso recursos={dados.recursos} />
         ) : (
           <div className="text-xs text-tenue py-2">
             {dados.indisponivel.recursos

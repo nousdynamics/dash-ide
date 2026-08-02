@@ -311,6 +311,20 @@ ads.get('/campanha/:id', async (c) => {
        AND ad_group_criterion.status != 'REMOVED'
      ORDER BY metrics.cost_micros DESC`;
 
+  /*
+   * Recursos existem em três níveis no Google Ads: conta, campanha e conjunto.
+   * O anúncio serve com a soma dos que valem para ele, então mostrar só o da
+   * campanha esconde metade do que aparece na SERP.
+   */
+  const qRecursosConjunto =
+    // `campaign.id` obrigatório no SELECT por aparecer no WHERE, igual em
+    // campaign_asset — o Google devolve EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE.
+    `SELECT campaign.id, ad_group.id, ad_group.name, ad_group_asset.field_type, ad_group_asset.status,
+            asset.type, asset.name,
+            asset.sitelink_asset.link_text, asset.callout_asset.callout_text,
+            asset.structured_snippet_asset.header, asset.text_asset.text
+     FROM ad_group_asset WHERE campaign.id = ${id}`;
+
   const qRecursos =
     // `campaign.id` é obrigatório no SELECT quando ele aparece no WHERE de
     // campaign_asset — o Google devolve EXPECTED_REFERENCED_FIELD_IN_SELECT_CLAUSE.
@@ -321,7 +335,7 @@ ads.get('/campanha/:id', async (c) => {
      FROM campaign_asset WHERE campaign.id = ${id}`;
 
   // `allSettled`: um tipo de campanha sem palavra-chave não pode derrubar a tela.
-  const [rCamp, rAds, rKw, rAsset] = await Promise.allSettled([
+  const [rCamp, rAds, rKw, rAsset, rAssetGrupo] = await Promise.allSettled([
     consultar<{ campaign: Record<string, unknown>; campaignBudget?: Record<string, unknown>; metrics: Record<string, unknown> }>(c.env, qCampanha),
     consultar<{
       adGroup: { id: string; name: string; status: string };
@@ -334,6 +348,7 @@ ads.get('/campanha/:id', async (c) => {
       metrics: Record<string, unknown>;
     }>(c.env, qPalavras),
     consultar<{ campaignAsset: { fieldType?: string; status?: string }; asset: Record<string, any> }>(c.env, qRecursos),
+    consultar<{ adGroup: { name: string }; adGroupAsset: { fieldType?: string; status?: string }; asset: Record<string, any> }>(c.env, qRecursosConjunto),
   ]);
 
   const ok = <T>(r: PromiseSettledResult<T[]>): T[] => (r.status === 'fulfilled' ? r.value : []);
@@ -372,6 +387,22 @@ ads.get('/campanha/:id', async (c) => {
     ...met(l.metrics),
   }));
 
+  /** Extrai o texto visível de um asset, qualquer que seja o tipo. */
+  const textoAsset = (a: Record<string, any>): string | null =>
+    a?.sitelinkAsset?.linkText ??
+    a?.calloutAsset?.calloutText ??
+    a?.structuredSnippetAsset?.header ??
+    a?.textAsset?.text ??
+    a?.name ??
+    null;
+
+  const recursosPorConjunto = ok(rAssetGrupo).map((l) => ({
+    grupo: l.adGroup.name,
+    tipo: l.adGroupAsset.fieldType ?? l.asset?.type ?? null,
+    status: l.adGroupAsset.status ?? null,
+    texto: textoAsset(l.asset),
+  }));
+
   const recursos = ok(rAsset).map((l) => ({
     tipo: l.campaignAsset.fieldType ?? l.asset?.type ?? null,
     status: l.campaignAsset.status ?? null,
@@ -399,11 +430,13 @@ ads.get('/campanha/:id', async (c) => {
     anuncios,
     palavras,
     recursos,
+    recursos_por_conjunto: recursosPorConjunto,
     // Transparência sobre o que não veio, em vez de simplesmente mostrar vazio.
     indisponivel: {
       anuncios: falhou(rAds),
       palavras: falhou(rKw),
       recursos: falhou(rAsset),
+      recursos_por_conjunto: falhou(rAssetGrupo),
     },
   });
 });
