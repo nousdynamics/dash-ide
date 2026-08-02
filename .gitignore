@@ -12,6 +12,7 @@ node_modules/
 # Wrangler / Cloudflare
 .wrangler/
 dist/
+# O build do Vite em public/ É versionado de propósito — ver README.
 .mf/
 
 # Tipos gerados

@@ -12,7 +12,7 @@ Contexto completo em [ide-painel-plano-implementacao.md](ide-painel-plano-implem
 |---|---|
 | Worker + D1 | No ar. Só `leads_etapa` e `conversas_whatsapp`. |
 | Google Ads | No ar. Consulta ao vivo em `/api/ads/*`, sem n8n. |
-| Frontend | No ar (JS puro). Port para React/Recharts em andamento. |
+| Frontend | No ar, em React + Vite + Tailwind + Recharts. |
 | Cloudflare Access | No ar. `painel.ide.edu.br` exige login. |
 
 
@@ -106,8 +106,20 @@ A métrica já nasce agregável por plataforma, para o Meta Ads somar depois.
 
 ## Frontend
 
-Servido como asset estático pelo mesmo Worker (`public/`), então painel e API
-compartilham origem — sem CORS e com um só hostname pro Access proteger.
+React + Vite + Tailwind v4 + Recharts. A fonte fica em `app/`; o build sai em
+`public/`, que é o diretório de assets do Worker. Painel e API compartilham
+origem — sem CORS e com um só hostname pro Access proteger.
+
+```bash
+npm run dev        # Worker na 8790 (API + assets já buildados)
+npm run dev:app    # Vite na 5173 com HMR, repassando /api para a 8790
+npm run build      # gera public/ a partir de app/
+```
+
+**O conteúdo de `public/` é versionado de propósito.** O Workers Builds roda
+`npx wrangler deploy` e não executa o build do Vite; commitar o bundle é o que
+mantém o deploy automático funcionando sem mexer no CI. Rodar `npm run build`
+antes de commitar mudança de frontend é obrigatório.
 
 Navegação por hash (`#/funil`). Não é preferência de estilo: com assets em modo
 SPA o roteador devolveria `index.html` para qualquer path sem asset, inclusive

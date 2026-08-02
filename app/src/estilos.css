@@ -1,0 +1,81 @@
+@import 'tailwindcss';
+
+/*
+ * Tokens do design system da IDE expostos ao Tailwind v4 via @theme, para que
+ * `bg-superficie` e `text-secundario` existam como classe em vez de cada
+ * componente carregar hex solto.
+ */
+@theme {
+  --color-base: #0a0e14;
+  --color-elevado: #10151d;
+  --color-superficie: #161c26;
+  --color-superficie-hover: #1c232f;
+
+  --color-azul-900: #0b2545;
+  --color-azul-700: #1d4e89;
+  --color-azul-600: #2b5797;
+  --color-azul-500: #3b74b8;
+  --color-azul-400: #4f8fe8;
+  --color-azul-300: #7fb0f2;
+
+  --color-sucesso: #3ddc84;
+  --color-atencao: #f5a623;
+  --color-perigo: #f0553f;
+
+  --color-primario: #f5f7fa;
+  --color-secundario: #9aa5b4;
+  --color-tenue: #626d7d;
+
+  --color-borda: rgba(255, 255, 255, 0.06);
+  --color-borda-forte: rgba(255, 255, 255, 0.1);
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+
+  --radius-card: 12px;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body,
+  #raiz {
+    min-height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--color-base);
+    color: var(--color-primario);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+  /* Números de métrica não "dançam" ao atualizar. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+  input[type='date'] {
+    color-scheme: dark;
+  }
+}
+
+@layer components {
+  /*
+   * O degradê vive no componente, não no fundo da página — decisão do projeto
+   * que substitui os blobs de ambiente do design system.
+   */
+  .cartao {
+    position: relative;
+    background:
+      linear-gradient(155deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 42%),
+      var(--color-superficie);
+    border: 1px solid var(--color-borda);
+    border-top-color: rgba(255, 255, 255, 0.14);
+    border-radius: var(--radius-card);
+    padding: 16px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+  }
+}
