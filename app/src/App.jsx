@@ -156,12 +156,10 @@ export default function App() {
       </aside>
 
       <main className="flex flex-col gap-4 px-4 md:px-6 pt-5 pb-24 md:pb-10">
+        {/* Sem campo de busca: era placeholder, nunca chegou a buscar nada. */}
         <div className="flex items-center justify-between gap-4">
-          <div className="hidden md:flex justify-between gap-2 bg-superficie border border-borda rounded-full px-3 py-[6px] text-xs text-tenue w-[240px]">
-            <span>Buscar lead, curso, processo…</span>
-            <span className="bg-elevado px-[6px] rounded text-[11px]">⌘K</span>
-          </div>
           <div className="md:hidden font-semibold text-[15px]">{atual?.nome}</div>
+          <div className="hidden md:block" />
           <div className="flex items-center gap-3">
             <div className="w-[30px] h-[30px] rounded-full bg-azul-700 text-white flex items-center justify-center font-semibold text-[13px] shrink-0">
               {email ? iniciais(email.split('@')[0].replace(/[._-]/g, ' ')) : 'ID'}

@@ -110,7 +110,6 @@ export function VisaoGeral({ filtro, setFiltro }) {
   const dl = ads.comparacao?.deltas ?? {};
   // O chip diz "quanto variou"; esta linha diz "variou em relação a quê".
   const ant = ads.comparacao?.totais ?? null;
-  const leads = base.cards.leads_periodo;
 
   const serie = densificarPorDia(ads.serie_diaria, ads.periodo.de, ads.periodo.ate);
 
@@ -121,7 +120,6 @@ export function VisaoGeral({ filtro, setFiltro }) {
     { rotulo: 'Conversões secundárias', valor: fmtDec(t.resultados_secundarios), delta: dl.resultados_secundarios, antes: ant && fmtDec(ant.resultados_secundarios), rodape: 'Demais ações', icone: '◇' },
     { rotulo: 'Custo / resultado', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, antes: ant && fmtBRL(ant.custo_por_resultado), rodape: 'Investimento ÷ resultados', icone: '⊘' },
     { rotulo: 'Taxa de conversão', valor: fmtPct(t.taxa_conversao), delta: dl.taxa_conversao, antes: ant && fmtPct(ant.taxa_conversao), rodape: 'Resultados ÷ cliques', icone: '◐' },
-    { rotulo: 'Leads no período', valor: fmtInt(leads.valor), delta: leads.delta_pct, rodape: 'Contatos no Rubeus', icone: '◎' },
   ];
 
   const secundarios = [
