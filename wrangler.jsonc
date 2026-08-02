@@ -16,8 +16,9 @@
     {
       "binding": "DB",
       "database_name": "dash-ide",
-      // TODO: rodar `npx wrangler d1 create dash-ide` e colar o uuid retornado aqui.
-      "database_id": "PREENCHER_APOS_WRANGLER_D1_CREATE",
+      // D1 da conta Nathalia@faculdadeide.edu.br (25e749043ce433036240369c6fd2b981),
+      // a mesma usada pelo Workers Builds. Região primária: enam.
+      "database_id": "952edba7-5255-407a-bc60-6154097d3f8a",
       "migrations_dir": "migrations"
     }
   ]
