@@ -13,12 +13,34 @@ Contexto completo em [ide-painel-plano-implementacao.md](ide-painel-plano-implem
 | Worker + D1 | No ar. Só `leads_etapa` e `conversas_whatsapp`. |
 | Google Ads | No ar. Consulta ao vivo em `/api/ads/*`, sem n8n. |
 | Frontend | No ar (JS puro). Port para React/Recharts em andamento. |
-| Cloudflare Access | Pendente — o domínio ainda está público. |
+| Cloudflare Access | No ar. `painel.ide.edu.br` exige login. |
 
 
 O `WEBHOOK_SECRET` e as credenciais do Google Ads já estão publicados como
-secret. Falta configurar o mesmo `X-Webhook-Secret` nos headers do Rubeus e da
-Evolution API, e pôr o Cloudflare Access na frente do domínio.
+secret. Falta configurar o mesmo `X-Webhook-Secret` nos headers customizados do
+Rubeus e da Evolution API — sem isso os webhooks devolvem 401 e nada é gravado.
+
+## Acesso
+
+`painel.ide.edu.br` fica atrás do Cloudflare Access (organização
+`faculdade-ide.cloudflareaccess.com`), com login por PIN enviado ao e-mail.
+
+| Aplicação | Domínio | Política |
+|---|---|---|
+| Painel Faculdade IDE | `painel.ide.edu.br` | Allow: `@faculdadeide.edu.br` + `nousdynamicslta@gmail.com` |
+| Webhooks (servidor-a-servidor) | `painel.ide.edu.br/webhook` | Bypass |
+
+O caminho mais específico vence, então o app de `/webhook` isenta Rubeus e
+Evolution do login — eles continuam guardados só pelo `X-Webhook-Secret`, que é
+o certo para chamada de máquina.
+
+**A URL `*.workers.dev` está desligada de propósito** (`workers_dev: false`). O
+Access protege a zona `ide.edu.br`, mas não alcança `*.workers.dev`, que não é
+uma zona nossa — com ela ligada, qualquer pessoa com o endereço lia o
+investimento real da conta sem passar por login.
+
+Consequência operacional: `/health` também ficou atrás do login, então
+monitoramento externo de uptime precisaria de uma regra de bypass própria.
 
 ## Setup
 

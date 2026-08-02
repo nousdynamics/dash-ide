@@ -5,6 +5,18 @@
   "compatibility_date": "2026-08-01",
   "compatibility_flags": ["nodejs_compat"],
 
+  /*
+   * Sem URL *.workers.dev.
+   *
+   * O Cloudflare Access protege `painel.ide.edu.br`, mas não alcança
+   * `dash-ide.<subdomínio>.workers.dev` — aquele hostname não está numa zona
+   * nossa. Com ele ligado, qualquer pessoa com o endereço lia o investimento
+   * real da conta sem passar por login. O painel responde só pelo domínio
+   * próprio, que é onde o Access atua.
+   */
+  "workers_dev": false,
+  "preview_urls": false,
+
   // Frontend servido pelo mesmo Worker: mesma origem das rotas /api (sem CORS) e
   // um único hostname pro Cloudflare Access proteger.
   //
