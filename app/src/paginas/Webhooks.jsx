@@ -204,13 +204,13 @@ export function Webhooks() {
           {erroForm && <span className="text-[11px] text-perigo">{erroForm}</span>}
         </form>
         <div className="text-[11px] text-tenue mt-2 leading-relaxed">
-          Ao criar, os três links já são gerados. As etapas do funil não são cadastradas aqui —
+          Ao criar um funil, os links dele já são gerados. As etapas não são cadastradas aqui —
           são descobertas a partir dos eventos que o Rubeus enviar.
           <br />
           <strong className="text-secundario">Um link por funil, usado em todas as etapas dele.</strong>{' '}
-          No fluxo de automação do Rubeus, inclua um parâmetro com a etapa nos "Enviar parâmetros"
-          da ação HTTP — o sistema separa as etapas depois de receber. Evento que chegar sem etapa
-          é gravado assim mesmo e aparece marcado no diário abaixo, para nenhum lead se perder.
+          Nos gatilhos que permitem escolher o processo — novo registro de processo e ocorrência de
+          um evento — use o link do funil correspondente. Evento que chegar sem etapa é gravado
+          assim mesmo e aparece marcado no histórico do lead, para nenhum se perder.
         </div>
       </Cartao>
 
@@ -218,10 +218,9 @@ export function Webhooks() {
         <Cartao>
           <div className="text-[13px] font-semibold">Webhooks por tipo de evento</div>
           <div className="text-[11px] text-tenue mt-1 mb-2 leading-relaxed">
-            Um link por gatilho da tela "Definição de webhooks" do Rubeus. O funil de cada lead é
-            resolvido pelo processo que vem no corpo, então a mesma URL serve todos os processos —
-            e nos gatilhos que permitem escolher funil, dá para usar a URL do funil específico se
-            preferir separar na origem.
+            Para os gatilhos que <strong className="text-secundario">não</strong> deixam escolher o
+            processo. Os que deixam — novo registro de processo e ocorrência de um evento — usam o
+            link do funil, mais abaixo.
             <br />
             <strong className="text-secundario">O "Geral" aceita qualquer payload e nunca recusa</strong>:
             o que ele não souber interpretar fica guardado cru no histórico do lead, para ser tratado
