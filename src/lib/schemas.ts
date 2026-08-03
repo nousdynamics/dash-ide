@@ -33,7 +33,42 @@ const timestamp = z.string().min(1).transform((v) => {
   return Number.isNaN(d.getTime()) ? normalizado : d.toISOString();
 });
 
-// POST /webhook/rubeus/etapa
+/**
+ * Aceita nome alternativo de campo.
+ *
+ * O fluxo de automação do Rubeus monta o payload campo a campo, com o nome
+ * escolhido por quem configurou. Rejeitar por causa de "id" no lugar de
+ * "contato_id" transformaria erro de digitação em lead perdido — e o evento
+ * perdido não volta.
+ */
+const aliases = (dado: unknown, nomes: string[]): unknown => {
+  if (!dado || typeof dado !== 'object') return undefined;
+  const o = dado as Record<string, unknown>;
+  for (const n of nomes) {
+    if (o[n] !== undefined && o[n] !== null && o[n] !== '') return o[n];
+  }
+  return undefined;
+};
+
+/** Normaliza o corpo antes da validação, mapeando os apelidos conhecidos. */
+export const normalizarEtapa = (bruto: unknown): unknown => {
+  if (!bruto || typeof bruto !== 'object') return bruto;
+  const o = { ...(bruto as Record<string, unknown>) };
+  o.contato_id ??= aliases(bruto, ['contato', 'contatoId', 'id_contato', 'idContato', 'id', 'aluno_id', 'lead_id']);
+  o.contato_nome ??= aliases(bruto, ['nome', 'aluno', 'contatoNome', 'nome_contato', 'lead']);
+  o.etapa ??= aliases(bruto, ['etapa_atual', 'etapaAtual', 'stage', 'situacao', 'resumo', 'etapa_nome']);
+  o.registrado_em ??= aliases(bruto, ['data', 'data_hora', 'dataHora', 'criacao', 'timestamp', 'ocorrido_em', 'registradoEm']);
+  o.processo_nome ??= aliases(bruto, ['processo', 'processoNome', 'funil']);
+  o.processo_id ??= aliases(bruto, ['processoId', 'id_processo']);
+  o.origem ??= aliases(bruto, ['canal', 'origem_nome']);
+  o.curso_codigo ??= aliases(bruto, ['curso', 'cursoCodigo']);
+  o.responsavel_comercial ??= aliases(bruto, ['responsavel', 'consultor']);
+  // Sem data explícita, o evento é agora: é quando o CRM disparou.
+  o.registrado_em ??= new Date().toISOString();
+  return o;
+};
+
+// POST /webhook/rubeus/:funil
 export const etapaSchema = z.object({
   contato_id: idFlexivel,
   etapa: z.string().min(1),

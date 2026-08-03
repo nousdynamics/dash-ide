@@ -3,6 +3,44 @@ import { Cartao, Estado, Esqueleto, Pill } from '../componentes/base';
 import { buscar, useApi } from '../lib/api';
 import { fmtDataHora, fmtInt } from '../lib/formato';
 
+/**
+ * Diário de bordo: o que chegou de fato, aceito ou recusado.
+ *
+ * Responde "o Rubeus está mandando?" e, se está, "por que foi recusado?".
+ * Sem isso o diagnóstico de integração vira tentativa e erro às cegas.
+ */
+function DiarioDeBordo({ versao }) {
+  const { dados, carregando } = useApi('/api/funis/eventos?limite=30', `eventos-${versao}`);
+  if (carregando || !dados) return <Esqueleto linhas={3} />;
+  if (!dados.itens.length) {
+    return (
+      <Estado
+        titulo="Nenhum evento recebido ainda"
+        mensagem="Assim que o Rubeus ou a Evolution dispararem para algum link, o payload aparece aqui — aceito ou recusado, com o motivo."
+      />
+    );
+  }
+  return dados.itens.map((e, i) => (
+    <div key={i} className={`py-2 ${i ? 'border-t border-borda' : ''}`}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Pill tom={e.status === 'aceito' ? 'sucesso' : 'perigo'}>
+          {e.status === 'aceito' ? 'aceito' : 'recusado'}
+        </Pill>
+        <span className="text-[11px] text-secundario">
+          {e.canal} · {e.funil_slug}
+        </span>
+        <span className="text-[11px] text-tenue">{fmtDataHora(e.recebido_em)}</span>
+      </div>
+      {e.detalhe && <div className="text-[11px] text-perigo mt-1">{e.detalhe}</div>}
+      {e.corpo && (
+        <pre className="text-[10px] text-tenue mt-1 whitespace-pre-wrap break-all bg-elevado rounded-[8px] p-2 max-h-32 overflow-auto">
+          {e.corpo}
+        </pre>
+      )}
+    </div>
+  ));
+}
+
 const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n' };
 
 /**
@@ -196,6 +234,21 @@ export function Webhooks() {
           Ao criar, os três links já são gerados. As etapas do funil não são cadastradas aqui —
           são descobertas a partir dos eventos que o Rubeus enviar, que é a fonte da verdade delas.
         </div>
+      </Cartao>
+
+      <Cartao>
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="text-[13px] font-semibold">Últimos eventos recebidos</div>
+          <button
+            type="button"
+            onClick={recarregar}
+            className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie
+                       text-secundario hover:bg-superficie-hover cursor-pointer"
+          >
+            Atualizar
+          </button>
+        </div>
+        <DiarioDeBordo versao={versao} />
       </Cartao>
 
       {dados.itens.map((f) => (

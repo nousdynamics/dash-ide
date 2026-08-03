@@ -175,4 +175,21 @@ funis.post('/:id/regerar/:canal', async (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * GET /api/funis/eventos — últimos payloads recebidos, aceitos e recusados.
+ *
+ * É a tela que responde "o Rubeus está mandando?" e, se está, "por que foi
+ * recusado?" — sem isso, o diagnóstico vira tentativa e erro às cegas.
+ */
+funis.get('/eventos', async (c) => {
+  const limite = Math.min(Number(c.req.query('limite') ?? 30) || 30, 100);
+  const { results } = await c.env.DB.prepare(
+    `SELECT canal, funil_slug, status, detalhe, corpo, recebido_em
+     FROM eventos_recebidos ORDER BY recebido_em DESC, id DESC LIMIT ?`,
+  )
+    .bind(limite)
+    .all();
+  return c.json({ itens: results });
+});
+
 export default funis;

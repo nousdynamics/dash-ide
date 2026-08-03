@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ZodTypeAny, output as ZodOutput } from 'zod';
 import { CorpoInvalido, lerCorpoJson } from '../lib/corpo';
-import { conversaSchema, etapaSchema } from '../lib/schemas';
+import { conversaSchema, etapaSchema, normalizarEtapa } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 
 /**
@@ -29,8 +29,28 @@ const webhooks = new Hono<AppEnv>();
  * sem derrubar os outros, e sem dizer de qual funil o evento vinha. Manter os
  * dois esquemas só preservaria o elo mais fraco.
  */
+/**
+ * Extrai o token de onde a origem conseguir mandar.
+ *
+ * O Rubeus, na tela de webhook, oferece "Autenticação: Bearer" com campo de
+ * token — ou seja, header. O fluxo de automação manda a URL crua. A Evolution
+ * usa outro formato ainda. Aceitar as três formas evita que a integração
+ * dependa de qual tela do CRM foi usada para configurá-la.
+ */
+function extrairToken(c: any): string | null {
+  const auth = c.req.header('Authorization') || '';
+  const bearer = auth.match(/^Bearer\s+(.+)$/i);
+  if (bearer) return bearer[1].trim();
+  return (
+    c.req.header('X-Webhook-Token') ||
+    c.req.header('apikey') ||
+    c.req.query('t') ||
+    null
+  );
+}
+
 async function resolverToken(c: any): Promise<{ funilId: number; slug: string } | null> {
-  const token = c.req.query('t');
+  const token = extrairToken(c);
   const canal = c.req.path.split('/')[2];
   const slug = c.req.param('slug');
   if (!token || !slug) return null;
@@ -56,6 +76,47 @@ async function resolverToken(c: any): Promise<{ funilId: number; slug: string } 
   return { funilId: linha.funil_id, slug };
 }
 
+/**
+ * Registra o que chegou, aceito ou não.
+ *
+ * Fora do caminho crítico (waitUntil): diagnóstico não pode atrasar nem
+ * derrubar a gravação do lead.
+ */
+function registrarEvento(
+  c: any,
+  status: string,
+  corpo: string | null,
+  detalhe?: string,
+) {
+  const canal = c.req.path.split('/')[2] ?? null;
+  const slug = c.req.param('slug') ?? null;
+  c.executionCtx?.waitUntil(
+    (async () => {
+      try {
+        await c.env.DB.prepare(
+          `INSERT INTO eventos_recebidos (webhook_id, canal, funil_slug, status, detalhe, corpo)
+           VALUES ((SELECT w.id FROM webhooks w JOIN funis f ON f.id = w.funil_id
+                    WHERE w.canal = ? AND f.slug = ?), ?, ?, ?, ?, ?)`,
+        )
+          .bind(canal, slug, canal, slug, status, detalhe ?? null, corpo?.slice(0, 4000) ?? null)
+          .run();
+        // Mantém só as 50 últimas por webhook: o corpo tem dado de lead e não
+        // precisa viver além do tempo de diagnosticar a integração.
+        await c.env.DB.prepare(
+          `DELETE FROM eventos_recebidos WHERE id IN (
+             SELECT id FROM eventos_recebidos
+             WHERE canal = ? AND funil_slug = ?
+             ORDER BY recebido_em DESC LIMIT -1 OFFSET 50)`,
+        )
+          .bind(canal, slug)
+          .run();
+      } catch {
+        /* diagnóstico nunca derruba o webhook */
+      }
+    })(),
+  );
+}
+
 /** Middleware das rotas com token no lugar do header. */
 const exigirToken = async (c: any, next: any) => {
   const r = await resolverToken(c);
@@ -75,6 +136,7 @@ async function validarCorpo<S extends ZodTypeAny>(
   req: Request,
   schema: S,
   rota: string,
+  normalizar?: (b: unknown) => unknown,
 ): Promise<
   { ok: true; dados: ZodOutput<S> } | { ok: false; erro: string; detalhe: unknown }
 > {
@@ -87,7 +149,7 @@ async function validarCorpo<S extends ZodTypeAny>(
     return { ok: false, erro: 'corpo_invalido', detalhe: msg };
   }
 
-  const r = schema.safeParse(bruto);
+  const r = schema.safeParse(normalizar ? normalizar(bruto) : bruto);
   if (!r.success) {
     console.warn(JSON.stringify({
       evento: 'schema_invalido',
@@ -108,8 +170,13 @@ async function validarCorpo<S extends ZodTypeAny>(
 async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
   let d = jaValidado;
   if (!d) {
-    const r = await validarCorpo(c.req.raw, etapaSchema, c.req.path);
-    if (!r.ok) return c.json({ erro: r.erro, detalhe: r.detalhe }, 400);
+    const cru = await c.req.raw.clone().text().catch(() => null);
+    const r = await validarCorpo(c.req.raw, etapaSchema, c.req.path, normalizarEtapa);
+    if (!r.ok) {
+      registrarEvento(c, r.erro, cru, JSON.stringify(r.detalhe).slice(0, 500));
+      return c.json({ erro: r.erro, detalhe: r.detalhe }, 400);
+    }
+    registrarEvento(c, 'aceito', cru);
     d = r.dados;
   }
 
@@ -210,7 +277,7 @@ webhooks.post('/evolution/:slug', exigirToken, async (c) => gravarConversa(c, c.
 webhooks.post('/n8n/:slug', exigirToken, async (c) => {
   const funilId = c.get('funilId') ?? null;
   const clone = c.req.raw.clone();
-  const etapa = await validarCorpo(clone, etapaSchema, '/webhook/n8n');
+  const etapa = await validarCorpo(clone, etapaSchema, '/webhook/n8n', normalizarEtapa);
   if (etapa.ok) return gravarEtapa(c, funilId, etapa.dados);
   return gravarConversa(c, funilId);
 });
