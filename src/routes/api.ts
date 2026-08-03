@@ -159,6 +159,79 @@ api.get('/funil', async (c) => {
   });
 });
 
+/**
+ * GET /api/funil/leads?funil_id= — leads do funil, com a etapa atual de cada um.
+ *
+ * Etapa atual é a do evento mais recente do contato: `leads_etapa` é log de
+ * eventos, então "onde ele está" é a última linha, não a soma delas.
+ */
+api.get('/funil/leads', async (c) => {
+  const fid = c.req.query('funil_id') ? Number(c.req.query('funil_id')) : null;
+  const limite = Math.min(Number(c.req.query('limite') ?? 200) || 200, 500);
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT l.contato_id, l.contato_nome, l.etapa, l.registrado_em, l.origem, l.processo_nome,
+            (SELECT COUNT(*) FROM leads_etapa e
+              WHERE e.contato_id = l.contato_id AND (? IS NULL OR e.funil_id = ?)) AS eventos
+     FROM leads_etapa l
+     JOIN (SELECT contato_id, MAX(registrado_em) AS ult
+             FROM leads_etapa WHERE (? IS NULL OR funil_id = ?)
+             GROUP BY contato_id) u
+       ON u.contato_id = l.contato_id AND u.ult = l.registrado_em
+     WHERE (? IS NULL OR l.funil_id = ?)
+     GROUP BY l.contato_id
+     ORDER BY l.registrado_em DESC LIMIT ?`,
+  )
+    .bind(fid, fid, fid, fid, fid, fid, limite)
+    .all();
+
+  return c.json({ funil_id: fid, total: results.length, itens: results });
+});
+
+/**
+ * GET /api/funil/lead/:contato_id — dados gerais e jornada completa de um lead.
+ *
+ * Junta o que o funil sabe (etapas, na ordem em que aconteceram) com o corpo
+ * cru de cada evento recebido — a jornada só é auditável se der para ver o que
+ * chegou em cada passo.
+ */
+api.get('/funil/lead/:contato_id', async (c) => {
+  const id = c.req.param('contato_id');
+  if (!id) return c.json({ erro: 'id_invalido' }, 400);
+
+  const [etapas, payloads] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT etapa, registrado_em, origem, processo_nome, status, unidade,
+              curso_codigo, responsavel_comercial, contato_nome
+       FROM leads_etapa WHERE contato_id = ? ORDER BY registrado_em ASC, id ASC`,
+    ).bind(id).all(),
+
+    c.env.DB.prepare(
+      `SELECT etapa, canal, status, detalhe, corpo, recebido_em
+       FROM eventos_recebidos WHERE contato_id = ? ORDER BY recebido_em ASC, id ASC`,
+    ).bind(id).all(),
+  ]);
+
+  const linhas = etapas.results as Array<Record<string, any>>;
+  const primeiro = linhas[0] ?? {};
+  const ultimo = linhas[linhas.length - 1] ?? {};
+
+  return c.json({
+    contato_id: id,
+    contato_nome: ultimo.contato_nome || primeiro.contato_nome || null,
+    origem: primeiro.origem ?? null,
+    processo_nome: ultimo.processo_nome ?? primeiro.processo_nome ?? null,
+    unidade: ultimo.unidade ?? null,
+    curso_codigo: ultimo.curso_codigo ?? null,
+    responsavel_comercial: ultimo.responsavel_comercial ?? null,
+    etapa_atual: ultimo.etapa ?? null,
+    primeiro_em: primeiro.registrado_em ?? null,
+    ultimo_em: ultimo.registrado_em ?? null,
+    jornada: linhas,
+    payloads: payloads.results,
+  });
+});
+
 /** GET /api/conversas?limite=&offset= — lista paginada de conversas do WhatsApp. */
 api.get('/conversas', async (c) => {
   const q = paginacaoQuerySchema.safeParse(c.req.query());
