@@ -18,3 +18,9 @@ GOOGLE_ADS_CLIENT_SECRET=""
 GOOGLE_ADS_REFRESH_TOKEN=""
 GOOGLE_ADS_API_VERSION="v24"
 GOOGLE_ADS_LOGIN_CUSTOMER_ID=""
+
+# --- RD Station ---
+# Credenciais do App criado na RD Station App Store. O refresh_token NÃO vem
+# daqui: é obtido pelo fluxo em /oauth/rdstation/iniciar e guardado no D1.
+RD_STATION_CLIENT_ID=""
+RD_STATION_CLIENT_SECRET=""

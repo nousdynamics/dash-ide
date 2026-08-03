@@ -3,6 +3,7 @@ import type { AppEnv } from './lib/tipos';
 import ads from './routes/ads';
 import api from './routes/api';
 import funisRotas from './routes/funis';
+import oauth from './routes/oauth';
 import webhooks from './routes/webhooks';
 
 const app = new Hono<AppEnv>();
@@ -27,6 +28,14 @@ app.use('/api/*', async (c, next) => {
 });
 // Consultas ao vivo no Google Ads. Montado antes de /api pra que as rotas
 // específicas de mídia não passem pelo roteador de agregados do D1.
+// Fluxo OAuth: fica atrás do Access, porque autorizar integração é ação
+// administrativa e o retorno é um redirect no navegador de quem autorizou.
+app.use('/oauth/*', async (c, next) => {
+  const email = c.req.header('Cf-Access-Authenticated-User-Email');
+  if (email) c.set('usuarioEmail', email);
+  await next();
+});
+app.route('/oauth', oauth);
 app.route('/api/funis', funisRotas);
 app.route('/api/ads', ads);
 app.route('/api', api);
