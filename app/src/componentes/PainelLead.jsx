@@ -58,7 +58,7 @@ export function PainelLead({ contatoId, aoFechar }) {
     };
   }, [aoFechar]);
 
-  const jornada = dados?.jornada ?? [];
+  const funis = dados?.funis ?? [];
 
   /*
    * Parear por etapa e ordem, não por timestamp.
@@ -128,8 +128,7 @@ export function PainelLead({ contatoId, aoFechar }) {
             <>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  ['Etapa atual', dados.etapa_atual],
-                  ['Funil', dados.processo_nome],
+                  ['Funis', funis.map((f) => f.funil).join(', ')],
                   ['Origem', dados.origem],
                   ['Unidade', dados.unidade],
                   ['Curso', dados.curso_codigo],
@@ -148,11 +147,26 @@ export function PainelLead({ contatoId, aoFechar }) {
 
               <div>
                 <div className="text-[13px] font-semibold mb-2">
-                  Jornada <span className="text-tenue font-normal">({jornada.length} passo(s))</span>
+                  Jornada
+                  <span className="text-tenue font-normal">
+                    {' '}({funis.length} funil{funis.length === 1 ? '' : 's'})
+                  </span>
                 </div>
-                {jornada.length ? (
+                {/*
+                  Uma trilha por funil: um lead de Pós também entra em
+                  Qualificação de Leads, e as etapas dos dois não são a mesma
+                  sequência. Misturar faria parecer que ele voltou de etapa.
+                */}
+                {funis.length ? funis.map((f) => (
+                  <div key={f.funil} className="mb-4">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <span className="text-xs font-semibold text-azul-300">{f.funil}</span>
+                      <span className="text-[11px] text-tenue">
+                        {f.passos.length} passo(s) · agora em <strong className="text-secundario">{f.etapa_atual}</strong>
+                      </span>
+                    </div>
                   <ol className="flex flex-col">
-                    {jornada.map((p, i) => {
+                    {f.passos.map((p, i) => {
                       const bruto = payloadDoPasso(p.etapa);
                       const texto = corpoLegivel(bruto?.corpo);
                       return (
@@ -161,9 +175,9 @@ export function PainelLead({ contatoId, aoFechar }) {
                           <div className="flex flex-col items-center shrink-0">
                             <span
                               className={`w-[9px] h-[9px] rounded-full mt-[6px]
-                                ${i === jornada.length - 1 ? 'bg-azul-400' : 'bg-borda-forte'}`}
+                                ${i === f.passos.length - 1 ? 'bg-azul-400' : 'bg-borda-forte'}`}
                             />
-                            {i < jornada.length - 1 && <span className="w-px flex-1 bg-borda" />}
+                            {i < f.passos.length - 1 && <span className="w-px flex-1 bg-borda" />}
                           </div>
                           <div className="pb-3 min-w-0 flex-1">
                             <div className="text-xs font-semibold">{p.etapa}</div>
@@ -190,7 +204,8 @@ export function PainelLead({ contatoId, aoFechar }) {
                       );
                     })}
                   </ol>
-                ) : (
+                  </div>
+                )) : (
                   <Estado mensagem="Nenhum passo registrado para este lead." />
                 )}
               </div>

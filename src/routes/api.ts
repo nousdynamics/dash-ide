@@ -200,10 +200,18 @@ api.get('/funil/lead/:contato_id', async (c) => {
   if (!id) return c.json({ erro: 'id_invalido' }, 400);
 
   const [etapas, payloads] = await Promise.all([
+    /*
+     * O funil de cada passo importa: um lead de Pós preenche ao mesmo tempo o
+     * funil de Pós e o de Qualificação de Leads, cada um com etapas próprias.
+     * Sem separar, "Oportunidade" de um aparece intercalado com etapa do outro
+     * como se fosse a mesma trilha.
+     */
     c.env.DB.prepare(
-      `SELECT etapa, registrado_em, origem, processo_nome, status, unidade,
-              curso_codigo, responsavel_comercial, contato_nome
-       FROM leads_etapa WHERE contato_id = ? ORDER BY registrado_em ASC, id ASC`,
+      `SELECT l.etapa, l.registrado_em, l.origem, l.processo_nome, l.status, l.unidade,
+              l.curso_codigo, l.responsavel_comercial, l.contato_nome,
+              l.funil_id, COALESCE(f.nome, l.processo_nome, 'Sem funil') AS funil_nome
+       FROM leads_etapa l LEFT JOIN funis f ON f.id = l.funil_id
+       WHERE l.contato_id = ? ORDER BY l.registrado_em ASC, l.id ASC`,
     ).bind(id).all(),
 
     c.env.DB.prepare(
@@ -216,9 +224,30 @@ api.get('/funil/lead/:contato_id', async (c) => {
   const primeiro = linhas[0] ?? {};
   const ultimo = linhas[linhas.length - 1] ?? {};
 
+  /*
+   * Agrupa por funil, mantendo a ordem cronológica dentro de cada um. A etapa
+   * "atual" também passa a ser por funil — um lead pode estar em Oportunidade
+   * no Pós e em Conexão na Qualificação ao mesmo tempo, e dizer que ele "está"
+   * numa só seria escolher arbitrariamente uma das duas.
+   */
+  const porFunil = new Map<string, any>();
+  for (const l of linhas) {
+    const k = l.funil_nome;
+    if (!porFunil.has(k)) {
+      porFunil.set(k, { funil: k, funil_id: l.funil_id ?? null, passos: [] });
+    }
+    porFunil.get(k).passos.push(l);
+  }
+  const funis = [...porFunil.values()].map((f) => ({
+    ...f,
+    etapa_atual: f.passos[f.passos.length - 1]?.etapa ?? null,
+    ultimo_em: f.passos[f.passos.length - 1]?.registrado_em ?? null,
+  }));
+
   return c.json({
     contato_id: id,
     contato_nome: ultimo.contato_nome || primeiro.contato_nome || null,
+    funis,
     origem: primeiro.origem ?? null,
     processo_nome: ultimo.processo_nome ?? primeiro.processo_nome ?? null,
     unidade: ultimo.unidade ?? null,
