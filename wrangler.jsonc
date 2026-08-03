@@ -28,6 +28,20 @@
     "directory": "./public"
   },
 
+  /*
+   * Identificadores do Cloudflare Access, usados para conferir o JWT assinado
+   * que ele injeta em cada request (src/lib/access.ts).
+   *
+   * Não são segredo — o AUD identifica a aplicação, não autentica ninguém, e o
+   * domínio da organização aparece na própria tela de login. Ficam aqui, e não
+   * em `secret`, porque precisam viajar com a config: um deploy sem eles deixa
+   * o painel fora do ar em vez de aberto, que é o lado certo para errar.
+   */
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "faculdade-ide.cloudflareaccess.com",
+    "ACCESS_AUD": "f1ed21ed42bdda4343da59bfdf82d9c9ec09ea7498bed96e4b2d0b229707e3c0"
+  },
+
   "observability": {
     "enabled": true,
     "logs": {
@@ -47,7 +61,9 @@
   ]
 
   // Secrets (NÃO declarar aqui — usar `npx wrangler secret put <NOME>`):
-  //   WEBHOOK_SECRET — string aleatória compartilhada com Rubeus / n8n / Evolution API.
-  //                    Gerar com: openssl rand -hex 32
-  //                    Localmente vai em .dev.vars (já ignorado pelo git).
+  //   GOOGLE_ADS_* e RD_STATION_CLIENT_ID / RD_STATION_CLIENT_SECRET.
+  //   Localmente vão em .dev.vars (já ignorado pelo git).
+  //
+  // Os tokens dos webhooks NÃO são secret de Worker: cada um vive numa linha do
+  // D1, por funil e por canal, para dar pra revogar um sem derrubar os outros.
 }

@@ -24,3 +24,8 @@ GOOGLE_ADS_LOGIN_CUSTOMER_ID=""
 # daqui: é obtido pelo fluxo em /oauth/rdstation/iniciar e guardado no D1.
 RD_STATION_CLIENT_ID=""
 RD_STATION_CLIENT_SECRET=""
+
+# Libera o painel em `wrangler dev`, onde não há Cloudflare Access na frente.
+# NUNCA publicar como secret: em produção a ausência desta variável é o que
+# obriga o Worker a exigir o JWT assinado do Access.
+AMBIENTE="dev"

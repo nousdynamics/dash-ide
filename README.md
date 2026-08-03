@@ -16,9 +16,10 @@ Contexto completo em [ide-painel-plano-implementacao.md](ide-painel-plano-implem
 | Cloudflare Access | No ar. `painel.ide.edu.br` exige login. |
 
 
-O `WEBHOOK_SECRET` e as credenciais do Google Ads já estão publicados como
-secret. Falta configurar o mesmo `X-Webhook-Secret` nos headers customizados do
-Rubeus e da Evolution API — sem isso os webhooks devolvem 401 e nada é gravado.
+As credenciais do Google Ads e do RD Station estão publicadas como secret do
+Worker. Os webhooks não usam secret compartilhado: cada funil × canal tem token
+próprio, gerado no painel e guardado no D1, para dar pra revogar um sem derrubar
+os outros.
 
 ## Acesso
 
@@ -27,12 +28,24 @@ Rubeus e da Evolution API — sem isso os webhooks devolvem 401 e nada é gravad
 
 | Aplicação | Domínio | Política |
 |---|---|---|
-| Painel Faculdade IDE | `painel.ide.edu.br` | Allow: `@faculdadeide.edu.br` + `nousdynamicslta@gmail.com` |
+| Painel Faculdade IDE | `painel.ide.edu.br` | Allow: `@faculdadeide.edu.br`, `nousdynamicslta@gmail.com`, `mcc@isaacmelo.com` |
 | Webhooks (servidor-a-servidor) | `painel.ide.edu.br/webhook` | Bypass |
 
 O caminho mais específico vence, então o app de `/webhook` isenta Rubeus e
-Evolution do login — eles continuam guardados só pelo `X-Webhook-Secret`, que é
-o certo para chamada de máquina.
+Evolution do login — eles se autenticam pelo token do próprio funil, que é o
+certo para chamada de máquina.
+
+**O Worker não confia no header de e-mail do Access.** `/api/*` e `/oauth/*`
+conferem o JWT assinado (`Cf-Access-Jwt-Assertion`): assinatura contra o JWKS da
+organização, `aud` desta aplicação, emissor e validade — e o e-mail do log de
+auditoria sai de dentro do token. Sem isso, qualquer requisição que alcançasse o
+Worker por fora da política (uma rota nova mal configurada, um Custom Domain
+acrescentado depois) seria atendida mandando o header que quisesse — inclusive
+para pedir o token de um webhook em `/api/funis/:id/token`. Ver `src/lib/access.ts`.
+
+Em `wrangler dev` não há Access na frente; a brecha é a variável `AMBIENTE=dev`,
+que só existe em `.dev.vars` e nunca é publicada. Em produção, a ausência dela é
+o que obriga a verificação — falha fechado.
 
 **A URL `*.workers.dev` está desligada de propósito** (`workers_dev: false`). O
 Access protege a zona `ide.edu.br`, mas não alcança `*.workers.dev`, que não é
@@ -46,7 +59,7 @@ monitoramento externo de uptime precisaria de uma regra de bypass própria.
 
 ```bash
 npm install
-cp .dev.vars.example .dev.vars   # preencher WEBHOOK_SECRET e as chaves do Google Ads
+cp .dev.vars.example .dev.vars   # chaves do Google Ads / RD Station + AMBIENTE=dev
 npm run db:local                 # aplica as migrations no SQLite local
 npm run dev
 ```
@@ -59,9 +72,14 @@ quando houver migration nova.
 
 ## Endpoints
 
-Os `POST /webhook/*` exigem o token do funil na query (`?t=`) e ficam **fora** do
-Cloudflare Access (são chamadas servidor-a-servidor). Os `GET /api/*` não têm
-auth própria — o Access barra antes de chegar no Worker.
+Os `POST /webhook/*` exigem o token do funil e ficam **fora** do Cloudflare
+Access (são chamadas servidor-a-servidor). O token é aceito na query (`?t=`), em
+`Authorization: Bearer`, em `X-Webhook-Token` ou em `apikey` — vale qualquer um
+que esteja correto, e não o primeiro encontrado: o Rubeus oferece os dois campos
+na mesma tela, e um valor velho sobrando no Bearer chegou a anular o token certo
+da URL.
+
+Os `GET /api/*` exigem o JWT do Access, verificado no Worker (ver **Acesso**).
 
 | Método | Rota | Origem |
 |---|---|---|
@@ -260,8 +278,18 @@ Registradas aqui porque afetam quem for continuar:
    contornada no node "Normalizar Payload" do fluxo n8n original, e que vale
    igual aqui porque o Rubeus dispara para os dois destinos. Ver `src/lib/corpo.ts`.
 
-6. **Comparação do secret em tempo constante** via SHA-256 + `timingSafeEqual`,
-   com falha fechada se `WEBHOOK_SECRET` não estiver configurado.
+6. **Token de webhook por funil × canal**, opaco, de 32 bytes de
+   `crypto.getRandomValues`. Nunca sai na listagem da tela: o painel só busca a
+   URL completa no clique de copiar, e registra quem copiou.
+
+7. **JWT do Access verificado no Worker**, com `alg` fixo em RS256 — aceitar o
+   algoritmo que o token pede é deixar o atacante escolher o cadeado.
+
+8. **CSP com `connect-src 'self'`** nos assets (`app/public/_headers`). Script
+   injetado por dependência comprometida ou extensão não tem para onde mandar o
+   que ler na tela. `Referrer-Policy: no-referrer` impede que o `?t=` de um
+   webhook escape no cabeçalho Referer, e `no-store` mantém dado de lead fora de
+   qualquer cache no caminho.
 
 ## Pendências que não são código
 

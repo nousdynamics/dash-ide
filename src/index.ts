@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { exigirAcesso } from './lib/access';
 import type { AppEnv } from './lib/tipos';
 import ads from './routes/ads';
 import api from './routes/api';
@@ -16,25 +17,32 @@ const app = new Hono<AppEnv>();
 app.route('/webhook', webhooks);
 
 /**
- * GET /api/* — consumidos pelo painel. Sem autenticação própria: o Cloudflare
- * Access fica na frente do domínio e barra o request antes de chegar aqui.
+ * Cabeçalhos de resposta de tudo que sai do Worker.
  *
- * Para auditar quem acessou, o Access injeta o header abaixo automaticamente.
+ * `no-store` importa mais do que parece: as respostas de `/api` carregam dado de
+ * lead e o endpoint de token devolve credencial viva. Sem isso, qualquer cache
+ * no caminho — a borda, um proxy corporativo, o disco do navegador — fica com
+ * uma cópia que sobrevive ao logout.
  */
-app.use('/api/*', async (c, next) => {
-  const email = c.req.header('Cf-Access-Authenticated-User-Email');
-  if (email) c.set('usuarioEmail', email);
+app.use('*', async (c, next) => {
   await next();
+  c.header('Cache-Control', 'no-store');
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('Referrer-Policy', 'no-referrer');
 });
+
+/**
+ * GET /api/* — consumidos pelo painel, atrás do Cloudflare Access.
+ *
+ * O middleware confere o JWT assinado do Access, não o header de e-mail: header
+ * qualquer um manda, assinatura não. Ver src/lib/access.ts.
+ */
+app.use('/api/*', exigirAcesso);
 // Consultas ao vivo no Google Ads. Montado antes de /api pra que as rotas
 // específicas de mídia não passem pelo roteador de agregados do D1.
 // Fluxo OAuth: fica atrás do Access, porque autorizar integração é ação
 // administrativa e o retorno é um redirect no navegador de quem autorizou.
-app.use('/oauth/*', async (c, next) => {
-  const email = c.req.header('Cf-Access-Authenticated-User-Email');
-  if (email) c.set('usuarioEmail', email);
-  await next();
-});
+app.use('/oauth/*', exigirAcesso);
 app.route('/oauth', oauth);
 app.route('/api/funis', funisRotas);
 app.route('/api/ads', ads);

@@ -13,15 +13,44 @@ const oauth = new Hono<AppEnv>();
 
 const TOKEN_URL = 'https://api.rd.services/auth/token';
 
-/** GET /oauth/rdstation/iniciar — manda para a tela de autorização. */
+const COOKIE_ESTADO = 'rd_oauth_state';
+
+/**
+ * GET /oauth/rdstation/iniciar — manda para a tela de autorização.
+ *
+ * O `state` aleatório vai junto e fica num cookie HttpOnly. Sem ele, bastaria
+ * induzir alguém da lista a abrir uma URL de callback preparada para gravar o
+ * refresh_token de OUTRA conta RD no nosso banco — daí em diante o painel
+ * cruzaria dados com a base do atacante achando que é a da faculdade.
+ */
 oauth.get('/rdstation/iniciar', (c) => {
   const id = c.env.RD_STATION_CLIENT_ID;
   if (!id) return c.json({ erro: 'RD_STATION_CLIENT_ID não configurado' }, 500);
+
+  const b = new Uint8Array(32);
+  crypto.getRandomValues(b);
+  const estado = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+
   const redirect = `${new URL(c.req.url).origin}/oauth/rdstation/callback`;
+  c.header(
+    'Set-Cookie',
+    `${COOKIE_ESTADO}=${estado}; Path=/oauth; Max-Age=600; HttpOnly; Secure; SameSite=Lax`,
+  );
   return c.redirect(
-    `https://api.rd.services/auth/dialog?client_id=${encodeURIComponent(id)}&redirect_uri=${encodeURIComponent(redirect)}`,
+    `https://api.rd.services/auth/dialog?client_id=${encodeURIComponent(id)}` +
+      `&redirect_uri=${encodeURIComponent(redirect)}&state=${estado}`,
   );
 });
+
+/** Compara em tempo constante — o `state` é credencial de uso único. */
+async function estadoConfere(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [ha, hb] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(a)),
+    crypto.subtle.digest('SHA-256', enc.encode(b)),
+  ]);
+  return crypto.subtle.timingSafeEqual(ha, hb);
+}
 
 /**
  * GET /oauth/rdstation/callback — troca o code por tokens e guarda o refresh.
@@ -32,6 +61,22 @@ oauth.get('/rdstation/iniciar', (c) => {
 oauth.get('/rdstation/callback', async (c) => {
   const code = c.req.query('code');
   if (!code) return c.html(pagina('Autorização cancelada', 'O RD Station não devolveu um código.'), 400);
+
+  // Queima o cookie logo: o `state` vale uma vez, dando certo ou errado.
+  c.header('Set-Cookie', `${COOKIE_ESTADO}=; Path=/oauth; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
+
+  const esperado = (c.req.header('Cookie') || '')
+    .split(';')
+    .map((p) => p.trim().split('='))
+    .find(([k]) => k === COOKIE_ESTADO)?.[1];
+  const recebido = c.req.query('state');
+  if (!esperado || !recebido || !(await estadoConfere(recebido, esperado))) {
+    console.warn(JSON.stringify({ evento: 'rd_oauth_state_invalido', tem_cookie: Boolean(esperado) }));
+    return c.html(
+      pagina('Autorização não confere', 'Recomece a conexão pelo painel — o pedido não bate com o que foi iniciado aqui.'),
+      403,
+    );
+  }
 
   const clientId = c.env.RD_STATION_CLIENT_ID;
   const clientSecret = c.env.RD_STATION_CLIENT_SECRET;
