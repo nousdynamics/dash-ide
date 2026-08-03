@@ -75,7 +75,24 @@ funis.get('/', async (c) => {
     }
   }
 
-  return c.json({ canais: CANAIS, itens: [...mapa.values()] });
+  // Webhooks por tipo de evento: não pertencem a funil, o funil vem no corpo.
+  const { results: porEvento } = await c.env.DB.prepare(
+    `SELECT id, canal, evento, ultimo_uso_em, total_recebido
+     FROM webhooks WHERE funil_id IS NULL ORDER BY canal, evento`,
+  ).all();
+
+  return c.json({
+    canais: CANAIS,
+    itens: [...mapa.values()],
+    por_evento: (porEvento as Array<Record<string, any>>).map((w) => ({
+      id: w.id,
+      canal: w.canal,
+      evento: w.evento,
+      caminho: `/webhook/${w.canal}/evento/${w.evento}`,
+      ultimo_uso_em: w.ultimo_uso_em,
+      total_recebido: w.total_recebido ?? 0,
+    })),
+  });
 });
 
 /** POST /api/funis — cria o funil e já gera os três webhooks. */
@@ -130,6 +147,19 @@ funis.delete('/:id', async (c) => {
  * não aparece no HTML, em screenshot nem para quem olha a tela por cima do
  * ombro. Só trafega quando alguém clica em copiar.
  */
+/** GET /api/funis/token-evento/:id — URL completa de um webhook por evento. */
+funis.get('/token-evento/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id)) return c.json({ erro: 'id_invalido' }, 400);
+  const l = await c.env.DB.prepare(
+    'SELECT token, canal, evento FROM webhooks WHERE id = ? AND funil_id IS NULL',
+  ).bind(id).first() as { token: string; canal: string; evento: string } | null;
+  if (!l) return c.json({ erro: 'webhook_nao_encontrado' }, 404);
+  console.log(JSON.stringify({ evento: 'token_copiado', tipo: l.evento, por: c.get('usuarioEmail') ?? '?' }));
+  const base = new URL(c.req.url).origin;
+  return c.json({ url: `${base}/webhook/${l.canal}/evento/${l.evento}?t=${l.token}` });
+});
+
 funis.get('/:id/token/:canal', async (c) => {
   const id = Number(c.req.param('id'));
   const canal = c.req.param('canal');

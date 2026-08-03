@@ -12,13 +12,19 @@ const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n' 
  * área de transferência. Assim ele não fica no HTML, não aparece em screenshot
  * e não é lido por quem olha a tela por cima do ombro.
  */
-function BotaoCopiar({ funilId, canal }) {
+const ROTULO_EVENTO = {
+  registro_processo: 'Novo registro de processo',
+  contato: 'Criação/edição de contato',
+  atividade: 'Criação/edição de atividade',
+};
+
+function BotaoCopiar({ funilId, canal, rota }) {
   const [estado, setEstado] = useState('pronto');
 
   const copiar = async () => {
     setEstado('buscando');
     try {
-      const { url } = await buscar(`/api/funis/${funilId}/token/${canal}`);
+      const { url } = await buscar(rota ?? `/api/funis/${funilId}/token/${canal}`);
       await navigator.clipboard.writeText(url);
       setEstado('copiado');
       setTimeout(() => setEstado('pronto'), 2000);
@@ -203,6 +209,39 @@ export function Webhooks() {
           é gravado assim mesmo e aparece marcado no diário abaixo, para nenhum lead se perder.
         </div>
       </Cartao>
+
+      {dados.por_evento?.length > 0 && (
+        <Cartao>
+          <div className="text-[13px] font-semibold">Webhooks por tipo de evento</div>
+          <div className="text-[11px] text-tenue mt-1 mb-2 leading-relaxed">
+            O Rubeus cadastra webhook por <strong className="text-secundario">evento</strong>, não por
+            funil — uma URL recebe "novo registro de processo" de todos os processos. O funil de cada
+            lead é resolvido pelo processo que vem no corpo. Use estes na tela "Definição de webhooks".
+          </div>
+          {dados.por_evento.map((w) => (
+            <div key={w.id} className="flex flex-col md:flex-row md:items-center md:justify-between
+                                       gap-2 py-2 border-t border-borda">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold">
+                    {ROTULO_CANAL[w.canal] || w.canal} · {ROTULO_EVENTO[w.evento] || w.evento}
+                  </span>
+                  {w.total_recebido > 0
+                    ? <Pill tom="sucesso">{fmtInt(w.total_recebido)} evento(s)</Pill>
+                    : <Pill tom="neutro">sem evento ainda</Pill>}
+                </div>
+                <div className="text-[11px] text-tenue mt-1 font-mono break-all">
+                  {w.caminho}?t=<span className="text-tenue/70">••••••••••••</span>
+                </div>
+                {w.ultimo_uso_em && (
+                  <div className="text-[11px] text-tenue mt-px">Último: {fmtDataHora(w.ultimo_uso_em)}</div>
+                )}
+              </div>
+              <BotaoCopiar rota={`/api/funis/token-evento/${w.id}`} />
+            </div>
+          ))}
+        </Cartao>
+      )}
 
       {dados.itens.map((f) => (
         <Cartao key={f.id}>

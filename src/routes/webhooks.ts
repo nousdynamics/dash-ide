@@ -52,18 +52,29 @@ function extrairToken(c: any): string | null {
   );
 }
 
-async function resolverToken(c: any): Promise<{ funilId: number; slug: string } | null> {
+async function resolverToken(c: any): Promise<{ funilId: number | null; slug: string } | null> {
   const token = extrairToken(c);
   const canal = c.req.path.split('/')[2];
   const slug = c.req.param('slug');
-  if (!token || !slug) return null;
+  if (!token) return null;
 
+  /*
+   * Duas formas de credencial:
+   *  - por funil  → /webhook/<canal>/<slug>, o funil vem da URL
+   *  - por evento → /webhook/<canal>/evento/<tipo>, sem funil na URL
+   *
+   * A segunda existe porque o Rubeus cadastra webhook por TIPO DE EVENTO, não
+   * por funil: uma URL só recebe "novo registro de processo" de todos os
+   * processos, e o funil vem no corpo.
+   */
   const linha = await c.env.DB.prepare(
-    `SELECT w.id, w.funil_id FROM webhooks w JOIN funis f ON f.id = w.funil_id
-     WHERE w.token = ? AND w.canal = ? AND f.slug = ? AND f.ativo = 1`,
+    `SELECT w.id, w.funil_id FROM webhooks w
+     LEFT JOIN funis f ON f.id = w.funil_id
+     WHERE w.token = ? AND w.canal = ?
+       AND (w.funil_id IS NULL OR (f.slug = ? AND f.ativo = 1))`,
   )
-    .bind(token, canal, slug)
-    .first() as { id: number; funil_id: number } | null;
+    .bind(token, canal, slug ?? null)
+    .first() as { id: number; funil_id: number | null } | null;
 
   if (!linha) return null;
 
@@ -76,7 +87,50 @@ async function resolverToken(c: any): Promise<{ funilId: number; slug: string } 
       .run(),
   );
 
-  return { funilId: linha.funil_id, slug };
+  return { funilId: linha.funil_id, slug: slug ?? '' };
+}
+
+/**
+ * Descobre o funil a partir do processo que veio no payload.
+ *
+ * Casa primeiro por `processo_id`, que é estável, e cai para o nome quando o id
+ * não está cadastrado. Se o processo é novo, cria o funil na hora: perder o
+ * evento por causa de um funil não cadastrado seria pior que ter um funil a
+ * mais na lista, e o nome vem do próprio Rubeus.
+ */
+async function funilDoPayload(c: any, d: any): Promise<number | null> {
+  const pid = d.processo_id != null ? String(d.processo_id) : null;
+  const nome = d.processo_nome ? String(d.processo_nome).trim() : null;
+  if (!pid && !nome) return null;
+
+  const achado = await c.env.DB.prepare(
+    `SELECT id FROM funis WHERE ativo = 1
+       AND ((? IS NOT NULL AND processo_id = ?) OR (? IS NOT NULL AND lower(nome) = lower(?)))
+     LIMIT 1`,
+  )
+    .bind(pid, pid, nome, nome)
+    .first() as { id: number } | null;
+
+  if (achado) {
+    // Aprende o processo_id na primeira vez que ele aparece.
+    if (pid) {
+      c.executionCtx?.waitUntil(
+        c.env.DB.prepare('UPDATE funis SET processo_id = ? WHERE id = ? AND processo_id IS NULL')
+          .bind(pid, achado.id)
+          .run(),
+      );
+    }
+    return achado.id;
+  }
+
+  if (!nome) return null;
+  const slug = nome.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+  const { meta } = await c.env.DB.prepare(
+    'INSERT OR IGNORE INTO funis (nome, slug, processo_id) VALUES (?, ?, ?)',
+  ).bind(nome, slug, pid).run();
+  console.log(JSON.stringify({ evento: 'funil_criado_pelo_payload', nome, slug }));
+  return meta.last_row_id || null;
 }
 
 /**
@@ -236,6 +290,10 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
     d = r.dados;
   }
 
+  // Funil do payload vence o da URL: com webhook por evento, a URL não sabe.
+  const doPayload = await funilDoPayload(c, d);
+  const funilFinal = doPayload ?? funilId;
+
   const { meta } = await c.env.DB.prepare(
     `INSERT INTO leads_etapa (
        contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, etapa, status,
@@ -258,7 +316,7 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       d.unidade ?? null,
       d.responsavel_comercial ?? null,
       d.registrado_em,
-      funilId,
+      funilFinal,
     )
     .run();
 
@@ -314,6 +372,14 @@ async function gravarConversa(c: any, funilId: number | null) {
  * Rotas por funil. Declaradas DEPOIS das fixas: o Hono casa na ordem, e
  * `/rubeus/:slug` engoliria `/rubeus/etapa` se viesse antes.
  */
+/*
+ * Rotas por tipo de evento. Vêm antes das por slug: `/rubeus/:slug` casaria
+ * com `/rubeus/evento` e engoliria estas.
+ */
+webhooks.post('/rubeus/evento/:tipo', exigirToken, (c) => gravarEtapa(c, null));
+webhooks.post('/evolution/evento/:tipo', exigirToken, (c) => gravarConversa(c, null));
+webhooks.post('/n8n/evento/:tipo', exigirToken, (c) => gravarEtapa(c, null));
+
 webhooks.post('/rubeus/:slug', exigirToken, async (c) => gravarEtapa(c, c.get('funilId') ?? null));
 webhooks.post('/evolution/:slug', exigirToken, async (c) => gravarConversa(c, c.get('funilId') ?? null));
 
