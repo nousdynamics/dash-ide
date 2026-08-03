@@ -199,11 +199,17 @@ webhooks.post('/rubeus/:slug', exigirToken, async (c) => gravarEtapa(c, c.get('f
 webhooks.post('/evolution/:slug', exigirToken, async (c) => gravarConversa(c, c.get('funilId') ?? null));
 
 /**
- * POST /webhook/n8n/:slug — canal genérico.
+ * POST /webhook/n8n/:slug — canal de contingência.
  *
- * Aceita tanto payload de etapa quanto de conversa e decide pelo formato: o
- * n8n pode encaminhar qualquer um dos dois, e exigir rota separada só moveria
- * a decisão para quem configura o fluxo.
+ * Não é uma integração de rotina: existe para reenviar evento que se perdeu e
+ * para injetar dado à mão quando algo quebra do lado do Rubeus ou da Evolution.
+ * Por isso aceita tanto payload de etapa quanto de conversa e decide pelo
+ * formato — num canal usado enquanto se apaga incêndio, obrigar a escolher a
+ * rota certa só transfere a chance de errar para o pior momento possível.
+ *
+ * Reenviar o mesmo evento é seguro: o funil conta contatos DISTINTOS por etapa,
+ * então linha duplicada não infla número, e conversa é upsert por
+ * (contato_id, iniciada_em).
  */
 webhooks.post('/n8n/:slug', exigirToken, async (c) => {
   const funilId = c.get('funilId') ?? null;

@@ -95,10 +95,34 @@ parcial é gravada.
 | Funil por etapa | D1 `leads_etapa`, alimentado pelo webhook do Rubeus |
 | Conversas de WhatsApp | D1 `conversas_whatsapp`, alimentado pela Evolution API |
 
-**O n8n não faz parte desta ferramenta.** Ele segue existindo para enviar
-conversão offline ao Google Ads, mas não escreve nem lê nada aqui. Por isso a
-migration `0003` removeu `metricas_anuncio` (substituída pela consulta ao vivo)
-e `conversoes_ads` (que só o callback do n8n preencheria).
+**O n8n não alimenta o painel em regime normal.** Ele segue existindo para
+enviar conversão offline ao Google Ads, e a migration `0003` removeu
+`metricas_anuncio` (substituída pela consulta ao vivo) e `conversoes_ads` (que
+só o callback dele preencheria).
+
+O canal `n8n` dos webhooks é **contingência**, não rotina: serve para reenviar
+evento perdido e para injetar dado à mão quando o Rubeus ou a Evolution
+falham. Não remover achando que é resíduo da arquitetura antiga.
+
+## Funis e webhooks
+
+Cada funil tem três links, um por canal, com token independente — dá para
+revogar um sem derrubar os outros, e o evento chega sabendo a qual funil
+pertence em vez de precisar ser casado por `processo_id` depois.
+
+**Funis são cadastráveis; etapas não.** O Rubeus é a fonte da verdade das
+etapas e cada processo usa um conjunto diferente; lista manual paralela vira
+segunda verdade que diverge no primeiro rename feito lá. O que justifica
+cadastrar o funil é a URL do webhook precisar existir antes do primeiro evento.
+
+**O token nunca é renderizado.** Não dá para ter link com segredo e "sem
+expor" ao mesmo tempo — o segredo está no link. A listagem devolve só o
+caminho, a tela mostra `?t=••••`, e o botão copiar busca a URL completa em
+`GET /api/funis/:id/token/:canal`, jogando direto no clipboard. Cada cópia é
+registrada no log com o e-mail de quem clicou.
+
+Reenviar o mesmo evento é seguro: o funil conta contatos distintos por etapa,
+então duplicata não infla número, e conversa é upsert.
 
 "Resultados" é a soma de TODAS as conversões que a plataforma reporta — sem
 allowlist de ação e sem usar `primary_for_goal`, que nesta conta marca como
