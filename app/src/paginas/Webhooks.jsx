@@ -1,44 +1,156 @@
 import { useState } from 'react';
-import { Cartao, Estado, Esqueleto, Pill } from '../componentes/base';
+import { Cartao, Estado, Esqueleto, Pill, Sanfona } from '../componentes/base';
 import { buscar, useApi } from '../lib/api';
-import { fmtDataHora, fmtInt } from '../lib/formato';
+import { fmtDataHora, fmtInt, iniciais } from '../lib/formato';
+
+/** Copia um texto qualquer, com retorno visual curto. */
+function BotaoCopiarTexto({ texto, rotulo = 'Copiar payload' }) {
+  const [copiado, setCopiado] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        await navigator.clipboard.writeText(texto);
+        setCopiado(true);
+        setTimeout(() => setCopiado(false), 2000);
+      }}
+      className={`text-[10px] px-2 py-[3px] rounded-[8px] border cursor-pointer shrink-0
+        ${copiado
+          ? 'border-sucesso/40 bg-sucesso/12 text-sucesso'
+          : 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover'}`}
+    >
+      {copiado ? 'Copiado' : rotulo}
+    </button>
+  );
+}
+
+/** Tenta formatar o corpo como JSON legível; se não for, devolve como veio. */
+function corpoLegivel(corpo) {
+  if (!corpo) return '';
+  try {
+    return JSON.stringify(JSON.parse(corpo), null, 2);
+  } catch {
+    // Form-urlencoded: uma linha por campo lê melhor que uma linha só.
+    if (corpo.includes('=') && !corpo.trim().startsWith('{')) {
+      try {
+        return [...new URLSearchParams(corpo).entries()]
+          .map(([k, v]) => `${k} = ${v}`)
+          .join('\n');
+      } catch {
+        /* deixa cru */
+      }
+    }
+    return corpo;
+  }
+}
+
+const IconeDoc = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"
+       className="w-[14px] h-[14px] shrink-0" aria-hidden="true">
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z" />
+    <path d="M14 3v5h5M9 13h6M9 17h4" />
+  </svg>
+);
+
+function EventoDoLead({ e }) {
+  const [aberto, setAberto] = useState(false);
+  const texto = corpoLegivel(e.corpo);
+  const tom = e.status === 'aceito' ? 'sucesso' : e.status === 'aceito_sem_etapa' ? 'atencao' : 'perigo';
+  return (
+    <Sanfona
+      nivel={2}
+      aberta={aberto}
+      aoAlternar={() => setAberto((v) => !v)}
+      titulo={
+        <span className="flex items-center gap-2 min-w-0 text-xs">
+          <IconeDoc />
+          <span className="truncate">{e.etapa || '(sem etapa)'}</span>
+          <Pill tom={tom}>{e.status.replace(/_/g, ' ')}</Pill>
+        </span>
+      }
+      resumo={`${e.canal} · ${fmtDataHora(e.recebido_em)}`}
+    >
+      {e.detalhe && <div className="text-[11px] text-atencao mb-1">{e.detalhe}</div>}
+      <div className="flex justify-end mb-1">
+        <BotaoCopiarTexto texto={texto} />
+      </div>
+      <pre className="text-[10px] text-secundario whitespace-pre-wrap break-all bg-elevado
+                      rounded-[8px] p-2 max-h-72 overflow-auto">
+        {texto || '(corpo vazio)'}
+      </pre>
+    </Sanfona>
+  );
+}
 
 /**
- * Diário de bordo: o que chegou de fato, aceito ou recusado.
+ * Histórico por lead.
  *
- * Responde "o Rubeus está mandando?" e, se está, "por que foi recusado?".
- * Sem isso o diagnóstico de integração vira tentativa e erro às cegas.
+ * A leitura útil não é cronológica, é por pessoa: o que já chegou deste lead,
+ * na ordem, com o corpo cru de cada passagem de etapa. É o que reconstrói a
+ * jornada e permite copiar o payload inteiro quando algo não mapeia.
  */
-function DiarioDeBordo({ versao }) {
-  const { dados, carregando } = useApi('/api/funis/eventos?limite=30', `eventos-${versao}`);
+function HistoricoPorLead({ versao }) {
+  const [abertos, setAbertos] = useState({});
+  const { dados, carregando } = useApi('/api/funis/eventos-por-lead?leads=40', `lead-${versao}`);
+
   if (carregando || !dados) return <Esqueleto linhas={3} />;
-  if (!dados.itens.length) {
+  if (!dados.leads.length && !dados.sem_contato.length) {
     return (
       <Estado
         titulo="Nenhum evento recebido ainda"
-        mensagem="Assim que o Rubeus ou a Evolution dispararem para algum link, o payload aparece aqui — aceito ou recusado, com o motivo."
+        mensagem="Assim que o Rubeus ou a Evolution dispararem, cada lead aparece aqui com o histórico completo do que chegou."
       />
     );
   }
-  return dados.itens.map((e, i) => (
-    <div key={i} className={`py-2 ${i ? 'border-t border-borda' : ''}`}>
-      <div className="flex items-center gap-2 flex-wrap">
-        <Pill tom={e.status === 'aceito' ? 'sucesso' : 'perigo'}>
-          {e.status === 'aceito' ? 'aceito' : 'recusado'}
-        </Pill>
-        <span className="text-[11px] text-secundario">
-          {e.canal} · {e.funil_slug}
-        </span>
-        <span className="text-[11px] text-tenue">{fmtDataHora(e.recebido_em)}</span>
-      </div>
-      {e.detalhe && <div className="text-[11px] text-perigo mt-1">{e.detalhe}</div>}
-      {e.corpo && (
-        <pre className="text-[10px] text-tenue mt-1 whitespace-pre-wrap break-all bg-elevado rounded-[8px] p-2 max-h-32 overflow-auto">
-          {e.corpo}
-        </pre>
+
+  const alternar = (k) => setAbertos((a) => ({ ...a, [k]: !a[k] }));
+
+  return (
+    <div className="flex flex-col gap-2">
+      {dados.leads.map((l) => {
+        const todos = JSON.stringify(l.eventos.map((e) => e.corpo), null, 2);
+        return (
+          <Sanfona
+            key={l.contato_id}
+            aberta={!!abertos[l.contato_id]}
+            aoAlternar={() => alternar(l.contato_id)}
+            titulo={
+              <span className="flex items-center gap-2 min-w-0">
+                <span className="w-6 h-6 rounded-full bg-azul-700 text-white flex items-center
+                                 justify-center text-[10px] font-semibold shrink-0">
+                  {iniciais(l.contato_nome)}
+                </span>
+                <span className="text-[13px] font-semibold truncate">
+                  {l.contato_nome || `Contato ${l.contato_id}`}
+                </span>
+              </span>
+            }
+            resumo={`${l.eventos.length} evento(s) · ${l.funil_slug} · ${fmtDataHora(l.ultimo_em)}`}
+          >
+            <div className="flex justify-end mb-1">
+              <BotaoCopiarTexto texto={todos} rotulo="Copiar todos os payloads" />
+            </div>
+            {l.eventos.map((e, i) => (
+              <EventoDoLead key={i} e={e} />
+            ))}
+          </Sanfona>
+        );
+      })}
+
+      {dados.sem_contato.length > 0 && (
+        <Sanfona
+          aberta={!!abertos.__orfaos}
+          aoAlternar={() => alternar('__orfaos')}
+          titulo={<span className="text-[13px] font-semibold">Sem contato identificado</span>}
+          resumo={`${dados.sem_contato.length} evento(s)`}
+        >
+          {dados.sem_contato.map((e, i) => (
+            <EventoDoLead key={i} e={{ ...e, etapa: e.etapa || '(recusado)' }} />
+          ))}
+        </Sanfona>
       )}
     </div>
-  ));
+  );
 }
 
 const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n' };
@@ -243,7 +355,7 @@ export function Webhooks() {
 
       <Cartao>
         <div className="flex items-center justify-between gap-3 mb-2">
-          <div className="text-[13px] font-semibold">Últimos eventos recebidos</div>
+          <div className="text-[13px] font-semibold">Eventos recebidos, por lead</div>
           <button
             type="button"
             onClick={recarregar}
@@ -253,7 +365,7 @@ export function Webhooks() {
             Atualizar
           </button>
         </div>
-        <DiarioDeBordo versao={versao} />
+        <HistoricoPorLead versao={versao} />
       </Cartao>
 
       {dados.itens.map((f) => (

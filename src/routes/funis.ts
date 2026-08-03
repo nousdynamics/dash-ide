@@ -181,6 +181,62 @@ funis.post('/:id/regerar/:canal', async (c) => {
  * É a tela que responde "o Rubeus está mandando?" e, se está, "por que foi
  * recusado?" — sem isso, o diagnóstico vira tentativa e erro às cegas.
  */
+/**
+ * GET /api/funis/eventos-por-lead — histórico agrupado por contato.
+ *
+ * A leitura útil não é cronológica, é por pessoa: "o que já chegou deste lead",
+ * na ordem, com o corpo cru de cada passagem. É o que permite reconstruir a
+ * jornada e mandar o payload inteiro para análise quando algo não mapeia.
+ */
+funis.get('/eventos-por-lead', async (c) => {
+  const limite = Math.min(Number(c.req.query('leads') ?? 40) || 40, 100);
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT contato_id, contato_nome, etapa, canal, funil_slug, status, detalhe, corpo, recebido_em
+     FROM eventos_recebidos
+     WHERE contato_id IN (
+       SELECT contato_id FROM eventos_recebidos
+       WHERE contato_id IS NOT NULL
+       GROUP BY contato_id ORDER BY MAX(recebido_em) DESC LIMIT ?
+     )
+     ORDER BY recebido_em DESC, id DESC`,
+  )
+    .bind(limite)
+    .all();
+
+  const mapa = new Map<string, any>();
+  for (const l of results as Array<Record<string, any>>) {
+    if (!mapa.has(l.contato_id)) {
+      mapa.set(l.contato_id, {
+        contato_id: l.contato_id,
+        contato_nome: l.contato_nome,
+        funil_slug: l.funil_slug,
+        ultimo_em: l.recebido_em,
+        eventos: [],
+      });
+    }
+    const g = mapa.get(l.contato_id);
+    if (!g.contato_nome && l.contato_nome) g.contato_nome = l.contato_nome;
+    g.eventos.push({
+      etapa: l.etapa,
+      canal: l.canal,
+      status: l.status,
+      detalhe: l.detalhe,
+      corpo: l.corpo,
+      recebido_em: l.recebido_em,
+    });
+  }
+
+  // Eventos sem contato identificado ficam num grupo à parte, não somem.
+  const orfaos = await c.env.DB.prepare(
+    `SELECT canal, funil_slug, status, detalhe, corpo, recebido_em
+     FROM eventos_recebidos WHERE contato_id IS NULL
+     ORDER BY recebido_em DESC LIMIT 20`,
+  ).all();
+
+  return c.json({ leads: [...mapa.values()], sem_contato: orfaos.results });
+});
+
 funis.get('/eventos', async (c) => {
   const limite = Math.min(Number(c.req.query('limite') ?? 30) || 30, 100);
   const { results } = await c.env.DB.prepare(

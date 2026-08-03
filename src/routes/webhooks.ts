@@ -90,6 +90,7 @@ function registrarEvento(
   status: string,
   corpo: string | null,
   detalhe?: string,
+  lead?: { contato_id?: unknown; contato_nome?: unknown; etapa?: unknown },
 ) {
   const canal = c.req.path.split('/')[2] ?? null;
   const slug = c.req.param('slug') ?? null;
@@ -97,11 +98,17 @@ function registrarEvento(
     (async () => {
       try {
         await c.env.DB.prepare(
-          `INSERT INTO eventos_recebidos (webhook_id, canal, funil_slug, status, detalhe, corpo)
+          `INSERT INTO eventos_recebidos
+             (webhook_id, canal, funil_slug, status, detalhe, corpo, contato_id, contato_nome, etapa)
            VALUES ((SELECT w.id FROM webhooks w JOIN funis f ON f.id = w.funil_id
-                    WHERE w.canal = ? AND f.slug = ?), ?, ?, ?, ?, ?)`,
+                    WHERE w.canal = ? AND f.slug = ?), ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-          .bind(canal, slug, canal, slug, status, detalhe ?? null, corpo?.slice(0, 4000) ?? null)
+          .bind(
+            canal, slug, canal, slug, status, detalhe ?? null, corpo?.slice(0, 4000) ?? null,
+            lead?.contato_id != null ? String(lead.contato_id) : null,
+            lead?.contato_nome != null ? String(lead.contato_nome) : null,
+            lead?.etapa != null ? String(lead.etapa) : null,
+          )
           .run();
         // Mantém só as 50 últimas por webhook: o corpo tem dado de lead e não
         // precisa viver além do tempo de diagnosticar a integração.
@@ -224,6 +231,7 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       semEtapa
         ? 'Gravado, mas sem etapa: mapeie um campo de etapa nos parâmetros do fluxo do Rubeus.'
         : undefined,
+      r.dados as any,
     );
     d = r.dados;
   }
