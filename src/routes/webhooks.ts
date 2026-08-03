@@ -15,6 +15,9 @@ import type { AppEnv } from '../lib/tipos';
  * As métricas de mídia não passam por aqui — vêm da consulta ao vivo em
  * /api/ads.
  */
+/** Marcador de etapa ausente — visível na tela, em vez de sumir. */
+const ETAPA_DESCONHECIDA = '(etapa não informada)';
+
 const webhooks = new Hono<AppEnv>();
 
 /**
@@ -189,10 +192,24 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       processo_nome: c.req.query('processo'),
       status: c.req.query('status'),
     };
+    let semEtapa = false;
     const r = await validarCorpo(c.req.raw, etapaSchema, c.req.path, (b) => {
       const norm = normalizarEtapa(b) as Record<string, unknown>;
       for (const [k, v] of Object.entries(daQuery)) {
         if (v && (norm[k] === undefined || norm[k] === null || norm[k] === '')) norm[k] = v;
+      }
+      /*
+       * Evento real nunca é descartado.
+       *
+       * Se a etapa não veio nem no corpo nem na query, gravar marcado é melhor
+       * que devolver 400: o lead existe, o CRM não vai reenviar, e um 400 às 8h
+       * da manhã vira buraco permanente no histórico. Fica visível no diário
+       * como "sem etapa" para o mapeamento ser corrigido, e o evento continua
+       * lá para ser reprocessado.
+       */
+      if (!norm.etapa) {
+        norm.etapa = ETAPA_DESCONHECIDA;
+        semEtapa = true;
       }
       return norm;
     });
@@ -200,7 +217,14 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       registrarEvento(c, r.erro, cru, JSON.stringify(r.detalhe).slice(0, 500));
       return c.json({ erro: r.erro, detalhe: r.detalhe }, 400);
     }
-    registrarEvento(c, 'aceito', cru);
+    registrarEvento(
+      c,
+      semEtapa ? 'aceito_sem_etapa' : 'aceito',
+      cru,
+      semEtapa
+        ? 'Gravado, mas sem etapa: mapeie um campo de etapa nos parâmetros do fluxo do Rubeus.'
+        : undefined,
+    );
     d = r.dados;
   }
 

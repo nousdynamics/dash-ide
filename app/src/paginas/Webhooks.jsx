@@ -50,17 +50,14 @@ const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n' 
  * área de transferência. Assim ele não fica no HTML, não aparece em screenshot
  * e não é lido por quem olha a tela por cima do ombro.
  */
-function BotaoCopiar({ funilId, canal, etapa }) {
+function BotaoCopiar({ funilId, canal }) {
   const [estado, setEstado] = useState('pronto');
 
   const copiar = async () => {
     setEstado('buscando');
     try {
       const { url } = await buscar(`/api/funis/${funilId}/token/${canal}`);
-      // A etapa entra na URL porque o fluxo de automação do Rubeus não a manda
-      // no corpo: ela está no gatilho do fluxo, não no dado.
-      const completa = etapa ? `${url}&etapa=${encodeURIComponent(etapa)}` : url;
-      await navigator.clipboard.writeText(completa);
+      await navigator.clipboard.writeText(url);
       setEstado('copiado');
       setTimeout(() => setEstado('pronto'), 2000);
     } catch {
@@ -100,7 +97,6 @@ function BotaoCopiar({ funilId, canal, etapa }) {
 
 function LinhaWebhook({ funilId, w, aoRegerar }) {
   const [confirmando, setConfirmando] = useState(false);
-  const [etapa, setEtapa] = useState('');
 
   return (
     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 py-2 border-t border-borda first:border-t-0">
@@ -115,7 +111,6 @@ function LinhaWebhook({ funilId, w, aoRegerar }) {
         </div>
         <div className="text-[11px] text-tenue mt-1 font-mono break-all">
           {w.caminho}?t=<span className="text-tenue/70">••••••••••••</span>
-          {w.canal === 'rubeus' && etapa && `&etapa=${etapa}`}
         </div>
         {w.ultimo_uso_em && (
           <div className="text-[11px] text-tenue mt-px">Último evento: {fmtDataHora(w.ultimo_uso_em)}</div>
@@ -123,18 +118,7 @@ function LinhaWebhook({ funilId, w, aoRegerar }) {
       </div>
 
       <div className="flex items-center gap-2 shrink-0 flex-wrap">
-        {w.canal === 'rubeus' && (
-          <input
-            type="text"
-            value={etapa}
-            onChange={(e) => setEtapa(e.target.value)}
-            placeholder="Etapa (ex.: Oportunidade)"
-            aria-label="Etapa deste fluxo de automação"
-            title="Um link por etapa: o fluxo de automação do Rubeus não manda a etapa no corpo, então ela vai na URL"
-            className="bg-superficie text-primario border border-borda-forte rounded-[8px] px-2 py-[5px] text-[11px] w-[190px]"
-          />
-        )}
-        <BotaoCopiar funilId={funilId} canal={w.canal} etapa={etapa} />
+        <BotaoCopiar funilId={funilId} canal={w.canal} />
         {confirmando ? (
           <span className="flex items-center gap-2 text-[11px]">
             <button
@@ -250,9 +234,10 @@ export function Webhooks() {
           Ao criar, os três links já são gerados. As etapas do funil não são cadastradas aqui —
           são descobertas a partir dos eventos que o Rubeus enviar.
           <br />
-          <strong className="text-secundario">No fluxo de automação do Rubeus</strong>, preencha o
-          campo de etapa antes de copiar: o fluxo dispara por gatilho de etapa mas não manda essa
-          informação no corpo, então ela vai na URL. Um link por etapa que você quiser monitorar.
+          <strong className="text-secundario">Um link por funil, usado em todas as etapas dele.</strong>{' '}
+          No fluxo de automação do Rubeus, inclua um parâmetro com a etapa nos "Enviar parâmetros"
+          da ação HTTP — o sistema separa as etapas depois de receber. Evento que chegar sem etapa
+          é gravado assim mesmo e aparece marcado no diário abaixo, para nenhum lead se perder.
         </div>
       </Cartao>
 

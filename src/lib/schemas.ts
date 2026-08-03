@@ -41,11 +41,22 @@ const timestamp = z.string().min(1).transform((v) => {
  * "contato_id" transformaria erro de digitação em lead perdido — e o evento
  * perdido não volta.
  */
+/** Lê caminho aninhado ("resumoAtual.nome") sem estourar em nível ausente. */
+const fundo = (dado: unknown, caminho: string): unknown =>
+  caminho.split('.').reduce<any>((o, k) => (o == null ? undefined : o[k]), dado);
+
 const aliases = (dado: unknown, nomes: string[]): unknown => {
   if (!dado || typeof dado !== 'object') return undefined;
   const o = dado as Record<string, unknown>;
   for (const n of nomes) {
-    if (o[n] !== undefined && o[n] !== null && o[n] !== '') return o[n];
+    const v = n.includes('.') ? fundo(dado, n) : o[n];
+    /*
+     * Só primitivo serve. No payload padrão do Rubeus, `processo` é um objeto
+     * {id, nome} — devolvê-lo faria o schema receber objeto onde espera string
+     * e recusar o evento, mesmo tendo o dado logo ali em `processo.nome`.
+     */
+    if (v === undefined || v === null || v === '') continue;
+    if (typeof v === 'string' || typeof v === 'number') return v;
   }
   return undefined;
 };
@@ -54,18 +65,57 @@ const aliases = (dado: unknown, nomes: string[]): unknown => {
 export const normalizarEtapa = (bruto: unknown): unknown => {
   if (!bruto || typeof bruto !== 'object') return bruto;
   const o = { ...(bruto as Record<string, unknown>) };
-  o.contato_id ??= aliases(bruto, ['contato', 'contatoId', 'id_contato', 'idContato', 'id', 'aluno_id', 'lead_id']);
-  o.contato_nome ??= aliases(bruto, ['nome', 'aluno', 'contatoNome', 'nome_contato', 'lead']);
-  o.etapa ??= aliases(bruto, ['etapa_atual', 'etapaAtual', 'stage', 'situacao', 'resumo', 'etapa_nome']);
-  o.registrado_em ??= aliases(bruto, ['data', 'data_hora', 'dataHora', 'criacao', 'timestamp', 'ocorrido_em', 'registradoEm']);
-  o.processo_nome ??= aliases(bruto, ['processo', 'processoNome', 'funil']);
-  o.processo_id ??= aliases(bruto, ['processoId', 'id_processo']);
-  o.origem ??= aliases(bruto, ['canal', 'origem_nome']);
-  // O fluxo de automação manda contato como `id` e o nome em CAIXA ALTA;
-  // telefone e e-mail vêm soltos e ainda não têm coluna, mas ficam no diário.
-  o.unidade ??= aliases(bruto, ['cidade', 'unidade_nome']);
-  o.curso_codigo ??= aliases(bruto, ['curso', 'cursoCodigo']);
-  o.responsavel_comercial ??= aliases(bruto, ['responsavel', 'consultor']);
+
+  /*
+   * Preenche quando falta OU quando o que está lá não é primitivo.
+   *
+   * `??=` sozinho não bastava: no payload padrão do Rubeus, `status` já existe
+   * como objeto {id, nome}, então a atribuição nunca acontecia e o schema
+   * recusava o evento por receber objeto onde espera string.
+   */
+  const preencher = (campo: string, nomes: string[]) => {
+    const atual = o[campo];
+    const ok = typeof atual === 'string' || typeof atual === 'number';
+    if (!ok) {
+      const v = aliases(bruto, nomes);
+      if (v !== undefined) o[campo] = v;
+      else if (atual !== null && atual !== undefined && !ok) delete o[campo];
+    }
+  };
+  /*
+   * Um único fluxo do Rubeus atende várias etapas — sete, no funil de
+   * Pós-Graduação. Todas apontam para a mesma URL, então a etapa PRECISA vir no
+   * corpo; separar por URL exigiria um fluxo por etapa, que não é como a conta
+   * está montada. Aqui cobrimos tanto o payload padrão do Rubeus
+   * (`resumoAtual.nome`) quanto o montado campo a campo no fluxo.
+   */
+
+  preencher('etapa', ['etapa', 'etapa_atual', 'etapaAtual', 'stage', 'situacao', 'etapa_nome', 'nome_etapa', 'resumoAtual.nome', 'resumo.nome', 'etapa.nome', 'situacao.nome']);
+  /*
+   * `contatos.0.id` vem ANTES de `id`.
+   *
+   * No payload padrão do Rubeus, `id` no topo é o id do registro de processo,
+   * não do contato — usá-lo criaria um "lead" por registro e quebraria a
+   * contagem de contatos distintos do funil. Já no payload montado campo a
+   * campo pelo fluxo, `id` É o contato, e por isso continua na lista, depois.
+   */
+  preencher('contato_id', ['contatos.0.id', 'contatoPrincipal.id', 'contato', 'contatoId', 'id_contato', 'idContato', 'aluno_id', 'lead_id', 'id']);
+  preencher('contato_nome', ['nome', 'aluno', 'contatoNome', 'nome_contato', 'lead', 'contatos.0.nome']);
+  preencher('registrado_em', ['data', 'data_hora', 'dataHora', 'criacao', 'timestamp', 'ocorrido_em', 'registradoEm']);
+  preencher('processo_nome', ['processo.nome', 'processoNome', 'funil', 'processo']);
+  preencher('processo_id', ['processo.id', 'processoId', 'id_processo']);
+  preencher('status', ['status.nome', 'situacaoNome', 'status']);
+  preencher('origem', ['origem.nome', 'canal', 'origem_nome', 'origem']);
+  preencher('unidade', ['unidade.nome', 'cidade', 'unidade_nome', 'unidade']);
+  preencher('curso_codigo', ['cursos.0.codCurso', 'curso', 'cursoCodigo']);
+  preencher('curso_id', ['cursos.0.id', 'cursoId']);
+  preencher('modalidade', ['modalidade.nome', 'modalidade']);
+  preencher('responsavel_comercial', ['responsavel.nome', 'responsavel', 'consultor']);
+  // O `id` do topo só é o registro de processo quando o contato veio aninhado.
+  preencher('registro_processo_id', ['registroProcessoId']);
+  if (o.registro_processo_id === undefined && aliases(bruto, ['contatos.0.id']) !== undefined) {
+    preencher('registro_processo_id', ['id']);
+  }
   // Sem data explícita, o evento é agora: é quando o CRM disparou.
   o.registrado_em ??= new Date().toISOString();
   return o;
