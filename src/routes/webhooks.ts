@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import type { ZodTypeAny, output as ZodOutput } from 'zod';
-import { exigirSegredoDeWebhook } from '../lib/auth';
 import { CorpoInvalido, lerCorpoJson } from '../lib/corpo';
 import { conversaSchema, etapaSchema } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
@@ -25,8 +24,10 @@ const webhooks = new Hono<AppEnv>();
  *   painel. É o caminho novo: cada origem tem a própria credencial, então dá
  *   para revogar uma sem derrubar as outras, e o evento já chega sabendo a qual
  *   funil pertence.
- * - `/webhook/rubeus/etapa` com header `X-Webhook-Secret` — caminho antigo,
- *   mantido para não quebrar integração já configurada.
+ * O caminho antigo, com `X-Webhook-Secret` no header, foi removido: era um
+ * segredo único para todas as origens e todos os funis, sem como revogar um
+ * sem derrubar os outros, e sem dizer de qual funil o evento vinha. Manter os
+ * dois esquemas só preservaria o elo mais fraco.
  */
 async function resolverToken(c: any): Promise<{ funilId: number; slug: string } | null> {
   const token = c.req.query('t');
@@ -103,9 +104,6 @@ async function validarCorpo<S extends ZodTypeAny>(
   return { ok: true, dados: r.data };
 }
 
-/** POST /webhook/rubeus/etapa — caminho antigo, autenticado por header. */
-webhooks.post('/rubeus/etapa', exigirSegredoDeWebhook, (c) => gravarEtapa(c, null));
-
 /** Grava um evento de etapa, com ou sem funil associado. */
 async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
   let d = jaValidado;
@@ -159,8 +157,6 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
  * conversa conforme ela avança, e cada reemissão deve atualizar a linha — o
  * tempo de resposta só é conhecido depois da primeira resposta do atendente.
  */
-webhooks.post('/evolution/conversa', exigirSegredoDeWebhook, (c) => gravarConversa(c, null));
-
 /** Grava/atualiza uma conversa, com ou sem funil associado. */
 async function gravarConversa(c: any, funilId: number | null) {
   const r = await validarCorpo(c.req.raw, conversaSchema, c.req.path);

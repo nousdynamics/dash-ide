@@ -9,17 +9,17 @@ import { fmtDec, fmtInt } from '../lib/formato';
  * dois deles acumula mais contatos que a etapa anterior, que existe só em um.
  */
 export function Funil() {
-  const [processo, setProcesso] = useState(null);
+  const [funil, setFunil] = useState(null);
   const { dados, carregando, erro } = useApi(
-    `/api/funil?dias=90${processo ? `&processo_id=${encodeURIComponent(processo)}` : ''}`,
-    processo ?? 'inicial',
+    `/api/funil?dias=90${funil ? `&funil_id=${encodeURIComponent(funil)}` : ''}`,
+    funil ?? 'inicial',
   );
 
   const cabecalho = (
     <div>
       <div className="text-[19px] font-semibold tracking-tight">Funil de leads</div>
       <div className="text-tenue text-xs mt-[2px]">
-        Contatos distintos que passaram por cada etapa · últimos 90 dias
+        Etapas descobertas a partir dos eventos do Rubeus · últimos 90 dias
       </div>
     </div>
   );
@@ -27,10 +27,10 @@ export function Funil() {
   if (erro) return <>{cabecalho}<Cartao><Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} /></Cartao></>;
   if (carregando || !dados) return <>{cabecalho}<Esqueleto /></>;
 
-  const processos = dados.processos_disponiveis || [];
-  // Na primeira visita assume o processo com mais leads.
-  if (!processo && processos.length) {
-    setProcesso(String(processos[0].processo_id));
+  const funis = dados.funis_disponiveis || [];
+  // Na primeira visita assume o funil com mais leads.
+  if (!funil && funis.length) {
+    setFunil(String(funis[0].id));
     return <>{cabecalho}<Esqueleto /></>;
   }
 
@@ -42,15 +42,12 @@ export function Funil() {
       <Cartao>
         <div className="flex items-center justify-between gap-3 mb-3">
           <div className="text-[13px] font-semibold">Etapas do Rubeus</div>
-          {processos.length > 0 && (
+          {funis.length > 0 && (
             <Select
-              rotulo="Filtrar por processo"
-              valor={processo ?? ''}
-              aoTrocar={setProcesso}
-              opcoes={processos.map((p) => [
-                String(p.processo_id),
-                `${p.processo_nome || `Processo ${p.processo_id}`} (${fmtInt(p.leads)})`,
-              ])}
+              rotulo="Filtrar por funil"
+              valor={funil ?? ''}
+              aoTrocar={setFunil}
+              opcoes={funis.map((f) => [String(f.id), `${f.nome} (${fmtInt(f.leads)})`])}
             />
           )}
         </div>
@@ -118,7 +115,7 @@ export function Funil() {
         ) : (
           <Estado
             titulo="Nenhum lead neste recorte"
-            mensagem="Assim que o Rubeus disparar eventos de etapa para o Worker, o funil aparece aqui."
+            mensagem="Cole o link deste funil no Rubeus, em Funis e webhooks. As etapas aparecem sozinhas conforme os eventos chegam."
           />
         )}
       </Cartao>

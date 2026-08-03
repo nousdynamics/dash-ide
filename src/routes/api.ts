@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { ETAPAS_FUNIL } from '../lib/etapas';
 import { funilQuerySchema, paginacaoQuerySchema, periodoQuerySchema } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 
@@ -83,7 +82,16 @@ api.get('/overview', async (c) => {
 });
 
 /**
- * GET /api/funil?processo_id=&dias=90 — contagem por etapa.
+ * GET /api/funil?funil_id=&dias=90 — contagem por etapa.
+ *
+ * As etapas vêm do DADO, não de uma lista fixa no código. Cada funil do Rubeus
+ * usa um conjunto diferente — a lista canônica de oito nomes que existia aqui
+ * estava errada para três dos quatro funis reais, e qualquer rename feito lá
+ * quebraria em silêncio.
+ *
+ * A ordem sai da contagem de contatos distintos em ordem decrescente, que é a
+ * própria semântica de funil: etapa anterior tem mais gente que a seguinte.
+ * Isso se autocorrige conforme o dado chega, sem ninguém manter ordem à mão.
  *
  * Semântica: quantos contatos DISTINTOS já passaram por cada etapa na janela.
  * Não é "quantos estão parados na etapa agora" — um lead que avançou continua
@@ -93,35 +101,33 @@ api.get('/overview', async (c) => {
 api.get('/funil', async (c) => {
   const q = funilQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
-  const { processo_id, dias } = q.data;
+  const { funil_id, dias } = q.data;
   const j = janelas(dias);
+  const fid = funil_id ? Number(funil_id) : null;
 
-  const [contagens, processos] = await Promise.all([
+  const [contagens, funis] = await Promise.all([
     c.env.DB.prepare(
       `SELECT etapa, COUNT(DISTINCT contato_id) AS total
        FROM leads_etapa
-       WHERE registrado_em >= ? AND (? IS NULL OR processo_id = ?)
-       GROUP BY etapa`,
-    ).bind(j.inicio, processo_id ?? null, processo_id ?? null).all(),
+       WHERE registrado_em >= ? AND (? IS NULL OR funil_id = ?)
+       GROUP BY etapa
+       ORDER BY total DESC`,
+    ).bind(j.inicio, fid, fid).all(),
 
-    // Agrupa só por processo_id: agrupar também pelo nome duplicaria o processo
-    // no seletor sempre que um evento chegasse sem `processo_nome`.
+    // Todos os funis cadastrados aparecem no seletor, mesmo os que ainda não
+    // receberam evento — senão um funil recém-criado some da tela e parece que
+    // o cadastro não funcionou.
     c.env.DB.prepare(
-      `SELECT processo_id, MAX(processo_nome) AS processo_nome,
-              COUNT(DISTINCT contato_id) AS leads
-       FROM leads_etapa
-       WHERE processo_id IS NOT NULL
-       GROUP BY processo_id
-       ORDER BY leads DESC`,
+      `SELECT f.id, f.nome,
+              (SELECT COUNT(DISTINCT l.contato_id) FROM leads_etapa l WHERE l.funil_id = f.id) AS leads
+       FROM funis f WHERE f.ativo = 1 ORDER BY leads DESC, f.id`,
     ).all(),
   ]);
 
-  const porEtapa = new Map<string, number>();
-  for (const linha of contagens.results as Array<{ etapa: string; total: number }>) {
-    porEtapa.set(linha.etapa, num(linha.total));
-  }
-
-  const etapas = ETAPAS_FUNIL.map((etapa) => ({ etapa, total: porEtapa.get(etapa) ?? 0 }));
+  const etapas = (contagens.results as Array<{ etapa: string; total: number }>).map((l) => ({
+    etapa: l.etapa,
+    total: num(l.total),
+  }));
 
   const passos = etapas.map((atual, i) => {
     const anterior = i === 0 ? null : etapas[i - 1];
@@ -145,11 +151,11 @@ api.get('/funil', async (c) => {
   }
 
   return c.json({
-    processo_id: processo_id ?? null,
+    funil_id: fid,
     periodo: { dias, de: j.inicio, ate: j.fim },
     etapas: passos,
     etapa_maior_queda: maiorQueda,
-    processos_disponiveis: processos.results,
+    funis_disponiveis: funis.results,
   });
 });
 

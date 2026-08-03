@@ -59,14 +59,16 @@ quando houver migration nova.
 
 ## Endpoints
 
-Os `POST /webhook/*` exigem o header `X-Webhook-Secret` e ficam **fora** do
+Os `POST /webhook/*` exigem o token do funil na query (`?t=`) e ficam **fora** do
 Cloudflare Access (são chamadas servidor-a-servidor). Os `GET /api/*` não têm
 auth própria — o Access barra antes de chegar no Worker.
 
 | Método | Rota | Origem |
 |---|---|---|
-| POST | `/webhook/rubeus/etapa` | Fluxo de automação do Rubeus |
-| POST | `/webhook/evolution/conversa` | Evolution API (upsert por contato+início) |
+| POST | `/webhook/rubeus/:funil?t=` | Fluxo de automação do Rubeus |
+| POST | `/webhook/evolution/:funil?t=` | Evolution API (upsert por contato+início) |
+| POST | `/webhook/n8n/:funil?t=` | Contingência: reenvio e injeção manual |
+| GET/POST/DELETE | `/api/funis…` | Cadastro de funil e gestão dos tokens |
 | GET | `/api/overview?dias=30` | Leads e conversas (D1) |
 | GET | `/api/funil?processo_id=&dias=90` | Contagem por etapa + taxas (D1) |
 | GET | `/api/conversas?limite=&offset=` | Lista paginada (D1) |
@@ -212,9 +214,14 @@ Dois detalhes de leitura de dado que valem saber:
 - **As séries dos gráficos são preenchidas com zero nos dias sem registro.** A
   API só devolve dias que têm linha; plotar isso direto espaça os pontos por
   índice em vez de por data, e a linha mente sobre o ritmo.
-- **O funil é sempre de um processo só.** Somar processos gera taxa acima de
-  100%, porque cada processo usa um conjunto diferente de etapas. Na primeira
-  visita o painel assume o processo com mais leads.
+- **O funil é sempre de um só.** Somar funis gera taxa acima de 100%, porque
+  cada um usa um conjunto diferente de etapas. Na primeira visita o painel
+  assume o de maior volume.
+- **As etapas vêm do dado, não de lista fixa no código.** A lista canônica de
+  oito nomes que existia aqui estava errada para três dos quatro funis reais, e
+  qualquer rename feito no Rubeus quebraria em silêncio. A ordem sai da
+  contagem de contatos distintos em ordem decrescente — a própria semântica de
+  funil — e se autocorrige conforme o dado chega.
 
 ## Decisões de implementação que não estavam no plano
 

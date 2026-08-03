@@ -73,6 +73,6 @@ export const paginacaoQuerySchema = z.object({
 });
 
 export const funilQuerySchema = z.object({
-  processo_id: z.string().min(1).optional(),
+  funil_id: z.string().min(1).optional(),
   dias: z.coerce.number().int().min(1).max(365).default(90),
 });
