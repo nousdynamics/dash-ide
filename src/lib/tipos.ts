@@ -10,5 +10,7 @@ export type AppEnv = {
   Variables: {
     /** E-mail injetado pelo Cloudflare Access nas rotas do painel. */
     usuarioEmail?: string;
+    /** Funil resolvido a partir do token do webhook. */
+    funilId?: number;
   };
 };

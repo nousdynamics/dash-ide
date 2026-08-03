@@ -12,6 +12,7 @@ const VisaoGeral = lazy(() => import('./paginas/VisaoGeral').then((m) => ({ defa
 const Campanhas = lazy(() => import('./paginas/Campanhas').then((m) => ({ default: m.Campanhas })));
 const Funil = lazy(() => import('./paginas/Funil').then((m) => ({ default: m.Funil })));
 const Conversas = lazy(() => import('./paginas/Conversas').then((m) => ({ default: m.Conversas })));
+const Webhooks = lazy(() => import('./paginas/Webhooks').then((m) => ({ default: m.Webhooks })));
 
 const icone = (d) => (
   <svg
@@ -40,6 +41,12 @@ const ICONES = {
   funil: icone(<path d="M3 4h18l-7 8v7l-4 2v-9L3 4Z" />),
   campanhas: icone(<path d="M3 20h4V10H3v10Zm7 0h4V4h-4v16Zm7 0h4v-6h-4v6Z" />),
   conversas: icone(<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.7-.8L3 21l1.9-5.2A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z" />),
+  webhooks: icone(
+    <>
+      <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" />
+      <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />
+    </>
+  ),
 };
 
 const PAGINAS = [
@@ -47,6 +54,7 @@ const PAGINAS = [
   { id: 'funil', nome: 'Funil de leads', curto: 'Funil' },
   { id: 'campanhas', nome: 'Campanhas', curto: 'Camp.' },
   { id: 'conversas', nome: 'Conversas', curto: 'Chat' },
+  { id: 'webhooks', nome: 'Funis e webhooks', curto: 'Funis' },
 ];
 
 const CHAVE_RETRAIDA = 'painel-ide:sidebar-retraida';
@@ -176,6 +184,7 @@ export default function App() {
           {rota === 'funil' && <Funil />}
           {rota === 'campanhas' && <Campanhas {...props} />}
           {rota === 'conversas' && <Conversas />}
+          {rota === 'webhooks' && <Webhooks />}
         </Suspense>
       </main>
 
