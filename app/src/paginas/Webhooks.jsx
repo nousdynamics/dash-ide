@@ -13,9 +13,13 @@ const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n' 
  * e não é lido por quem olha a tela por cima do ombro.
  */
 const ROTULO_EVENTO = {
+  geral: 'Geral — recebe tudo',
   registro_processo: 'Novo registro de processo',
-  contato: 'Criação/edição de contato',
-  atividade: 'Criação/edição de atividade',
+  ocorrencia_evento: 'Ocorrência de um evento',
+  contato_criacao: 'Criação de contato',
+  contato_edicao: 'Edição de contato',
+  atividade_criacao: 'Criação de atividade',
+  atividade_edicao: 'Edição de atividade',
 };
 
 function BotaoCopiar({ funilId, canal, rota }) {
@@ -214,16 +218,23 @@ export function Webhooks() {
         <Cartao>
           <div className="text-[13px] font-semibold">Webhooks por tipo de evento</div>
           <div className="text-[11px] text-tenue mt-1 mb-2 leading-relaxed">
-            O Rubeus cadastra webhook por <strong className="text-secundario">evento</strong>, não por
-            funil — uma URL recebe "novo registro de processo" de todos os processos. O funil de cada
-            lead é resolvido pelo processo que vem no corpo. Use estes na tela "Definição de webhooks".
+            Um link por gatilho da tela "Definição de webhooks" do Rubeus. O funil de cada lead é
+            resolvido pelo processo que vem no corpo, então a mesma URL serve todos os processos —
+            e nos gatilhos que permitem escolher funil, dá para usar a URL do funil específico se
+            preferir separar na origem.
+            <br />
+            <strong className="text-secundario">O "Geral" aceita qualquer payload e nunca recusa</strong>:
+            o que ele não souber interpretar fica guardado cru no histórico do lead, para ser tratado
+            depois. Use enquanto o formato de um gatilho ainda não é conhecido.
           </div>
-          {dados.por_evento.map((w) => (
+          {[...dados.por_evento].sort((a, b) =>
+            a.evento === 'geral' ? -1 : b.evento === 'geral' ? 1 : a.evento.localeCompare(b.evento),
+          ).map((w) => (
             <div key={w.id} className="flex flex-col md:flex-row md:items-center md:justify-between
                                        gap-2 py-2 border-t border-borda">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-semibold">
+                  <span className={`text-xs font-semibold ${w.evento === 'geral' ? 'text-azul-300' : ''}`}>
                     {ROTULO_CANAL[w.canal] || w.canal} · {ROTULO_EVENTO[w.evento] || w.evento}
                   </span>
                   {w.total_recebido > 0

@@ -376,6 +376,33 @@ async function gravarConversa(c: any, funilId: number | null) {
  * Rotas por tipo de evento. Vêm antes das por slug: `/rubeus/:slug` casaria
  * com `/rubeus/evento` e engoliria estas.
  */
+/**
+ * POST /webhook/rubeus/evento/geral — porta de entrada que aceita qualquer coisa.
+ *
+ * Declarada antes de `/rubeus/evento/:tipo`, que casaria com "geral" e mandaria
+ * o payload para a validação estrita — exatamente o que este endpoint existe
+ * para evitar.
+ *
+ * Nesta fase do projeto o formato de cada gatilho ainda não é todo conhecido.
+ * Recusar por schema perderia justamente o payload que ensinaria a tratá-lo, e
+ * evento do CRM não é reenviado. Então este endpoint nunca devolve 400: tenta
+ * interpretar como etapa e, se não der, guarda cru no diário para análise.
+ */
+webhooks.post('/rubeus/evento/geral', exigirToken, async (c) => {
+  const cru = await c.req.raw.clone().text().catch(() => null);
+  const etapa = await validarCorpo(c.req.raw.clone(), etapaSchema, c.req.path, normalizarEtapa);
+
+  if (etapa.ok) return gravarEtapa(c, null, etapa.dados);
+
+  registrarEvento(
+    c,
+    'guardado_sem_tratar',
+    cru,
+    'Recebido pelo webhook geral. Formato ainda não mapeado — o corpo está guardado para análise.',
+  );
+  return c.json({ ok: true, tratado: false }, 202);
+});
+
 webhooks.post('/rubeus/evento/:tipo', exigirToken, (c) => gravarEtapa(c, null));
 webhooks.post('/evolution/evento/:tipo', exigirToken, (c) => gravarConversa(c, null));
 webhooks.post('/n8n/evento/:tipo', exigirToken, (c) => gravarEtapa(c, null));
