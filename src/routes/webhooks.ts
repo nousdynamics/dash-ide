@@ -171,7 +171,31 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
   let d = jaValidado;
   if (!d) {
     const cru = await c.req.raw.clone().text().catch(() => null);
-    const r = await validarCorpo(c.req.raw, etapaSchema, c.req.path, normalizarEtapa);
+    /*
+     * A query completa o payload.
+     *
+     * O fluxo de automação do Rubeus dispara a partir de um gatilho de etapa
+     * ("entrou na etapa Oportunidade"), mas o corpo que ele monta não carrega
+     * qual etapa é — a informação está no fluxo, não no dado. Como cada fluxo
+     * tem a própria URL, a etapa vai nela: ?etapa=Oportunidade. Quem configura
+     * cola um link por ação, que é exatamente o modelo de "um webhook por
+     * etapa" que se quer monitorar.
+     *
+     * O corpo vence a query quando os dois trazem o campo: dado real do evento
+     * é mais confiável que valor fixo na URL.
+     */
+    const daQuery = {
+      etapa: c.req.query('etapa'),
+      processo_nome: c.req.query('processo'),
+      status: c.req.query('status'),
+    };
+    const r = await validarCorpo(c.req.raw, etapaSchema, c.req.path, (b) => {
+      const norm = normalizarEtapa(b) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(daQuery)) {
+        if (v && (norm[k] === undefined || norm[k] === null || norm[k] === '')) norm[k] = v;
+      }
+      return norm;
+    });
     if (!r.ok) {
       registrarEvento(c, r.erro, cru, JSON.stringify(r.detalhe).slice(0, 500));
       return c.json({ erro: r.erro, detalhe: r.detalhe }, 400);

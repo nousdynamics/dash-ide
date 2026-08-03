@@ -123,6 +123,17 @@ caminho, a tela mostra `?t=••••`, e o botão copiar busca a URL completa
 `GET /api/funis/:id/token/:canal`, jogando direto no clipboard. Cada cópia é
 registrada no log com o e-mail de quem clicou.
 
+**O fluxo de automação do Rubeus não manda a etapa no corpo.** Ele dispara por
+gatilho de etapa, mas o payload que monta traz só dados do contato — a etapa
+está no fluxo, não no dado. Por isso ela vai na URL: `…?t=<token>&etapa=Oportunidade`.
+Um link por etapa que se queira monitorar, que é o próprio modelo de rastrear a
+jornada. O corpo vence a query quando os dois trazem o campo: dado real do
+evento é mais confiável que valor fixo na URL.
+
+O corpo pode chegar como `application/x-www-form-urlencoded` — é o que o Rubeus
+manda de fato — e os nomes de campo são os que quem configurou escolheu, então
+o Worker reconhece apelidos (`id`, `nome`, `canal`, `cidade`, `etapa_atual`…).
+
 Reenviar o mesmo evento é seguro: o funil conta contatos distintos por etapa,
 então duplicata não infla número, e conversa é upsert.
 

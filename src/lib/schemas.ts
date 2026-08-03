@@ -61,6 +61,9 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
   o.processo_nome ??= aliases(bruto, ['processo', 'processoNome', 'funil']);
   o.processo_id ??= aliases(bruto, ['processoId', 'id_processo']);
   o.origem ??= aliases(bruto, ['canal', 'origem_nome']);
+  // O fluxo de automação manda contato como `id` e o nome em CAIXA ALTA;
+  // telefone e e-mail vêm soltos e ainda não têm coluna, mas ficam no diário.
+  o.unidade ??= aliases(bruto, ['cidade', 'unidade_nome']);
   o.curso_codigo ??= aliases(bruto, ['curso', 'cursoCodigo']);
   o.responsavel_comercial ??= aliases(bruto, ['responsavel', 'consultor']);
   // Sem data explícita, o evento é agora: é quando o CRM disparou.
