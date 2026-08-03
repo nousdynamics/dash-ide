@@ -105,7 +105,7 @@ api.get('/funil', async (c) => {
   const j = janelas(dias);
   const fid = funil_id ? Number(funil_id) : null;
 
-  const [contagens, funis] = await Promise.all([
+  const [contagens, anteriores, funis] = await Promise.all([
     c.env.DB.prepare(
       `SELECT etapa, COUNT(DISTINCT contato_id) AS total
        FROM leads_etapa
@@ -113,6 +113,15 @@ api.get('/funil', async (c) => {
        GROUP BY etapa
        ORDER BY total DESC`,
     ).bind(j.inicio, fid, fid).all(),
+
+    // Mesma janela, deslocada para trás. É o que permite dizer "caiu 71%" em
+    // cada etapa, e não só "hoje tem 25".
+    c.env.DB.prepare(
+      `SELECT etapa, COUNT(DISTINCT contato_id) AS total
+       FROM leads_etapa
+       WHERE registrado_em >= ? AND registrado_em < ? AND (? IS NULL OR funil_id = ?)
+       GROUP BY etapa`,
+    ).bind(j.inicioAnterior, j.inicio, fid, fid).all(),
 
     // Todos os funis cadastrados aparecem no seletor, mesmo os que ainda não
     // receberam evento — senão um funil recém-criado some da tela e parece que
@@ -123,6 +132,10 @@ api.get('/funil', async (c) => {
        FROM funis f WHERE f.ativo = 1 ORDER BY leads DESC, f.id`,
     ).all(),
   ]);
+
+  const antesPorEtapa = new Map<string, number>(
+    (anteriores.results as Array<{ etapa: string; total: number }>).map((l) => [l.etapa, num(l.total)]),
+  );
 
   const etapas = (contagens.results as Array<{ etapa: string; total: number }>).map((l) => ({
     etapa: l.etapa,
@@ -135,7 +148,17 @@ api.get('/funil', async (c) => {
       anterior && anterior.total > 0
         ? Number(((atual.total / anterior.total) * 100).toFixed(1))
         : null;
-    return { ...atual, taxa_desde_anterior_pct: taxa };
+    const antes = antesPorEtapa.get(atual.etapa) ?? 0;
+    return {
+      ...atual,
+      taxa_desde_anterior_pct: taxa,
+      // "anterior" aqui é o período anterior; `taxa_desde_anterior_pct` é a
+      // conversão desde a etapa acima. Nomes diferentes porque são eixos
+      // diferentes: um compara no tempo, o outro compara no funil.
+      periodo_anterior: antes,
+      delta_pct: delta(atual.total, antes),
+      delta_abs: atual.total - antes,
+    };
   });
 
   // Só etapas com movimento entram no alerta de gargalo: nem todo processo usa
@@ -156,6 +179,88 @@ api.get('/funil', async (c) => {
     etapas: passos,
     etapa_maior_queda: maiorQueda,
     funis_disponiveis: funis.results,
+  });
+});
+
+/**
+ * GET /api/funil/serie?funil_id=&etapa=&dias=30 — curva acumulada da etapa.
+ *
+ * Acumulada, não diária: a pergunta que a tela faz é "a que ritmo estamos
+ * chegando ao número do período", e o acumulado responde isso de relance —
+ * duas curvas subindo lado a lado dizem na hora se este período está adiantado
+ * ou atrasado em relação ao anterior. O gráfico diário obriga a somar de olho.
+ *
+ * Cada contato entra UMA vez, no dia em que alcançou a etapa pela primeira vez.
+ * Sem isso o acumulado passaria do total de pessoas — `leads_etapa` é log de
+ * evento, e o mesmo lead reaparece toda vez que o Rubeus reenvia a etapa.
+ */
+api.get('/funil/serie', async (c) => {
+  const q = funilQuerySchema.safeParse(c.req.query());
+  if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
+  const { funil_id, dias } = q.data;
+  const fid = funil_id ? Number(funil_id) : null;
+  const etapa = c.req.query('etapa') || null;
+
+  /*
+   * Dias no fuso de Brasília, não em UTC. O Worker roda em UTC, e um lead
+   * cadastrado às 22h de terça viraria quarta no gráfico — o operador olharia
+   * a tela e não reconheceria o próprio dia de trabalho.
+   */
+  const DIA = 86_400_000;
+  const BRASILIA = -3 * 3_600_000;
+  const diaDe = (ms: number) => new Date(ms + BRASILIA).toISOString().slice(0, 10);
+
+  const hoje = Date.now();
+  const inicioAtual = hoje - (dias - 1) * DIA;
+  const inicioAnterior = inicioAtual - dias * DIA;
+
+  const { results } = await c.env.DB.prepare(
+    `SELECT dia, COUNT(*) AS total FROM (
+       SELECT contato_id, date(MIN(registrado_em), '-3 hours') AS dia
+       FROM leads_etapa
+       WHERE registrado_em >= ?
+         AND (? IS NULL OR funil_id = ?)
+         AND (? IS NULL OR etapa = ?)
+       GROUP BY contato_id
+     ) GROUP BY dia`,
+  )
+    .bind(new Date(inicioAnterior).toISOString(), fid, fid, etapa, etapa)
+    .all();
+
+  const porDia = new Map<string, number>(
+    (results as Array<{ dia: string; total: number }>).map((l) => [l.dia, num(l.total)]),
+  );
+
+  /*
+   * As duas janelas viram uma série só, pareadas pelo índice do dia: dia 1 do
+   * período atual contra dia 1 do anterior. Parear por data do calendário não
+   * funcionaria — são datas diferentes, e o eixo X é do período atual.
+   */
+  const serie = [];
+  let acAtual = 0;
+  let acAnterior = 0;
+  for (let i = 0; i < dias; i++) {
+    const dAtual = diaDe(inicioAtual + i * DIA);
+    const dAnterior = diaDe(inicioAnterior + i * DIA);
+    acAtual += porDia.get(dAtual) ?? 0;
+    acAnterior += porDia.get(dAnterior) ?? 0;
+    serie.push({
+      data: dAtual,
+      data_anterior: dAnterior,
+      novos: porDia.get(dAtual) ?? 0,
+      atual: acAtual,
+      anterior: acAnterior,
+    });
+  }
+
+  return c.json({
+    funil_id: fid,
+    etapa,
+    dias,
+    serie,
+    total_atual: acAtual,
+    total_anterior: acAnterior,
+    delta_pct: delta(acAtual, acAnterior),
   });
 });
 

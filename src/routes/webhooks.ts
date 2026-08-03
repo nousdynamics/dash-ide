@@ -33,30 +33,29 @@ const webhooks = new Hono<AppEnv>();
  * dois esquemas só preservaria o elo mais fraco.
  */
 /**
- * Extrai o token de onde a origem conseguir mandar.
+ * Todo token que a requisição carrega, em qualquer lugar que a origem consiga pôr.
  *
- * O Rubeus, na tela de webhook, oferece "Autenticação: Bearer" com campo de
- * token — ou seja, header. O fluxo de automação manda a URL crua. A Evolution
- * usa outro formato ainda. Aceitar as três formas evita que a integração
- * dependa de qual tela do CRM foi usada para configurá-la.
+ * Lista, não precedência. O Rubeus oferece "Autenticação: Bearer" com campo de
+ * token E aceita query na URL; com o Bearer vencendo, um valor velho deixado
+ * naquele campo anulava o token correto do link e o webhook voltava 401 sem
+ * explicação. Basta UM dos candidatos ser válido — quem não tem token nenhum
+ * continua sendo recusado, então isso não afrouxa nada.
  */
-function extrairToken(c: any): string | null {
-  const auth = c.req.header('Authorization') || '';
-  const bearer = auth.match(/^Bearer\s+(.+)$/i);
-  if (bearer) return bearer[1].trim();
-  return (
-    c.req.header('X-Webhook-Token') ||
-    c.req.header('apikey') ||
-    c.req.query('t') ||
-    null
-  );
+function tokensCandidatos(c: any): string[] {
+  const bruto = [
+    (c.req.header('Authorization') || '').match(/^Bearer\s+(.+)$/i)?.[1],
+    c.req.header('X-Webhook-Token'),
+    c.req.header('apikey'),
+    c.req.query('t'),
+  ];
+  return [...new Set(bruto.map((t) => t?.trim()).filter((t): t is string => !!t))];
 }
 
 async function resolverToken(c: any): Promise<{ funilId: number | null; slug: string } | null> {
-  const token = extrairToken(c);
+  const candidatos = tokensCandidatos(c);
   const canal = c.req.path.split('/')[2];
   const slug = c.req.param('slug');
-  if (!token) return null;
+  if (!candidatos.length) return null;
 
   /*
    * Duas formas de credencial:
@@ -67,13 +66,14 @@ async function resolverToken(c: any): Promise<{ funilId: number | null; slug: st
    * por funil: uma URL só recebe "novo registro de processo" de todos os
    * processos, e o funil vem no corpo.
    */
+  const marcadores = candidatos.map(() => '?').join(',');
   const linha = await c.env.DB.prepare(
     `SELECT w.id, w.funil_id FROM webhooks w
      LEFT JOIN funis f ON f.id = w.funil_id
-     WHERE w.token = ? AND w.canal = ?
+     WHERE w.token IN (${marcadores}) AND w.canal = ?
        AND (w.funil_id IS NULL OR (f.slug = ? AND f.ativo = 1))`,
   )
-    .bind(token, canal, slug ?? null)
+    .bind(...candidatos, canal, slug ?? null)
     .first() as { id: number; funil_id: number | null } | null;
 
   if (!linha) return null;

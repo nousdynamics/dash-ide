@@ -13,7 +13,7 @@ import {
 } from 'recharts';
 import { Cartao, Estado } from './base';
 import { useEffect, useState } from 'react';
-import { fmtDiaMes } from '../lib/formato';
+import { fmtDiaMes, fmtInt } from '../lib/formato';
 
 /** Em 390px o eixo Y largo come a área de plotagem; aqui ele encolhe. */
 function useEstreito() {
@@ -145,6 +145,106 @@ export function GraficoBarras({ titulo, dados, chave, fmt, fmtEixo, legenda }) {
         </BarChart>
       </ResponsiveContainer>
     </Cartao>
+  );
+}
+
+/**
+ * Curva acumulada do período contra a do período anterior.
+ *
+ * Duas curvas subindo lado a lado dizem de relance se este período está
+ * adiantado ou atrasado — leitura que o gráfico de barras diárias não dá sem
+ * somar de cabeça. O eixo X é o período atual; a série anterior vem pareada por
+ * índice do dia, e a data real dela aparece na dica.
+ */
+export function GraficoAcumulado({ titulo, subtitulo, dados, rotuloAtual, rotuloAnterior }) {
+  const estreito = useEstreito();
+  if (!dados?.length) {
+    return (
+      <Cartao>
+        <div className="text-[13px] font-semibold mb-3">{titulo}</div>
+        <Estado mensagem="Sem dados no período selecionado." />
+      </Cartao>
+    );
+  }
+
+  return (
+    <Cartao>
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2 mb-3">
+        <div>
+          <div className="text-[13px] font-semibold">{titulo}</div>
+          {subtitulo && <div className="text-[11px] text-tenue mt-px">{subtitulo}</div>}
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-tenue shrink-0">
+          <span className="inline-flex items-center gap-[6px]">
+            <span aria-hidden="true" className="w-[14px] h-[2px] rounded bg-azul-400" />
+            {rotuloAtual}
+          </span>
+          <span className="inline-flex items-center gap-[6px]">
+            <span aria-hidden="true" className="w-[14px] h-[2px] rounded bg-tenue" />
+            {rotuloAnterior}
+          </span>
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={estreito ? 190 : 240}>
+        <AreaChart data={dados} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id="gradAcum" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#4F8FE8" stopOpacity={0.28} />
+              <stop offset="100%" stopColor="#4F8FE8" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+          <XAxis
+            dataKey="data"
+            tickFormatter={fmtDiaMes}
+            tick={EIXO}
+            axisLine={false}
+            tickLine={false}
+            minTickGap={estreito ? 44 : 28}
+          />
+          <YAxis tick={EIXO} axisLine={false} tickLine={false} width={estreito ? 30 : 44} allowDecimals={false} />
+          <Tooltip content={<DicaAcumulado />} cursor={{ stroke: 'rgba(255,255,255,0.12)' }} />
+          {/* O anterior entra primeiro para ficar atrás — é referência, não protagonista. */}
+          <Area
+            type="monotone"
+            dataKey="anterior"
+            stroke="#626d7d"
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
+            fill="rgba(255,255,255,0.03)"
+            dot={false}
+            activeDot={{ r: 3 }}
+          />
+          <Area
+            type="monotone"
+            dataKey="atual"
+            stroke="#4F8FE8"
+            strokeWidth={2}
+            fill="url(#gradAcum)"
+            dot={false}
+            activeDot={{ r: 4, stroke: '#0A0E14', strokeWidth: 2 }}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </Cartao>
+  );
+}
+
+function DicaAcumulado({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0]?.payload ?? {};
+  return (
+    <div className="bg-base border border-borda-forte rounded-[8px] px-3 py-2 text-[11px] shadow-lg">
+      <div className="text-secundario mb-1">{fmtDiaMes(label)}</div>
+      <div className="text-primario font-semibold tnum">
+        {fmtInt(p.atual)} acumulados
+        {p.novos > 0 && <span className="text-tenue font-normal"> · +{fmtInt(p.novos)} no dia</span>}
+      </div>
+      <div className="text-tenue tnum">
+        {fmtInt(p.anterior)} no anterior ({fmtDiaMes(p.data_anterior)})
+      </div>
+    </div>
   );
 }
 
