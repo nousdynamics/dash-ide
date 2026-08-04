@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { exigirAdmin } from '../lib/access';
+import { hashDoToken, novoToken } from '../lib/credenciais';
 import type { AppEnv } from '../lib/tipos';
 
 /**
@@ -10,6 +12,12 @@ import type { AppEnv } from '../lib/tipos';
  * problema com o Rubeus mandando JSON como form-urlencoded.
  */
 const funis = new Hono<AppEnv>();
+
+/*
+ * Toda esta tela é administrativa: cria funil, emite e revoga credencial de
+ * webhook. Fica atrás do segundo nível, não só do Access — ver ehAdmin().
+ */
+funis.use('*', exigirAdmin);
 
 export const CANAIS = ['rubeus', 'evolution', 'n8n'] as const;
 export type Canal = (typeof CANAIS)[number];
@@ -25,18 +33,6 @@ function paraSlug(nome: string): string {
     .slice(0, 60);
 }
 
-/**
- * Token opaco de 32 bytes.
- *
- * `crypto.getRandomValues`, nunca Math.random: é credencial, e um valor
- * previsível deixaria qualquer um postar evento no funil.
- */
-function novoToken(): string {
-  const b = new Uint8Array(32);
-  crypto.getRandomValues(b);
-  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
-}
-
 const novoFunilSchema = z.object({
   nome: z.string().min(2).max(80),
   processo_id: z.union([z.string(), z.number()]).transform(String).nullish(),
@@ -46,7 +42,8 @@ const novoFunilSchema = z.object({
 funis.get('/', async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT f.id, f.nome, f.slug, f.processo_id, f.ativo, f.criado_em,
-            w.canal, w.ultimo_uso_em, w.total_recebido
+            w.canal, w.ultimo_uso_em, w.total_recebido,
+            (w.token_hash IS NOT NULL) AS tem_link
      FROM funis f LEFT JOIN webhooks w ON w.funil_id = f.id
      WHERE f.ativo = 1
      ORDER BY f.id, w.canal`,
@@ -67,8 +64,9 @@ funis.get('/', async (c) => {
     if (l.canal) {
       (mapa.get(l.id)!.webhooks as unknown[]).push({
         canal: l.canal,
-        // O caminho vai completo; o token entra só no clique de copiar.
+        // Só o caminho. O token nunca volta daqui — nem existe mais em claro.
         caminho: `/webhook/${l.canal}/${l.slug}`,
+        tem_link: Boolean(l.tem_link),
         ultimo_uso_em: l.ultimo_uso_em,
         total_recebido: l.total_recebido ?? 0,
       });
@@ -77,7 +75,8 @@ funis.get('/', async (c) => {
 
   // Webhooks por tipo de evento: não pertencem a funil, o funil vem no corpo.
   const { results: porEvento } = await c.env.DB.prepare(
-    `SELECT id, canal, evento, ultimo_uso_em, total_recebido
+    `SELECT id, canal, evento, ultimo_uso_em, total_recebido,
+            (token_hash IS NOT NULL) AS tem_link
      FROM webhooks WHERE funil_id IS NULL ORDER BY canal, evento`,
   ).all();
 
@@ -89,6 +88,7 @@ funis.get('/', async (c) => {
       canal: w.canal,
       evento: w.evento,
       caminho: `/webhook/${w.canal}/evento/${w.evento}`,
+      tem_link: Boolean(w.tem_link),
       ultimo_uso_em: w.ultimo_uso_em,
       total_recebido: w.total_recebido ?? 0,
     })),
@@ -124,9 +124,16 @@ funis.post('/', async (c) => {
     .bind(r.data.nome.trim(), slug, r.data.processo_id ?? null)
     .run();
 
+  /*
+   * O funil nasce com os três canais, mas SEM link.
+   *
+   * Gerar aqui obrigaria a devolver os três tokens nesta resposta, ou a
+   * descartá-los — e token descartado é linha inútil no banco. Quem for
+   * configurar o canal clica em "gerar link" e recebe o valor na hora.
+   */
   const funilId = meta.last_row_id;
-  const stmt = c.env.DB.prepare('INSERT INTO webhooks (funil_id, canal, token) VALUES (?, ?, ?)');
-  await c.env.DB.batch(CANAIS.map((canal) => stmt.bind(funilId, canal, novoToken())));
+  const stmt = c.env.DB.prepare('INSERT INTO webhooks (funil_id, canal) VALUES (?, ?)');
+  await c.env.DB.batch(CANAIS.map((canal) => stmt.bind(funilId, canal)));
 
   console.log(JSON.stringify({ evento: 'funil_criado', slug, canais: CANAIS.length }));
   return c.json({ ok: true, id: funilId, nome: r.data.nome, slug }, 201);
@@ -140,27 +147,48 @@ funis.delete('/:id', async (c) => {
   return c.json({ ok: true });
 });
 
-/**
- * GET /api/funis/:id/token/:canal — a URL completa, com token.
+/*
+ * Não existe mais endpoint que LEIA um token.
  *
- * Endpoint separado de propósito: a listagem nunca carrega o token, então ele
- * não aparece no HTML, em screenshot nem para quem olha a tela por cima do
- * ombro. Só trafega quando alguém clica em copiar.
+ * O banco guarda só o hash, então não há valor a devolver — e é esse o ponto:
+ * um dump do D1 deixou de conter credencial. Gerar substitui copiar, e a URL
+ * completa aparece uma única vez, na resposta de quem mandou gerar.
  */
-/** GET /api/funis/token-evento/:id — URL completa de um webhook por evento. */
-funis.get('/token-evento/:id', async (c) => {
+
+/** POST /api/funis/token-evento/:id — novo link de um webhook por evento. */
+funis.post('/token-evento/:id', async (c) => {
   const id = Number(c.req.param('id'));
   if (!Number.isInteger(id)) return c.json({ erro: 'id_invalido' }, 400);
+
   const l = await c.env.DB.prepare(
-    'SELECT token, canal, evento FROM webhooks WHERE id = ? AND funil_id IS NULL',
-  ).bind(id).first() as { token: string; canal: string; evento: string } | null;
+    'SELECT canal, evento FROM webhooks WHERE id = ? AND funil_id IS NULL',
+  ).bind(id).first() as { canal: string; evento: string } | null;
   if (!l) return c.json({ erro: 'webhook_nao_encontrado' }, 404);
-  console.log(JSON.stringify({ evento: 'token_copiado', tipo: l.evento, por: c.get('usuarioEmail') ?? '?' }));
+
+  const token = novoToken();
+  await c.env.DB.prepare(
+    'UPDATE webhooks SET token_hash = ?, ultimo_uso_em = NULL, total_recebido = 0 WHERE id = ?',
+  )
+    .bind(await hashDoToken(token), id)
+    .run();
+
+  console.log(JSON.stringify({
+    evento: 'token_gerado',
+    tipo: l.evento,
+    por: c.get('usuarioEmail') ?? 'desconhecido',
+  }));
+
   const base = new URL(c.req.url).origin;
-  return c.json({ url: `${base}/webhook/${l.canal}/evento/${l.evento}?t=${l.token}` });
+  return c.json({ url: `${base}/webhook/${l.canal}/evento/${l.evento}?t=${token}` });
 });
 
-funis.get('/:id/token/:canal', async (c) => {
+/**
+ * POST /api/funis/:id/regerar/:canal — gera o link e invalida o anterior.
+ *
+ * Serve tanto para o primeiro link quanto para a troca: os dois casos são a
+ * mesma operação, e separá-los só criaria uma tela a mais para errar.
+ */
+funis.post('/:id/regerar/:canal', async (c) => {
   const id = Number(c.req.param('id'));
   const canal = c.req.param('canal');
   if (!Number.isInteger(id) || !CANAIS.includes(canal as Canal)) {
@@ -168,41 +196,29 @@ funis.get('/:id/token/:canal', async (c) => {
   }
 
   const linha = await c.env.DB.prepare(
-    `SELECT w.token, f.slug FROM webhooks w JOIN funis f ON f.id = w.funil_id
+    `SELECT f.slug FROM webhooks w JOIN funis f ON f.id = w.funil_id
      WHERE w.funil_id = ? AND w.canal = ?`,
   )
     .bind(id, canal)
-    .first<{ token: string; slug: string }>();
-
+    .first<{ slug: string }>();
   if (!linha) return c.json({ erro: 'webhook_nao_encontrado' }, 404);
 
+  const token = novoToken();
+  await c.env.DB.prepare(
+    'UPDATE webhooks SET token_hash = ?, ultimo_uso_em = NULL, total_recebido = 0 WHERE funil_id = ? AND canal = ?',
+  )
+    .bind(await hashDoToken(token), id, canal)
+    .run();
+
   console.log(JSON.stringify({
-    evento: 'token_copiado',
+    evento: 'token_gerado',
     funil_id: id,
     canal,
     por: c.get('usuarioEmail') ?? 'desconhecido',
   }));
 
   const base = new URL(c.req.url).origin;
-  return c.json({ url: `${base}/webhook/${canal}/${linha.slug}?t=${linha.token}` });
-});
-
-/** POST /api/funis/:id/regerar/:canal — invalida o token anterior na hora. */
-funis.post('/:id/regerar/:canal', async (c) => {
-  const id = Number(c.req.param('id'));
-  const canal = c.req.param('canal');
-  if (!Number.isInteger(id) || !CANAIS.includes(canal as Canal)) {
-    return c.json({ erro: 'parametros_invalidos' }, 400);
-  }
-  const { meta } = await c.env.DB.prepare(
-    'UPDATE webhooks SET token = ?, ultimo_uso_em = NULL, total_recebido = 0 WHERE funil_id = ? AND canal = ?',
-  )
-    .bind(novoToken(), id, canal)
-    .run();
-
-  if (!meta.changes) return c.json({ erro: 'webhook_nao_encontrado' }, 404);
-  console.log(JSON.stringify({ evento: 'token_regerado', funil_id: id, canal }));
-  return c.json({ ok: true });
+  return c.json({ url: `${base}/webhook/${canal}/${linha.slug}?t=${token}` });
 });
 
 /**

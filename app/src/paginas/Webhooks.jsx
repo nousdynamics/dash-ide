@@ -1,17 +1,10 @@
 import { useState } from 'react';
 import { Cartao, Estado, Esqueleto, Pill } from '../componentes/base';
-import { buscar, useApi } from '../lib/api';
+import { useApi } from '../lib/api';
 import { fmtDataHora, fmtInt } from '../lib/formato';
 
 const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n' };
 
-/**
- * Botão de copiar.
- *
- * O token nunca vem na listagem: é buscado aqui, no clique, e vai direto para a
- * área de transferência. Assim ele não fica no HTML, não aparece em screenshot
- * e não é lido por quem olha a tela por cima do ombro.
- */
 const ROTULO_EVENTO = {
   geral: 'Geral — recebe tudo',
   registro_processo: 'Novo registro de processo',
@@ -22,35 +15,79 @@ const ROTULO_EVENTO = {
   atividade_edicao: 'Edição de atividade',
 };
 
-function BotaoCopiar({ funilId, canal, rota }) {
+/**
+ * Botão de gerar link.
+ *
+ * Não existe mais "copiar": o banco guarda só o hash do token, então não há
+ * valor a reexibir. Quem gera recebe a URL uma vez, na resposta, e ela vai
+ * direto para a área de transferência — nunca chega a ser desenhada na tela.
+ *
+ * Trocar de link exige confirmação porque invalida o anterior na hora: o que
+ * estiver colado no Rubeus para de funcionar até ser substituído.
+ */
+function BotaoGerar({ rota, jaTemLink, aoGerar }) {
   const [estado, setEstado] = useState('pronto');
+  const [confirmando, setConfirmando] = useState(false);
 
-  const copiar = async () => {
-    setEstado('buscando');
+  const gerar = async () => {
+    setConfirmando(false);
+    setEstado('gerando');
     try {
-      const { url } = await buscar(rota ?? `/api/funis/${funilId}/token/${canal}`);
+      const r = await fetch(rota, { method: 'POST' });
+      if (!r.ok) throw new Error(String(r.status));
+      const { url } = await r.json();
       await navigator.clipboard.writeText(url);
       setEstado('copiado');
-      setTimeout(() => setEstado('pronto'), 2000);
+      aoGerar?.();
+      setTimeout(() => setEstado('pronto'), 4000);
     } catch {
       setEstado('erro');
-      setTimeout(() => setEstado('pronto'), 3000);
+      setTimeout(() => setEstado('pronto'), 4000);
     }
   };
 
-  const rotulo = { pronto: 'Copiar link', buscando: 'Copiando…', copiado: 'Copiado', erro: 'Falhou' }[estado];
+  if (confirmando) {
+    return (
+      <span className="flex items-center gap-2 text-[11px] shrink-0">
+        <span className="text-atencao">Invalida o link atual.</span>
+        <button
+          type="button"
+          onClick={gerar}
+          className="px-2 py-[5px] rounded-[8px] border border-perigo/40 bg-perigo/12 text-perigo cursor-pointer"
+        >
+          Gerar mesmo assim
+        </button>
+        <button
+          type="button"
+          onClick={() => setConfirmando(false)}
+          className="px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie text-secundario cursor-pointer"
+        >
+          Cancelar
+        </button>
+      </span>
+    );
+  }
+
+  const rotulo = {
+    pronto: jaTemLink ? 'Gerar novo link' : 'Gerar link',
+    gerando: 'Gerando…',
+    copiado: 'Copiado para a área de transferência',
+    erro: 'Falhou',
+  }[estado];
 
   return (
     <button
       type="button"
-      onClick={copiar}
-      disabled={estado === 'buscando'}
-      className={`inline-flex items-center gap-[6px] text-[11px] px-2 py-[5px] rounded-[8px] border cursor-pointer
+      onClick={() => (jaTemLink ? setConfirmando(true) : gerar())}
+      disabled={estado === 'gerando'}
+      className={`inline-flex items-center gap-[6px] text-[11px] px-2 py-[5px] rounded-[8px] border cursor-pointer shrink-0
         ${estado === 'copiado'
           ? 'border-sucesso/40 bg-sucesso/12 text-sucesso'
           : estado === 'erro'
             ? 'border-perigo/40 bg-perigo/12 text-perigo'
-            : 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario'}`}
+            : jaTemLink
+              ? 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario'
+              : 'border-azul-500 bg-azul-600 text-white hover:bg-azul-500'}`}
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-[13px] h-[13px]" aria-hidden="true">
         {estado === 'copiado' ? (
@@ -67,62 +104,32 @@ function BotaoCopiar({ funilId, canal, rota }) {
   );
 }
 
-function LinhaWebhook({ funilId, w, aoRegerar }) {
-  const [confirmando, setConfirmando] = useState(false);
-
+/** Estado do link, no lugar dos bullets que antes fingiam mostrar o token. */
+function LinhaWebhook({ funilId, w, aoGerar }) {
   return (
     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 py-2 border-t border-borda first:border-t-0">
       <div className="min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs font-semibold">{ROTULO_CANAL[w.canal] || w.canal}</span>
-          {w.total_recebido > 0 ? (
+          {!w.tem_link ? (
+            <Pill tom="atencao">sem link gerado</Pill>
+          ) : w.total_recebido > 0 ? (
             <Pill tom="sucesso">{fmtInt(w.total_recebido)} evento(s)</Pill>
           ) : (
             <Pill tom="neutro">sem evento ainda</Pill>
           )}
         </div>
-        <div className="text-[11px] text-tenue mt-1 font-mono break-all">
-          {w.caminho}?t=<span className="text-tenue/70">••••••••••••</span>
-        </div>
+        <div className="text-[11px] text-tenue mt-1 font-mono break-all">{w.caminho}</div>
         {w.ultimo_uso_em && (
           <div className="text-[11px] text-tenue mt-px">Último evento: {fmtDataHora(w.ultimo_uso_em)}</div>
         )}
       </div>
 
-      <div className="flex items-center gap-2 shrink-0 flex-wrap">
-        <BotaoCopiar funilId={funilId} canal={w.canal} />
-        {confirmando ? (
-          <span className="flex items-center gap-2 text-[11px]">
-            <button
-              type="button"
-              onClick={() => {
-                aoRegerar(funilId, w.canal);
-                setConfirmando(false);
-              }}
-              className="px-2 py-[5px] rounded-[8px] border border-perigo/40 bg-perigo/12 text-perigo cursor-pointer"
-            >
-              Confirmar
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmando(false)}
-              className="px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie text-secundario cursor-pointer"
-            >
-              Cancelar
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setConfirmando(true)}
-            title="Gera um token novo e invalida o atual na hora"
-            className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie
-                       text-secundario hover:bg-superficie-hover cursor-pointer"
-          >
-            Regerar
-          </button>
-        )}
-      </div>
+      <BotaoGerar
+        rota={`/api/funis/${funilId}/regerar/${w.canal}`}
+        jaTemLink={w.tem_link}
+        aoGerar={aoGerar}
+      />
     </div>
   );
 }
@@ -156,11 +163,6 @@ export function Webhooks() {
     }
   };
 
-  const regerar = async (funilId, canal) => {
-    await fetch(`/api/funis/${funilId}/regerar/${canal}`, { method: 'POST' });
-    recarregar();
-  };
-
   const remover = async (funilId) => {
     await fetch(`/api/funis/${funilId}`, { method: 'DELETE' });
     recarregar();
@@ -170,11 +172,27 @@ export function Webhooks() {
     <div>
       <div className="text-[19px] font-semibold tracking-tight">Funis e webhooks</div>
       <div className="text-tenue text-xs mt-[2px]">
-        Um link por funil e por canal. O token nunca aparece na tela — o botão copia direto.
-        Os leads recebidos ficam em <strong className="text-secundario">Funil de leads</strong>.
+        Um link por funil e por canal. O banco guarda só o hash do token, então o link aparece
+        uma única vez, ao ser gerado. Os leads recebidos ficam em{' '}
+        <strong className="text-secundario">Funil de leads</strong>.
       </div>
     </div>
   );
+
+  /* 403 não é falha: é a resposta certa para quem não administra webhooks. */
+  if (erro?.includes('403') || erro?.includes('sem_permissao')) {
+    return (
+      <>
+        {cabecalho}
+        <Cartao>
+          <Estado
+            titulo="Esta tela é restrita"
+            mensagem="Ela emite as credenciais que autorizam o Rubeus e a Evolution a gravar no banco, por isso fica com quem administra a integração. As telas de resultado continuam abertas para você."
+          />
+        </Cartao>
+      </>
+    );
+  }
 
   if (erro) return <>{cabecalho}<Cartao><Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} /></Cartao></>;
   if (carregando || !dados) return <>{cabecalho}<Esqueleto linhas={5} /></>;
@@ -204,8 +222,9 @@ export function Webhooks() {
           {erroForm && <span className="text-[11px] text-perigo">{erroForm}</span>}
         </form>
         <div className="text-[11px] text-tenue mt-2 leading-relaxed">
-          Ao criar um funil, os links dele já são gerados. As etapas não são cadastradas aqui —
-          são descobertas a partir dos eventos que o Rubeus enviar.
+          O funil nasce com os três canais e <strong className="text-secundario">sem link</strong>:
+          clique em gerar no canal que for usar. As etapas não são cadastradas aqui — são
+          descobertas a partir dos eventos que o Rubeus enviar.
           <br />
           <strong className="text-secundario">Um link por funil, usado em todas as etapas dele.</strong>{' '}
           Nos gatilhos que permitem escolher o processo — novo registro de processo e ocorrência de
@@ -236,18 +255,22 @@ export function Webhooks() {
                   <span className={`text-xs font-semibold ${w.evento === 'geral' ? 'text-azul-300' : ''}`}>
                     {ROTULO_CANAL[w.canal] || w.canal} · {ROTULO_EVENTO[w.evento] || w.evento}
                   </span>
-                  {w.total_recebido > 0
-                    ? <Pill tom="sucesso">{fmtInt(w.total_recebido)} evento(s)</Pill>
-                    : <Pill tom="neutro">sem evento ainda</Pill>}
+                  {!w.tem_link
+                    ? <Pill tom="atencao">sem link gerado</Pill>
+                    : w.total_recebido > 0
+                      ? <Pill tom="sucesso">{fmtInt(w.total_recebido)} evento(s)</Pill>
+                      : <Pill tom="neutro">sem evento ainda</Pill>}
                 </div>
-                <div className="text-[11px] text-tenue mt-1 font-mono break-all">
-                  {w.caminho}?t=<span className="text-tenue/70">••••••••••••</span>
-                </div>
+                <div className="text-[11px] text-tenue mt-1 font-mono break-all">{w.caminho}</div>
                 {w.ultimo_uso_em && (
                   <div className="text-[11px] text-tenue mt-px">Último: {fmtDataHora(w.ultimo_uso_em)}</div>
                 )}
               </div>
-              <BotaoCopiar rota={`/api/funis/token-evento/${w.id}`} />
+              <BotaoGerar
+                rota={`/api/funis/token-evento/${w.id}`}
+                jaTemLink={w.tem_link}
+                aoGerar={recarregar}
+              />
             </div>
           ))}
         </Cartao>
@@ -272,7 +295,7 @@ export function Webhooks() {
           </div>
           {f.webhooks.length ? (
             f.webhooks.map((w) => (
-              <LinhaWebhook key={w.canal} funilId={f.id} w={w} aoRegerar={regerar} />
+              <LinhaWebhook key={w.canal} funilId={f.id} w={w} aoGerar={recarregar} />
             ))
           ) : (
             <div className="text-xs text-tenue py-2">Nenhum webhook gerado para este funil.</div>

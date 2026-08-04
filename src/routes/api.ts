@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { ehAdmin } from '../lib/access';
 import { funilQuerySchema, paginacaoQuerySchema, periodoQuerySchema } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 
@@ -29,10 +30,16 @@ function delta(atual: number, anterior: number): number | null {
 const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v ?? 0) || 0);
 
 /**
- * GET /api/me — quem está logado, segundo o header que o Cloudflare Access
- * injeta. Sem Access (dev local) volta `null`.
+ * GET /api/me — quem está logado, segundo o JWT verificado do Access.
+ *
+ * `admin` existe para o menu não oferecer uma tela que vai devolver 403. Não é
+ * a autorização em si: essa mora no servidor, em cada rota de /api/funis.
+ * Esconder item de menu é cortesia com quem usa, nunca controle de acesso.
  */
-api.get('/me', (c) => c.json({ email: c.get('usuarioEmail') ?? null }));
+api.get('/me', (c) => c.json({
+  email: c.get('usuarioEmail') ?? null,
+  admin: ehAdmin(c.env, c.get('usuarioEmail')),
+}));
 
 /** GET /api/overview?dias=30 — leads captados e conversas, direto do D1. */
 api.get('/overview', async (c) => {

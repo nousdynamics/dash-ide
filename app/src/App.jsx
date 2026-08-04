@@ -54,7 +54,10 @@ const PAGINAS = [
   { id: 'funil', nome: 'Funil de leads', curto: 'Funil' },
   { id: 'campanhas', nome: 'Campanhas', curto: 'Camp.' },
   { id: 'conversas', nome: 'Conversas', curto: 'Chat' },
-  { id: 'webhooks', nome: 'Funis e webhooks', curto: 'Funis' },
+  // Emite credencial de webhook: só aparece para quem administra. Esconder o
+  // item é conveniência — quem digitar #/webhooks na mão continua batendo no
+  // 403 do servidor, que é onde a permissão de verdade mora.
+  { id: 'webhooks', nome: 'Funis e webhooks', curto: 'Funis', admin: true },
 ];
 
 const CHAVE_RETRAIDA = 'painel-ide:sidebar-retraida';
@@ -88,13 +91,17 @@ export default function App() {
     }
   });
   const [email, setEmail] = useState(null);
+  const [admin, setAdmin] = useState(false);
 
   // Período vive aqui para não zerar ao trocar de tela.
   const [filtro, setFiltro] = useState({ preset: '30d', de: null, ate: null, comparar: true });
 
   useEffect(() => {
     buscar('/api/me')
-      .then((r) => setEmail(r.email))
+      .then((r) => {
+        setEmail(r.email);
+        setAdmin(Boolean(r.admin));
+      })
       .catch(() => setEmail(null)); // identificação é acessório, não bloqueia o painel
   }, []);
 
@@ -108,6 +115,9 @@ export default function App() {
     }
   };
 
+  // O menu mostra só o que a pessoa pode abrir. A rota em si continua existindo:
+  // quem digitar #/webhooks vê a tela pedir permissão, não um menu mentiroso.
+  const visiveis = PAGINAS.filter((p) => !p.admin || admin);
   const atual = PAGINAS.find((p) => p.id === rota);
   const props = { filtro, setFiltro };
 
@@ -138,7 +148,7 @@ export default function App() {
         </div>
 
         <nav className="flex flex-col gap-1" aria-label="Navegação principal">
-          {PAGINAS.map((p) => {
+          {visiveis.map((p) => {
             const ativo = p.id === rota;
             return (
               <button
@@ -192,7 +202,7 @@ export default function App() {
         className="md:hidden fixed bottom-0 inset-x-0 z-10 flex bg-elevado border-t border-borda px-2 pt-[10px] pb-[calc(14px+env(safe-area-inset-bottom))]"
         aria-label="Navegação"
       >
-        {PAGINAS.map((p) => {
+        {visiveis.map((p) => {
           const ativo = p.id === rota;
           return (
             <button

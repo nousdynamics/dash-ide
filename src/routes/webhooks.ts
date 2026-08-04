@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { ZodTypeAny, output as ZodOutput } from 'zod';
 import { CorpoInvalido, lerCorpoJson } from '../lib/corpo';
+import { hashDoToken } from '../lib/credenciais';
 import { conversaSchema, etapaSchema, normalizarEtapa } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 
@@ -66,14 +67,19 @@ async function resolverToken(c: any): Promise<{ funilId: number | null; slug: st
    * por funil: uma URL só recebe "novo registro de processo" de todos os
    * processos, e o funil vem no corpo.
    */
-  const marcadores = candidatos.map(() => '?').join(',');
+  /*
+   * Compara hashes, não tokens: o D1 não guarda mais o valor em claro. Hash é
+   * determinístico, então a busca continua sendo um índice, sem varrer a tabela.
+   */
+  const hashes = await Promise.all(candidatos.map(hashDoToken));
+  const marcadores = hashes.map(() => '?').join(',');
   const linha = await c.env.DB.prepare(
     `SELECT w.id, w.funil_id FROM webhooks w
      LEFT JOIN funis f ON f.id = w.funil_id
-     WHERE w.token IN (${marcadores}) AND w.canal = ?
+     WHERE w.token_hash IN (${marcadores}) AND w.canal = ?
        AND (w.funil_id IS NULL OR (f.slug = ? AND f.ativo = 1))`,
   )
-    .bind(...candidatos, canal, slug ?? null)
+    .bind(...hashes, canal, slug ?? null)
     .first() as { id: number; funil_id: number | null } | null;
 
   if (!linha) return null;

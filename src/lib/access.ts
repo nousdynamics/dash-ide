@@ -183,6 +183,35 @@ export const exigirAcesso: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+/**
+ * Quem administra webhooks.
+ *
+ * O Access libera o domínio inteiro `@faculdadeide.edu.br`, o que está certo
+ * para relatório: investimento, funil e conversas são o trabalho de todo mundo
+ * ali. A tela de Funis e webhooks é outra coisa — ela EMITE credencial de
+ * escrita no banco. Um segundo nível separa "ver o resultado" de "criar a chave
+ * que grava o resultado", que são autorizações de natureza diferente.
+ */
+export function ehAdmin(env: Env, email: string | undefined): boolean {
+  if (!email) return false;
+  const lista = (env.ADMINS ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  // Lista vazia não vira "todo mundo pode": nesse caso ninguém administra.
+  return lista.includes(email.toLowerCase());
+}
+
+/** Middleware das rotas que emitem ou revogam credencial. */
+export const exigirAdmin: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const email = c.get('usuarioEmail');
+  if (!ehAdmin(c.env, email)) {
+    console.warn(JSON.stringify({ evento: 'admin_negado', rota: c.req.path, por: email ?? '?' }));
+    return c.json({ erro: 'sem_permissao' }, 403);
+  }
+  await next();
+};
+
 /** O JWT também vem no cookie quando a navegação não passa pelo header. */
 function leCookie(cabecalho: string | undefined, nome: string): string | null {
   if (!cabecalho) return null;

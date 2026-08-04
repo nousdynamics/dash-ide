@@ -29,3 +29,7 @@ RD_STATION_CLIENT_SECRET=""
 # NUNCA publicar como secret: em produção a ausência desta variável é o que
 # obriga o Worker a exigir o JWT assinado do Access.
 AMBIENTE="dev"
+
+# Em dev o usuário é sempre dev@local; sem isto, a tela de Funis e webhooks
+# devolve 403 na sua própria máquina.
+ADMINS="dev@local"

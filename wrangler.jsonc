@@ -39,7 +39,21 @@
    */
   "vars": {
     "ACCESS_TEAM_DOMAIN": "faculdade-ide.cloudflareaccess.com",
-    "ACCESS_AUD": "f1ed21ed42bdda4343da59bfdf82d9c9ec09ea7498bed96e4b2d0b229707e3c0"
+    "ACCESS_AUD": "f1ed21ed42bdda4343da59bfdf82d9c9ec09ea7498bed96e4b2d0b229707e3c0",
+
+    /*
+     * Segundo nível de acesso: quem pode abrir Funis e webhooks.
+     *
+     * O Access libera o domínio inteiro da faculdade, o que está certo para
+     * relatório. Esta tela é outra coisa — ela EMITE credencial de escrita no
+     * banco, e ver o resultado não é a mesma autorização que criar a chave que
+     * grava o resultado.
+     *
+     * Fica em config, versionado, porque muda pouco e assim toda alteração
+     * aparece no histórico com autor e data. Lista vazia = ninguém administra;
+     * nunca "todo mundo".
+     */
+    "ADMINS": "nousdynamicslta@gmail.com"
   },
 
   "observability": {
