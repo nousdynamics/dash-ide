@@ -236,6 +236,55 @@ async function validarCorpo<S extends ZodTypeAny>(
   return { ok: true, dados: r.data };
 }
 
+/**
+ * Costura a identidade nos eventos que já chegaram sem ela.
+ *
+ * Não cria linha no funil: casa por contato_id, e-mail ou telefone e completa o
+ * que estiver vazio. É o que junta o mesmo lead que o Rubeus mandou com ids
+ * diferentes conforme o gatilho — RAFAEL entrou como 1670629 num e 44176 noutro.
+ */
+async function gravarIdentidade(
+  c: any,
+  d: { contato_id: string; contato_nome?: string | null; email?: string | null; telefone?: string | null },
+  cru: string | null,
+) {
+  const { meta } = await c.env.DB.prepare(
+    `UPDATE leads_etapa
+        SET email        = COALESCE(email, ?),
+            telefone     = COALESCE(telefone, ?),
+            contato_nome = COALESCE(contato_nome, ?)
+      WHERE contato_id = ?
+         OR (? IS NOT NULL AND email = ?)
+         OR (? IS NOT NULL AND telefone = ?)`,
+  )
+    .bind(
+      d.email ?? null, d.telefone ?? null, d.contato_nome ?? null,
+      d.contato_id,
+      d.email ?? null, d.email ?? null,
+      d.telefone ?? null, d.telefone ?? null,
+    )
+    .run();
+
+  registrarEvento(
+    c,
+    'identidade',
+    cru,
+    meta.changes
+      ? `E-mail/telefone aplicados a ${meta.changes} passagem(ns) deste lead.`
+      : 'Contato ainda sem passagem de etapa registrada; a identidade será aplicada quando a primeira chegar.',
+    d,
+  );
+
+  console.log(JSON.stringify({
+    evento: 'identidade_recebida',
+    contato_id: d.contato_id,
+    tem_email: Boolean(d.email),
+    linhas: meta.changes,
+  }));
+
+  return c.json({ ok: true, tipo: 'identidade', atualizados: meta.changes }, 200);
+}
+
 /** Grava um evento de etapa, com ou sem funil associado. */
 async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
   let d = jaValidado;
@@ -284,6 +333,18 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       registrarEvento(c, r.erro, cru, JSON.stringify(r.detalhe).slice(0, 500));
       return c.json({ erro: r.erro, detalhe: r.detalhe }, 400);
     }
+
+    /*
+     * Payload de contato entra por identidade, não por etapa.
+     *
+     * Criação e edição de cadastro não descrevem movimento no funil. Se a etapa
+     * teve de ser inventada mas o payload traz e-mail ou telefone, o que chegou
+     * foi QUEM é a pessoa — e isso completa os eventos que já estão gravados sem
+     * identidade, em vez de virar mais uma linha "(etapa não informada)".
+     */
+    if (semEtapa && (r.dados.email || r.dados.telefone)) {
+      return gravarIdentidade(c, r.dados, cru);
+    }
     registrarEvento(
       c,
       semEtapa ? 'aceito_sem_etapa' : 'aceito',
@@ -304,8 +365,8 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
     `INSERT INTO leads_etapa (
        contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, etapa, status,
        curso_id, curso_codigo, origem, modalidade, unidade, responsavel_comercial, registrado_em,
-       funil_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       funil_id, email, telefone
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       d.contato_id,
@@ -323,14 +384,44 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       d.responsavel_comercial ?? null,
       d.registrado_em,
       funilFinal,
+      d.email ?? null,
+      d.telefone ?? null,
     )
     .run();
+
+  /*
+   * Espalha a identidade para trás.
+   *
+   * O gatilho de "Inscrito Parcial" manda e-mail e telefone mas um `id` que não
+   * é o do contato; o de contato manda o id certo. Quando um evento traz e-mail,
+   * todas as passagens do mesmo e-mail que chegaram sem ele ficam completas —
+   * senão o cruzamento com RD e Evolution só enxergaria metade da jornada.
+   */
+  if (d.email || d.telefone) {
+    c.executionCtx?.waitUntil(
+      c.env.DB.prepare(
+        `UPDATE leads_etapa
+            SET email    = COALESCE(email, ?),
+                telefone = COALESCE(telefone, ?)
+          WHERE (email IS NULL OR telefone IS NULL)
+            AND (contato_id = ? OR (? IS NOT NULL AND email = ?) OR (? IS NOT NULL AND telefone = ?))`,
+      )
+        .bind(
+          d.email ?? null, d.telefone ?? null,
+          d.contato_id,
+          d.email ?? null, d.email ?? null,
+          d.telefone ?? null, d.telefone ?? null,
+        )
+        .run(),
+    );
+  }
 
   console.log(JSON.stringify({
     evento: 'etapa_gravada',
     contato_id: d.contato_id,
     etapa: d.etapa,
     processo: d.processo_nome,
+    tem_email: Boolean(d.email),
   }));
 
   return c.json({ ok: true, id: meta.last_row_id }, 201);

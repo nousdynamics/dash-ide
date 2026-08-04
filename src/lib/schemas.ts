@@ -62,7 +62,39 @@ const aliases = (dado: unknown, nomes: string[]): unknown => {
 };
 
 /** Normaliza o corpo antes da validação, mapeando os apelidos conhecidos. */
+/**
+ * E-mail em minúsculas — é a chave que casa com o RD Station, e "Joao@" e
+ * "joao@" são a mesma pessoa em todo servidor de e-mail que importa.
+ */
+const normalizarEmail = (v: unknown): string | undefined => {
+  if (typeof v !== 'string') return undefined;
+  const e = v.trim().toLowerCase();
+  return e.includes('@') && e.length > 3 ? e : undefined;
+};
+
+/**
+ * Telefone só com dígitos, com DDI.
+ *
+ * O Rubeus manda "+5581999820742"; a Evolution manda
+ * "5581999820742@s.whatsapp.net". Sem normalizar, nenhuma conversa casaria com
+ * o lead que a originou. Número sem DDI ganha o 55: é uma faculdade de Recife,
+ * e um celular brasileiro tem 10 ou 11 dígitos com DDD.
+ */
+const normalizarTelefone = (v: unknown): string | undefined => {
+  if (typeof v !== 'string' && typeof v !== 'number') return undefined;
+  let d = String(v).split('@')[0]!.replace(/\D/g, '');
+  if (d.length === 10 || d.length === 11) d = `55${d}`;
+  return d.length >= 12 && d.length <= 15 ? d : undefined;
+};
+
 export const normalizarEtapa = (bruto: unknown): unknown => {
+  /*
+   * O webhook nativo do Rubeus embrulha tudo num array de um elemento — o de
+   * automação manda objeto. Eram 56 eventos recusados por isso: contato,
+   * atividade e registro de processo, todos legítimos, todos perdidos por causa
+   * de dois colchetes.
+   */
+  if (Array.isArray(bruto)) bruto = bruto[0];
   if (!bruto || typeof bruto !== 'object') return bruto;
   const o = { ...(bruto as Record<string, unknown>) };
 
@@ -90,7 +122,7 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
    * (`resumoAtual.nome`) quanto o montado campo a campo no fluxo.
    */
 
-  preencher('etapa', ['etapa', 'etapa_atual', 'etapaAtual', 'stage', 'situacao', 'etapa_nome', 'nome_etapa', 'resumoAtual.nome', 'resumo.nome', 'etapa.nome', 'situacao.nome']);
+  preencher('etapa', ['etapa', 'etapa_atual', 'etapaAtual', 'stage', 'situacao', 'etapa_nome', 'nome_etapa', 'resumoAtual.nome', 'resumo.nome', 'etapa.nome', 'situacao.nome', 'oportunidades.0.resumoAtualNome']);
   /*
    * `contatos.0.id` vem ANTES de `id`.
    *
@@ -99,8 +131,29 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
    * contagem de contatos distintos do funil. Já no payload montado campo a
    * campo pelo fluxo, `id` É o contato, e por isso continua na lista, depois.
    */
-  preencher('contato_id', ['contatos.0.id', 'contatoPrincipal.id', 'contato', 'contatoId', 'id_contato', 'idContato', 'aluno_id', 'lead_id', 'id']);
+  /*
+   * `contato.id` entra na frente de `id` pelo mesmo motivo que `contatos.0.id`.
+   * No payload de ATIVIDADE, `id` é o id da atividade — sem isto, cada tarefa
+   * criada virava um "lead" novo, e foi o que gerou os contatos sem nome que
+   * apareceram no funil.
+   */
+  preencher('contato_id', ['contatos.0.id', 'contato.id', 'contatoPrincipal.id', 'contato', 'contatoId', 'id_contato', 'idContato', 'aluno_id', 'lead_id', 'id']);
   preencher('contato_nome', ['nome', 'aluno', 'contatoNome', 'nome_contato', 'lead', 'contatos.0.nome']);
+
+  /*
+   * Identidade que atravessa as integrações: e-mail casa com o RD Station,
+   * telefone casa com a Evolution. O fluxo de automação manda `email`/`phone`
+   * na raiz; o webhook nativo aninha em `emails.principal`/`telefones.principal`.
+   */
+  const email = normalizarEmail(aliases(bruto, ['email', 'emails.principal', 'e_mail', 'emailPrincipal', 'contatos.0.email']));
+  if (email) o.email = email;
+  else delete o.email;
+
+  const telefone = normalizarTelefone(
+    aliases(bruto, ['phone', 'telefone', 'telefones.principal', 'celular', 'whatsapp', 'telefonePrincipal']),
+  );
+  if (telefone) o.telefone = telefone;
+  else delete o.telefone;
   preencher('registrado_em', ['data', 'data_hora', 'dataHora', 'criacao', 'timestamp', 'ocorrido_em', 'registradoEm']);
   preencher('processo_nome', ['processo.nome', 'processoNome', 'funil', 'processo']);
   preencher('processo_id', ['processo.id', 'processoId', 'id_processo']);
@@ -137,7 +190,29 @@ export const etapaSchema = z.object({
   modalidade: z.string().nullish(),
   unidade: z.string().nullish(),
   responsavel_comercial: z.string().nullish(),
+  email: z.string().nullish(),
+  telefone: z.string().nullish(),
 });
+
+/**
+ * Payload de contato: identidade, não passagem de etapa.
+ *
+ * O gatilho de criação/edição de contato não descreve movimento no funil — ele
+ * descreve QUEM é a pessoa. Gravá-lo como etapa criaria uma linha
+ * "(etapa não informada)" por edição de cadastro e sujaria a contagem. O que ele
+ * tem de valioso é o par e-mail + telefone, que é o que liga o lead ao RD
+ * Station e à conversa na Evolution.
+ */
+export const identidadeSchema = z
+  .object({
+    contato_id: idFlexivel,
+    contato_nome: z.string().nullish(),
+    email: z.string().nullish(),
+    telefone: z.string().nullish(),
+  })
+  .refine((d) => Boolean(d.email || d.telefone), {
+    message: 'sem e-mail nem telefone: nada a cruzar',
+  });
 
 // POST /webhook/evolution/conversa
 export const conversaSchema = z.object({

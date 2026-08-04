@@ -50,11 +50,11 @@ api.get('/overview', async (c) => {
 
   const [leads, leadsAnterior, conversas, conversasRecentes] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT COUNT(DISTINCT contato_id) AS total FROM leads_etapa WHERE registrado_em >= ?`,
+      `SELECT COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total FROM leads_etapa WHERE registrado_em >= ?`,
     ).bind(j.inicio).first(),
 
     c.env.DB.prepare(
-      `SELECT COUNT(DISTINCT contato_id) AS total
+      `SELECT COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
        FROM leads_etapa WHERE registrado_em >= ? AND registrado_em < ?`,
     ).bind(j.inicioAnterior, j.inicio).first(),
 
@@ -114,7 +114,7 @@ api.get('/funil', async (c) => {
 
   const [contagens, anteriores, funis] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT etapa, COUNT(DISTINCT contato_id) AS total
+      `SELECT etapa, COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
        FROM leads_etapa
        WHERE registrado_em >= ? AND (? IS NULL OR funil_id = ?)
        GROUP BY etapa
@@ -124,7 +124,7 @@ api.get('/funil', async (c) => {
     // Mesma janela, deslocada para trás. É o que permite dizer "caiu 71%" em
     // cada etapa, e não só "hoje tem 25".
     c.env.DB.prepare(
-      `SELECT etapa, COUNT(DISTINCT contato_id) AS total
+      `SELECT etapa, COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
        FROM leads_etapa
        WHERE registrado_em >= ? AND registrado_em < ? AND (? IS NULL OR funil_id = ?)
        GROUP BY etapa`,
@@ -135,7 +135,7 @@ api.get('/funil', async (c) => {
     // o cadastro não funcionou.
     c.env.DB.prepare(
       `SELECT f.id, f.nome,
-              (SELECT COUNT(DISTINCT l.contato_id) FROM leads_etapa l WHERE l.funil_id = f.id) AS leads
+              (SELECT COUNT(DISTINCT COALESCE(l.email, l.telefone, l.contato_id)) FROM leads_etapa l WHERE l.funil_id = f.id) AS leads
        FROM funis f WHERE f.ativo = 1 ORDER BY leads DESC, f.id`,
     ).all(),
   ]);
@@ -223,12 +223,13 @@ api.get('/funil/serie', async (c) => {
 
   const { results } = await c.env.DB.prepare(
     `SELECT dia, COUNT(*) AS total FROM (
-       SELECT contato_id, date(MIN(registrado_em), '-3 hours') AS dia
+       SELECT COALESCE(email, telefone, contato_id) AS quem,
+              date(MIN(registrado_em), '-3 hours') AS dia
        FROM leads_etapa
        WHERE registrado_em >= ?
          AND (? IS NULL OR funil_id = ?)
          AND (? IS NULL OR etapa = ?)
-       GROUP BY contato_id
+       GROUP BY quem
      ) GROUP BY dia`,
   )
     .bind(new Date(inicioAnterior).toISOString(), fid, fid, etapa, etapa)
