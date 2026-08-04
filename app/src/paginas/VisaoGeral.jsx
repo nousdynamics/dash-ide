@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { Cartao, ChipDelta, Estado, Esqueleto } from '../componentes/base';
 import { FiltroPeriodo } from '../componentes/FiltroPeriodo';
 import { GraficoArea, GraficoBarras, GraficoCombinado, Ranking } from '../componentes/Graficos';
+import { CardsPersonalizados, EditorMetricas } from '../componentes/MetricasPersonalizadas';
 import { useApi } from '../lib/api';
 import { densificarPorDia, diasDoPeriodo, queryPeriodo, resolverPeriodo } from '../lib/periodo';
 import {
@@ -78,13 +80,16 @@ function BarrasPorAcao({ acoes }) {
 
 export function VisaoGeral({ filtro, setFiltro }) {
   const p = queryPeriodo(filtro);
+  // Muda ao criar/editar métrica, para a tela refazer a busca sem F5.
+  const [versaoMetricas, setVersaoMetricas] = useState(0);
   const { dados, carregando, erro } = useApi(
     [
       `/api/ads/overview?${p}${filtro.comparar ? '&comparar=1' : ''}`,
       `/api/overview?dias=${diasDoPeriodo(filtro)}`,
       `/api/ads/resultados-por-acao?${p}`,
+      `/api/metricas`,
     ],
-    `${p}|${filtro.comparar}`
+    `${p}|${filtro.comparar}|${versaoMetricas}`
   );
 
   const { de, ate } = resolverPeriodo(filtro);
@@ -105,7 +110,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
   if (erro) return <>{cabecalho}<Cartao><Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} /></Cartao></>;
   if (carregando || !dados) return <>{cabecalho}<Esqueleto linhas={5} /></>;
 
-  const [ads, base, acoes] = dados;
+  const [ads, base, acoes, metricas] = dados;
   const t = ads.totais;
   const dl = ads.comparacao?.deltas ?? {};
   // O chip diz "quanto variou"; esta linha diz "variou em relação a quê".
@@ -140,6 +145,60 @@ export function VisaoGeral({ filtro, setFiltro }) {
   }));
   const totalLeadsCrm = (base.serie_leads || []).reduce((a, l) => a + l.leads, 0);
 
+  /*
+   * Contexto das fórmulas.
+   *
+   * Ação de conversão entra pelo NOME que o Google usa, casando por prefixo —
+   * "Visualizações de página (Hospedado pelo Google)" tem sufixo que muda
+   * conforme a origem, e exigir o nome exato quebraria a métrica no dia em que
+   * o Google renomear o sufixo.
+   */
+  /*
+   * Cada ação de conversão vira um identificador `acao_<nome>`, gerado do dado.
+   *
+   * Nomear na mão não funcionou: "visualizacoes_pagina" não existia nesta conta,
+   * porque o nome que o gerenciador mostra por campanha não é o que a API
+   * devolve. Gerando do dado, a tela oferece o que existe de verdade e não
+   * quebra quando alguém renomeia uma conversão no Google.
+   */
+  const idDaAcao = (nome) =>
+    'acao_' +
+    (nome || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+
+  const porAcao = {};
+  for (const i of acoes.itens || []) porAcao[idDaAcao(i.acao)] = i.resultados;
+
+  const ctxMetricas = {
+    investimento: t.investimento,
+    conversoes: t.resultados_primarios,
+    todas_conversoes: t.resultados,
+    conversoes_secundarias: t.resultados_secundarios,
+    cliques: t.cliques,
+    impressoes: t.impressoes,
+    leads_crm: totalLeadsCrm,
+    ...porAcao,
+  };
+
+  // A tela mostra as ações reais junto das bases fixas, com o total do período.
+  const basesComAcoes = [
+    ...(metricas.bases || []),
+    ...(acoes.itens || []).map((i) => ({
+      id: idDaAcao(i.acao),
+      rotulo: i.acao,
+      ajuda: `Ação de conversão "${i.acao}" — ${i.tipo} · ${i.resultados.toFixed(1)} no período`,
+    })),
+  ];
+
+  // O período anterior não tem quebra por ação; o que dá para comparar, compara.
+  const ctxAnterior = ant ? { ...ctxMetricas, investimento: ant.investimento, conversoes: ant.resultados_primarios,
+    todas_conversoes: ant.resultados, conversoes_secundarias: ant.resultados_secundarios,
+    cliques: ant.cliques, impressoes: ant.impressoes } : null;
+
   const kpis = [
     { rotulo: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, antes: ant && fmtBRL(ant.investimento), rodape: 'Google Ads', icone: '💰' },
     { rotulo: 'Conversões', valor: fmtDec(t.resultados_primarios), delta: dl.resultados_primarios, antes: ant && fmtDec(ant.resultados_primarios), rodape: 'Só as primárias, como no gerenciador', icone: '✓', tom: 'sucesso' },
@@ -153,6 +212,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
     ['Impressões', fmtInt(t.impressoes), ant && fmtInt(ant.impressoes)],
     ['Cliques', fmtInt(t.cliques), ant && fmtInt(ant.cliques)],
     ['CPC médio', fmtBRL(t.cpc_medio), ant && fmtBRL(ant.cpc_medio)],
+    ['CPM', fmtBRL(t.cpm), ant && fmtBRL(ant.cpm)],
     ['CTR', fmtPct(t.ctr), ant && fmtPct(ant.ctr)],
   ];
 
@@ -179,6 +239,14 @@ export function VisaoGeral({ filtro, setFiltro }) {
           </Cartao>
         ))}
       </div>
+
+      <CardsPersonalizados defs={metricas.itens} ctx={ctxMetricas} ctxAnterior={ctxAnterior} />
+
+      <EditorMetricas
+        dados={{ ...metricas, bases: basesComAcoes }}
+        ctx={ctxMetricas}
+        aoMudar={() => setVersaoMetricas((v) => v + 1)}
+      />
 
       <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
         <GraficoBarras

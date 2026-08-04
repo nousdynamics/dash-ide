@@ -4,6 +4,7 @@ import type { AppEnv } from './lib/tipos';
 import ads from './routes/ads';
 import api from './routes/api';
 import funisRotas from './routes/funis';
+import metricasRotas from './routes/metricas';
 import oauth from './routes/oauth';
 import webhooks from './routes/webhooks';
 
@@ -49,6 +50,7 @@ app.use('/api/*', exigirAcesso);
 app.use('/oauth/*', exigirAcesso);
 app.route('/oauth', oauth);
 app.route('/api/funis', funisRotas);
+app.route('/api/metricas', metricasRotas);
 app.route('/api/ads', ads);
 app.route('/api', api);
 

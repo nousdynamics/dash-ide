@@ -28,6 +28,7 @@ type Totais = {
   cliques: number;
   custo_por_resultado: number | null;
   cpc_medio: number | null;
+  cpm: number | null;
   ctr: number | null;
   taxa_conversao: number | null;
 };
@@ -72,6 +73,9 @@ function totalizar(metricas: Array<Record<string, unknown>>): Totais {
     cliques,
     custo_por_resultado: primarias > 0 ? investimento / primarias : null,
     cpc_medio: cliques > 0 ? investimento / cliques : null,
+    // CPM é por MIL impressões — daí o ×1000. Sem isso vira um número
+    // microscópico que ninguém reconhece.
+    cpm: impressoes > 0 ? (investimento / impressoes) * 1000 : null,
     ctr: impressoes > 0 ? (cliques / impressoes) * 100 : null,
     taxa_conversao: cliques > 0 ? (primarias / cliques) * 100 : null,
   };
@@ -93,6 +97,7 @@ function deltas(a: Totais, b: Totais): Record<string, number | null> {
     cliques: delta(a.cliques, b.cliques),
     custo_por_resultado: delta(a.custo_por_resultado, b.custo_por_resultado),
     cpc_medio: delta(a.cpc_medio, b.cpc_medio),
+    cpm: delta(a.cpm, b.cpm),
     ctr: delta(a.ctr, b.ctr),
     taxa_conversao: delta(a.taxa_conversao, b.taxa_conversao),
   };
