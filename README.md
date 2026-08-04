@@ -47,6 +47,14 @@ Em `wrangler dev` não há Access na frente; a brecha é a variável `AMBIENTE=d
 que só existe em `.dev.vars` e nunca é publicada. Em produção, a ausência dela é
 o que obriga a verificação — falha fechado.
 
+**Segundo nível: `ADMINS`.** O Access libera o domínio inteiro da faculdade, o
+que está certo para relatório — investimento, funil e conversas são o trabalho
+de todo mundo ali. Funis e webhooks é outra coisa: ela EMITE a credencial que
+autoriza escrever no banco. `/api/funis*` exige estar na lista `ADMINS` do
+wrangler.jsonc; lista vazia significa que ninguém administra, nunca "todo
+mundo". O menu esconde o item para quem não é admin, mas isso é conveniência —
+a permissão mora no servidor, e digitar `#/webhooks` na mão só leva ao 403.
+
 **A URL `*.workers.dev` está desligada de propósito** (`workers_dev: false`). O
 Access protege a zona `ide.edu.br`, mas não alcança `*.workers.dev`, que não é
 uma zona nossa — com ela ligada, qualquer pessoa com o endereço lia o
@@ -135,11 +143,22 @@ etapas e cada processo usa um conjunto diferente; lista manual paralela vira
 segunda verdade que diverge no primeiro rename feito lá. O que justifica
 cadastrar o funil é a URL do webhook precisar existir antes do primeiro evento.
 
-**O token nunca é renderizado.** Não dá para ter link com segredo e "sem
-expor" ao mesmo tempo — o segredo está no link. A listagem devolve só o
-caminho, a tela mostra `?t=••••`, e o botão copiar busca a URL completa em
-`GET /api/funis/:id/token/:canal`, jogando direto no clipboard. Cada cópia é
-registrada no log com o e-mail de quem clicou.
+**O token não é guardado, só o hash dele.** Não dá para ter link com segredo e
+"sem expor" ao mesmo tempo — o segredo está no link. O que dá é não guardar o
+segredo: o D1 tem o SHA-256, que serve para conferir um token apresentado e não
+para recuperá-lo. Um dump do banco deixou de conter credencial.
+
+Consequência aceita: **não existe "copiar link"**. A URL completa aparece uma
+única vez, na resposta de `POST /api/funis/:id/regerar/:canal`, e vai direto
+para o clipboard sem ser desenhada na tela. Link perdido é regerado, não
+reexibido — e regerar invalida o anterior na hora, então quem gera precisa
+recolar no Rubeus. Cada geração fica no log com o e-mail de quem clicou.
+
+Webhook sem link gerado é estado legítimo, não pendência: o funil existe, o
+canal existe, a credencial só é emitida quando alguém for usar aquele canal.
+
+**A tela inteira é administrativa.** `/api/funis*` exige estar em `ADMINS`
+(wrangler.jsonc), não só passar pelo Access — ver **Acesso**.
 
 **O fluxo de automação do Rubeus não manda a etapa no corpo.** Ele dispara por
 gatilho de etapa, mas o payload que monta traz só dados do contato — a etapa
@@ -279,8 +298,10 @@ Registradas aqui porque afetam quem for continuar:
    igual aqui porque o Rubeus dispara para os dois destinos. Ver `src/lib/corpo.ts`.
 
 6. **Token de webhook por funil × canal**, opaco, de 32 bytes de
-   `crypto.getRandomValues`. Nunca sai na listagem da tela: o painel só busca a
-   URL completa no clique de copiar, e registra quem copiou.
+   `crypto.getRandomValues`, guardado só como SHA-256. Sem sal e sem KDF de
+   propósito: sal protege contra tabela pré-computada e KDF lento contra força
+   bruta, e nenhum dos dois alcança 32 bytes de CSPRNG — só somariam latência em
+   todo webhook recebido.
 
 7. **JWT do Access verificado no Worker**, com `alg` fixo em RS256 — aceitar o
    algoritmo que o token pede é deixar o atacante escolher o cadeado.
