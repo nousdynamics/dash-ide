@@ -89,7 +89,7 @@ function TabelaPalavras({ palavras }) {
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-tenue tnum">
               <span>{ROTULO_CORRESP[k.correspondencia] || k.correspondencia}</span>
               <span>{fmtBRL(k.investimento)}</span>
-              <span>{fmtDec(k.resultados)} result.</span>
+              <span>{fmtDec(k.resultados)} conv.</span>
               <span>{fmtInt(k.cliques)} cliques</span>
             </div>
           </div>
@@ -99,7 +99,7 @@ function TabelaPalavras({ palavras }) {
       <table className="w-full border-collapse">
         <thead>
           <tr>
-            {['Termo', 'Correspondência', 'Estado', 'Investimento', 'Resultados', 'Cliques'].map((h) => (
+            {['Termo', 'Correspondência', 'Estado', 'Investimento', 'Conversões', 'Cliques'].map((h) => (
               <th
                 key={h}
                 className="text-left pb-2 px-3 text-[11px] uppercase tracking-wide text-tenue font-semibold whitespace-nowrap"
@@ -225,7 +225,7 @@ export function CampanhaDetalhe({ id, filtro }) {
 
   const kpis = [
     ['Investimento', fmtBRL(camp.investimento)],
-    ['Resultados', fmtDec(camp.resultados)],
+    ['Conversões', fmtDec(camp.resultados)],
     ['Cliques', fmtInt(camp.cliques)],
     ['Impressões', fmtInt(camp.impressoes)],
     ['Orçamento diário', camp.orcamento_diario === null ? '—' : fmtBRL(camp.orcamento_diario)],
@@ -303,7 +303,7 @@ export function CampanhaDetalhe({ id, filtro }) {
                           <div className="flex items-center gap-3 text-xs text-secundario tnum flex-wrap">
                             <PillStatus status={a.status} />
                             <span>{fmtBRL(a.investimento)}</span>
-                            <span>{fmtDec(a.resultados)} result.</span>
+                            <span>{fmtDec(a.resultados)} conv.</span>
                           </div>
                         </div>
                         <TextosDoAnuncio anuncio={a} />

@@ -1,6 +1,6 @@
 import { Cartao, ChipDelta, Estado, Esqueleto } from '../componentes/base';
 import { FiltroPeriodo } from '../componentes/FiltroPeriodo';
-import { GraficoArea, GraficoBarras } from '../componentes/Graficos';
+import { GraficoArea, GraficoBarras, GraficoCombinado, Ranking } from '../componentes/Graficos';
 import { useApi } from '../lib/api';
 import { densificarPorDia, diasDoPeriodo, queryPeriodo, resolverPeriodo } from '../lib/periodo';
 import {
@@ -113,13 +113,40 @@ export function VisaoGeral({ filtro, setFiltro }) {
 
   const serie = densificarPorDia(ads.serie_diaria, ads.periodo.de, ads.periodo.ate);
 
+  /*
+   * Custo por resultado dia a dia.
+   *
+   * O card mostra a média do período, que esconde a tendência: uma semana boa
+   * seguida de uma ruim dá a mesma média que duas medianas. Aqui dá para ver se
+   * está encarecendo. Dia sem resultado fica `null` — dividir por zero viraria
+   * um pico infinito que achata o resto do gráfico.
+   */
+  const serieCusto = serie.map((d) => ({
+    ...d,
+    custo_resultado: d.resultados > 0 ? d.investimento / d.resultados : null,
+  }));
+
+  /*
+   * Leads do CRM colados na série do Google, por data.
+   *
+   * É a conciliação que separa "conversão que o Google contou" de "pessoa que
+   * entrou no Rubeus" — e metade dos Resultados da conta são ações locais
+   * (rota no Maps, visita ao perfil), que nunca viram lead.
+   */
+  const leadsPorDia = new Map((base.serie_leads || []).map((l) => [l.dia, l.leads]));
+  const serieConciliacao = serie.map((d) => ({
+    ...d,
+    leads_crm: leadsPorDia.get(d.data) ?? 0,
+  }));
+  const totalLeadsCrm = (base.serie_leads || []).reduce((a, l) => a + l.leads, 0);
+
   const kpis = [
     { rotulo: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, antes: ant && fmtBRL(ant.investimento), rodape: 'Google Ads', icone: '💰' },
-    { rotulo: 'Resultados', valor: fmtDec(t.resultados), delta: dl.resultados, antes: ant && fmtDec(ant.resultados), rodape: 'Todas as conversões', icone: '✓', tom: 'sucesso' },
+    { rotulo: 'Conversões', valor: fmtDec(t.resultados), delta: dl.resultados, antes: ant && fmtDec(ant.resultados), rodape: 'Primárias + secundárias', icone: '✓', tom: 'sucesso' },
     { rotulo: 'Conversões primárias', valor: fmtDec(t.resultados_primarios), delta: dl.resultados_primarios, antes: ant && fmtDec(ant.resultados_primarios), rodape: 'Ações principais', icone: '◆' },
     { rotulo: 'Conversões secundárias', valor: fmtDec(t.resultados_secundarios), delta: dl.resultados_secundarios, antes: ant && fmtDec(ant.resultados_secundarios), rodape: 'Demais ações', icone: '◇' },
-    { rotulo: 'Custo / resultado', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, antes: ant && fmtBRL(ant.custo_por_resultado), rodape: 'Investimento ÷ resultados', icone: '⊘' },
-    { rotulo: 'Taxa de conversão', valor: fmtPct(t.taxa_conversao), delta: dl.taxa_conversao, antes: ant && fmtPct(ant.taxa_conversao), rodape: 'Resultados ÷ cliques', icone: '◐' },
+    { rotulo: 'Custo por conversão', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, antes: ant && fmtBRL(ant.custo_por_resultado), rodape: 'Investimento ÷ conversões', icone: '⊘' },
+    { rotulo: 'Taxa de conversão', valor: fmtPct(t.taxa_conversao), delta: dl.taxa_conversao, antes: ant && fmtPct(ant.taxa_conversao), rodape: 'Conversões ÷ cliques', icone: '◐' },
   ];
 
   const secundarios = [
@@ -163,7 +190,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
           legenda="Gasto médio por dia"
         />
         <GraficoArea
-          titulo="Resultados por dia"
+          titulo="Conversões por dia"
           dados={serie}
           chave="resultados"
           fmt={fmtDec}
@@ -172,9 +199,65 @@ export function VisaoGeral({ filtro, setFiltro }) {
         />
       </div>
 
+      <GraficoCombinado
+        titulo="Investimento e conversões, lado a lado"
+        subtitulo="Se a linha não sobe quando a barra sobe, o dinheiro extra daquele dia não comprou resultado."
+        dados={serie}
+        barra={{ chave: 'investimento', rotulo: 'Investimento', fmt: fmtBRL, fmtEixo: fmtBRLCurto }}
+        linha={{ chave: 'resultados', rotulo: 'Conversões', fmt: fmtDec, fmtEixo: fmtInt }}
+      />
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <GraficoArea
+          titulo="Custo por conversão, dia a dia"
+          dados={serieCusto.filter((d) => d.custo_resultado !== null)}
+          chave="custo_resultado"
+          fmt={fmtBRL}
+          fmtEixo={fmtBRLCurto}
+          legenda="Média dos dias com conversão"
+        />
+        <GraficoBarras
+          titulo="Cliques por dia"
+          dados={serie}
+          chave="cliques"
+          fmt={fmtInt}
+          fmtEixo={fmtInt}
+          legenda="Média por dia"
+        />
+      </div>
+
+      <GraficoCombinado
+        titulo="O que o Google contou × quem entrou no Rubeus"
+        subtitulo={`${fmtDec(t.resultados)} conversões na conta de mídia · ${fmtInt(totalLeadsCrm)} leads no CRM. A diferença é conversão que não virou lead — ação local, clique em telefone, formulário abandonado.`}
+        dados={serieConciliacao}
+        barra={{ chave: 'resultados', rotulo: 'Conversões (Google)', fmt: fmtDec, fmtEixo: fmtInt }}
+        linha={{ chave: 'leads_crm', rotulo: 'Leads (Rubeus)', fmt: fmtInt, fmtEixo: fmtInt }}
+      />
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <Ranking
+          titulo="Origem dos leads, segundo o Rubeus"
+          subtitulo="De onde o lead real diz que veio — não a conversão que o Google atribuiu."
+          itens={base.origens || []}
+          rotulo="origem"
+          valor="total"
+          fmt={fmtInt}
+        />
+        <GraficoBarras
+          titulo="A que horas o lead chega"
+          dados={(base.por_hora || []).map((h) => ({ data: `${String(h.hora).padStart(2, '0')}:00`, total: h.total }))}
+          chave="total"
+          fmt={fmtInt}
+          fmtEixo={fmtInt}
+          legenda="Média por hora · horário de Brasília"
+          unidade="horas"
+          fmtRotulo={(v) => v}
+        />
+      </div>
+
       <Cartao>
         <div className="flex items-center justify-between gap-3 mb-3">
-          <div className="text-[13px] font-semibold">De onde vêm os resultados</div>
+          <div className="text-[13px] font-semibold">De onde vêm as conversões</div>
           <div className="text-[11px] text-tenue tnum">
             {fmtDec(acoes.total_primarios)} primárias · {fmtDec(acoes.total_secundarios)} secundárias
           </div>

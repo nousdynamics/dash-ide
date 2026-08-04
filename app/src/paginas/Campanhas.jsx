@@ -10,8 +10,8 @@ const COLUNAS = [
   { id: 'nome', rotulo: 'Campanha', fmt: (v) => v },
   { id: 'status', rotulo: 'Status', fmt: (v) => ({ ENABLED: 'Ativa', PAUSED: 'Pausada', REMOVED: 'Excluída' }[v] || v) },
   { id: 'investimento', rotulo: 'Investimento', fmt: fmtBRL },
-  { id: 'resultados', rotulo: 'Resultados', fmt: fmtDec },
-  { id: 'custo_por_resultado', rotulo: 'Custo/result.', fmt: fmtBRL },
+  { id: 'resultados', rotulo: 'Conversões', fmt: fmtDec },
+  { id: 'custo_por_resultado', rotulo: 'Custo/conv.', fmt: fmtBRL },
   { id: 'cliques', rotulo: 'Cliques', fmt: fmtInt },
   { id: 'ctr', rotulo: 'CTR', fmt: fmtPct },
 ];
@@ -210,8 +210,8 @@ export function Campanhas({ filtro, setFiltro }) {
                         <div className="text-xs font-medium">{i.nome}</div>
                         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-tenue tnum">
                           <span>{fmtBRL(i.investimento)}</span>
-                          <span>{fmtDec(i.resultados)} result.</span>
-                          <span>{fmtBRL(i.custo_por_resultado)}/result.</span>
+                          <span>{fmtDec(i.resultados)} conv.</span>
+                          <span>{fmtBRL(i.custo_por_resultado)}/conv.</span>
                           <span>{fmtInt(i.cliques)} cliques</span>
                           <span>{fmtPct(i.ctr)}</span>
                         </div>

@@ -48,7 +48,15 @@ api.get('/overview', async (c) => {
   const { dias } = q.data;
   const j = janelas(dias);
 
-  const [leads, leadsAnterior, conversas, conversasRecentes] = await Promise.all([
+  /*
+   * Dia em Brasília, não em UTC: o Worker roda em UTC e um lead cadastrado às
+   * 22h de terça apareceria na quarta, num gráfico que alguém vai comparar com
+   * o próprio dia de trabalho.
+   */
+  const DIA_BR = "date(registrado_em, '-3 hours')";
+
+  const [leads, leadsAnterior, conversas, conversasRecentes, serieLeads, origens, porHora] =
+    await Promise.all([
     c.env.DB.prepare(
       `SELECT COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total FROM leads_etapa WHERE registrado_em >= ?`,
     ).bind(j.inicio).first(),
@@ -69,6 +77,40 @@ api.get('/overview', async (c) => {
       `SELECT contato_id, contato_nome, atendente, iniciada_em, respondida, tempo_resposta_min
        FROM conversas_whatsapp ORDER BY iniciada_em DESC LIMIT 10`,
     ).all(),
+
+    /*
+     * Leads por dia, contados na PRIMEIRA vez que a pessoa apareceu.
+     * Sem o MIN, um lead que avança quatro etapas no mesmo dia viraria quatro
+     * leads e o gráfico não bateria com o card ao lado.
+     */
+    c.env.DB.prepare(
+      `SELECT dia, COUNT(*) AS leads FROM (
+         SELECT COALESCE(email, telefone, contato_id) AS quem, MIN(${DIA_BR}) AS dia
+         FROM leads_etapa WHERE registrado_em >= ?
+         GROUP BY quem
+       ) GROUP BY dia ORDER BY dia`,
+    ).bind(j.inicio).all(),
+
+    // De onde o lead REAL diz que veio, na boca do Rubeus — não a conversão que
+    // o Google contou.
+    c.env.DB.prepare(
+      `SELECT COALESCE(origem, '(sem origem)') AS origem,
+              COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
+       FROM leads_etapa WHERE registrado_em >= ?
+       GROUP BY origem ORDER BY total DESC LIMIT 8`,
+    ).bind(j.inicio).all(),
+
+    /*
+     * Hora do dia em que o lead entra.
+     * É a pergunta operacional que nenhum número de mídia responde: a que horas
+     * precisa ter gente pronta para atender.
+     */
+    c.env.DB.prepare(
+      `SELECT CAST(strftime('%H', registrado_em, '-3 hours') AS INTEGER) AS hora,
+              COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
+       FROM leads_etapa WHERE registrado_em >= ?
+       GROUP BY hora ORDER BY hora`,
+    ).bind(j.inicio).all(),
   ]);
 
   const totalLeads = num(leads?.total);
@@ -85,6 +127,14 @@ api.get('/overview', async (c) => {
       tempo_medio_min: Number(num(conversas?.tempo_medio_min).toFixed(1)),
     },
     conversas_recentes: conversasRecentes.results,
+    serie_leads: serieLeads.results,
+    origens: origens.results,
+    // 24 posições sempre, para o gráfico não sugerir que às 3h da manhã não
+    // existe hora — existe, e o zero ali é informação.
+    por_hora: Array.from({ length: 24 }, (_, h) => ({
+      hora: h,
+      total: num((porHora.results as Array<{ hora: number; total: number }>).find((r) => r.hora === h)?.total),
+    })),
   });
 });
 
