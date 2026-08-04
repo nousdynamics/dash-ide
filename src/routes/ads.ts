@@ -5,11 +5,16 @@ import { ErroGoogleAds, consultar, dataValida, deMicros, janelaAnterior, num } f
 const ads = new Hono<AppEnv>();
 
 /**
- * "Resultados" é a soma de TODAS as conversões que a plataforma reporta, sem
- * allowlist de ação. A separação primária/secundária existe como recorte, não
- * como filtro do total — nesta conta a flag do Google marca como primária
- * inscrição em canal do YouTube e clique em rota do Maps, e como secundária o
- * "Concluiu Inscrição", então filtrar por ela esconderia o que interessa.
+ * Conversão é a PRIMÁRIA. É a definição do gerenciador, e é a que mede campanha.
+ *
+ * Nesta conta as primárias são CTWA, "Conversation started" e LeadForm — 302 no
+ * período de referência. As secundárias são ações locais: rota no Maps, visita
+ * à loja, visita ao site pelo perfil — 232,9. Somar as duas e chamar de
+ * resultado inflava o numerador e barateava o custo pela metade: R$ 7,46 no
+ * painel contra R$ 13,21 no Google, mesma conta, mesmo período.
+ *
+ * `resultados` continua sendo o total (todas as conversões) porque é dado útil —
+ * mostra engajamento —, mas não é o que decide orçamento.
  *
  * A métrica nasce agregável por plataforma: quando o Meta Ads entrar, ele soma
  * aqui em vez de virar um card separado.
@@ -32,10 +37,8 @@ type Totais = {
  *   metrics.conversions      -> só ações com primary_for_goal = true
  *   metrics.all_conversions  -> TODAS as ações, primárias e secundárias
  *
- * "Resultados" usa all_conversions, que é o total que a plataforma reporta.
- * Usar `conversions` esconderia justamente as ações que interessam à IDE: nesta
- * conta o "Concluiu Inscrição" está marcado como secundário, enquanto inscrição
- * em canal do YouTube e clique em rota do Maps estão como primárias.
+ * `resultados` guarda o total; `resultados_primarios` é o que a tela chama de
+ * "Conversões" e o que entra no custo por conversão.
  */
 function totalizar(metricas: Array<Record<string, unknown>>): Totais {
   let investimento = 0, todas = 0, primarias = 0, impressoes = 0, cliques = 0;
@@ -48,6 +51,18 @@ function totalizar(metricas: Array<Record<string, unknown>>): Totais {
   }
   // Secundária é derivada: o Google não expõe uma métrica só delas.
   const secundarias = Math.max(0, todas - primarias);
+  /*
+   * Custo por conversão e taxa de conversão saem das PRIMÁRIAS, não do total.
+   *
+   * É o que o gerenciador faz, e a diferença não é acadêmica: dividir por
+   * "todas" incluía rota no Maps e visita ao perfil no denominador e barateava
+   * o custo pela metade — R$ 7,46 no painel contra R$ 13,21 no Google, para a
+   * mesma conta e o mesmo período. Quem decide orçamento com o número errado
+   * decide errado.
+   *
+   * Secundária continua somando em `resultados` (todas as conversões), que é
+   * onde ela pertence: serve para ver engajamento, não para medir campanha.
+   */
   return {
     investimento,
     resultados: todas,
@@ -55,10 +70,10 @@ function totalizar(metricas: Array<Record<string, unknown>>): Totais {
     resultados_secundarios: secundarias,
     impressoes,
     cliques,
-    custo_por_resultado: todas > 0 ? investimento / todas : null,
+    custo_por_resultado: primarias > 0 ? investimento / primarias : null,
     cpc_medio: cliques > 0 ? investimento / cliques : null,
     ctr: impressoes > 0 ? (cliques / impressoes) * 100 : null,
-    taxa_conversao: cliques > 0 ? (todas / cliques) * 100 : null,
+    taxa_conversao: cliques > 0 ? (primarias / cliques) * 100 : null,
   };
 }
 
@@ -207,7 +222,9 @@ ads.get('/campanhas', async (c) => {
       resultados_secundarios: Math.max(0, resultados - primarios),
       cliques,
       impressoes,
-      custo_por_resultado: resultados > 0 ? investimento / resultados : null,
+      // Mesma regra dos totais: o denominador é a conversão primária, como no
+      // gerenciador. Ver totalizar().
+      custo_por_resultado: primarios > 0 ? investimento / primarios : null,
       cpc_medio: cliques > 0 ? investimento / cliques : null,
       ctr: impressoes > 0 ? (cliques / impressoes) * 100 : null,
     };

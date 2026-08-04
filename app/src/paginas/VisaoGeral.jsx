@@ -123,7 +123,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
    */
   const serieCusto = serie.map((d) => ({
     ...d,
-    custo_resultado: d.resultados > 0 ? d.investimento / d.resultados : null,
+    custo_resultado: d.resultados_primarios > 0 ? d.investimento / d.resultados_primarios : null,
   }));
 
   /*
@@ -142,9 +142,9 @@ export function VisaoGeral({ filtro, setFiltro }) {
 
   const kpis = [
     { rotulo: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, antes: ant && fmtBRL(ant.investimento), rodape: 'Google Ads', icone: '💰' },
-    { rotulo: 'Conversões', valor: fmtDec(t.resultados), delta: dl.resultados, antes: ant && fmtDec(ant.resultados), rodape: 'Primárias + secundárias', icone: '✓', tom: 'sucesso' },
-    { rotulo: 'Conversões primárias', valor: fmtDec(t.resultados_primarios), delta: dl.resultados_primarios, antes: ant && fmtDec(ant.resultados_primarios), rodape: 'Ações principais', icone: '◆' },
-    { rotulo: 'Conversões secundárias', valor: fmtDec(t.resultados_secundarios), delta: dl.resultados_secundarios, antes: ant && fmtDec(ant.resultados_secundarios), rodape: 'Demais ações', icone: '◇' },
+    { rotulo: 'Conversões', valor: fmtDec(t.resultados_primarios), delta: dl.resultados_primarios, antes: ant && fmtDec(ant.resultados_primarios), rodape: 'Só as primárias, como no gerenciador', icone: '✓', tom: 'sucesso' },
+    { rotulo: 'Todas as conversões', valor: fmtDec(t.resultados), delta: dl.resultados, antes: ant && fmtDec(ant.resultados), rodape: 'Primárias + secundárias', icone: '◆' },
+    { rotulo: 'Conversões secundárias', valor: fmtDec(t.resultados_secundarios), delta: dl.resultados_secundarios, antes: ant && fmtDec(ant.resultados_secundarios), rodape: 'Ações locais: rota, visita, perfil', icone: '◇' },
     { rotulo: 'Custo por conversão', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, antes: ant && fmtBRL(ant.custo_por_resultado), rodape: 'Investimento ÷ conversões', icone: '⊘' },
     { rotulo: 'Taxa de conversão', valor: fmtPct(t.taxa_conversao), delta: dl.taxa_conversao, antes: ant && fmtPct(ant.taxa_conversao), rodape: 'Conversões ÷ cliques', icone: '◐' },
   ];
@@ -192,7 +192,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
         <GraficoArea
           titulo="Conversões por dia"
           dados={serie}
-          chave="resultados"
+          chave="resultados_primarios"
           fmt={fmtDec}
           fmtEixo={fmtInt}
           legenda="Média por dia"
@@ -204,7 +204,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
         subtitulo="Se a linha não sobe quando a barra sobe, o dinheiro extra daquele dia não comprou resultado."
         dados={serie}
         barra={{ chave: 'investimento', rotulo: 'Investimento', fmt: fmtBRL, fmtEixo: fmtBRLCurto }}
-        linha={{ chave: 'resultados', rotulo: 'Conversões', fmt: fmtDec, fmtEixo: fmtInt }}
+        linha={{ chave: 'resultados_primarios', rotulo: 'Conversões', fmt: fmtDec, fmtEixo: fmtInt }}
       />
 
       <div className="grid gap-3 lg:grid-cols-2">
@@ -228,9 +228,9 @@ export function VisaoGeral({ filtro, setFiltro }) {
 
       <GraficoCombinado
         titulo="O que o Google contou × quem entrou no Rubeus"
-        subtitulo={`${fmtDec(t.resultados)} conversões na conta de mídia · ${fmtInt(totalLeadsCrm)} leads no CRM. A diferença é conversão que não virou lead — ação local, clique em telefone, formulário abandonado.`}
+        subtitulo={`${fmtDec(t.resultados_primarios)} conversões na conta de mídia · ${fmtInt(totalLeadsCrm)} leads no CRM. A diferença é conversão que não virou lead: clique em telefone, conversa iniciada que não avançou, formulário abandonado.`}
         dados={serieConciliacao}
-        barra={{ chave: 'resultados', rotulo: 'Conversões (Google)', fmt: fmtDec, fmtEixo: fmtInt }}
+        barra={{ chave: 'resultados_primarios', rotulo: 'Conversões (Google)', fmt: fmtDec, fmtEixo: fmtInt }}
         linha={{ chave: 'leads_crm', rotulo: 'Leads (Rubeus)', fmt: fmtInt, fmtEixo: fmtInt }}
       />
 
