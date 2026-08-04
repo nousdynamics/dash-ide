@@ -10,14 +10,11 @@ import webhooks from './routes/webhooks';
 const app = new Hono<AppEnv>();
 
 /**
- * POST /webhook/* — chamadas servidor-a-servidor (Rubeus, n8n, Evolution API).
- * Protegidos pelo header X-Webhook-Secret e deliberadamente FORA do Cloudflare
- * Access, que barraria uma requisição sem sessão humana.
- */
-app.route('/webhook', webhooks);
-
-/**
  * Cabeçalhos de resposta de tudo que sai do Worker.
+ *
+ * PRIMEIRO de todos. O Hono percorre os handlers na ordem de registro e para no
+ * que responde: registrado depois de `/webhook`, este middleware simplesmente
+ * não rodava para as rotas de webhook, que respondem sem chamar `next()`.
  *
  * `no-store` importa mais do que parece: as respostas de `/api` carregam dado de
  * lead e o endpoint de token devolve credencial viva. Sem isso, qualquer cache
@@ -30,6 +27,13 @@ app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
   c.header('Referrer-Policy', 'no-referrer');
 });
+
+/**
+ * POST /webhook/* — chamadas servidor-a-servidor (Rubeus, n8n, Evolution API).
+ * Autenticados pelo token do funil ou do evento e deliberadamente FORA do
+ * Cloudflare Access, que barraria uma requisição sem sessão humana.
+ */
+app.route('/webhook', webhooks);
 
 /**
  * GET /api/* — consumidos pelo painel, atrás do Cloudflare Access.
