@@ -273,21 +273,26 @@ export const paginacaoQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-export const funilQuerySchema = z.object({
-  funil_id: z.string().min(1).optional(),
+/** Mês (yyyy-mm), ano (yyyy) e intervalo — as três formas de pedir período. */
+const periodoCampos = {
+  mes: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  ano: z.string().regex(/^\d{4}$/).optional(),
   dias: z.coerce.number().int().min(1).max(365).optional(),
   de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+};
+
+export const funilQuerySchema = z.object({
+  funil_id: z.string().min(1).optional(),
+  ...periodoCampos,
   curso_codigo: z.string().min(1).optional(),
   categoria: z.string().min(1).optional(),
   modalidade: z.string().min(1).optional(),
   processo_id: z.string().min(1).optional(),
-}).refine((q) => q.de || q.ate || q.dias || true, { message: 'periodo' });
+});
 
 export const macroQuerySchema = z.object({
-  dias: z.coerce.number().int().min(1).max(365).optional(),
-  de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  ...periodoCampos,
   curso_codigo: z.string().min(1).optional(),
   categoria: z.string().min(1).optional(),
   modalidade: z.string().min(1).optional(),

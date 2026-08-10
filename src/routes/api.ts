@@ -92,23 +92,21 @@ function clausulasFiltroCurso(opts: {
     partes.push(`lower(${a}modalidade) = lower(?)`);
     binds.push(opts.modalidade);
   }
+  /*
+   * Categoria vem da view `curso_categoria`, que já resolveu nível, nome e
+   * desempate. Antes o critério estava escrito aqui também, e em outra versão:
+   * casava `padrao_nome` contra `cursos.nome` e ignorava as ofertas — onde mora
+   * a graduação inteira, que só existe por semestre. Filtrar por "Graduação
+   * Psicologia" não devolvia nada mesmo havendo inscrição.
+   */
   if (opts.categoria) {
-    partes.push(`(
-      EXISTS (
-        SELECT 1 FROM curso_categorias cc
-        WHERE cc.categoria = ?
-          AND cc.curso_codigo IS NOT NULL
-          AND cc.curso_codigo = ${a}curso_codigo
-      )
-      OR EXISTS (
-        SELECT 1 FROM curso_categorias cc
-        LEFT JOIN cursos cu ON cu.codigo = ${a}curso_codigo OR cu.id = ${a}curso_id
-        WHERE cc.categoria = ?
-          AND cc.padrao_nome IS NOT NULL
-          AND lower(COALESCE(cu.nome, ${a}curso_codigo, '')) LIKE lower(cc.padrao_nome)
-      )
+    partes.push(`EXISTS (
+      SELECT 1 FROM curso_categoria cc
+      WHERE cc.categoria = ?
+        AND ((${a}curso_codigo IS NOT NULL AND cc.curso_codigo = ${a}curso_codigo)
+          OR (${a}curso_id     IS NOT NULL AND cc.curso_id     = ${a}curso_id))
     )`);
-    binds.push(opts.categoria, opts.categoria);
+    binds.push(opts.categoria);
   }
 
   return { sql: partes.length ? ` AND ${partes.join(' AND ')}` : '', binds };
@@ -197,21 +195,6 @@ api.get('/overview', async (c) => {
   });
 });
 
-async function contarDistinct(
-  db: D1Database,
-  inicio: string,
-  fim: string,
-  extraSql: string,
-  binds: unknown[],
-): Promise<number> {
-  const row = await db.prepare(
-    `SELECT COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
-     FROM leads_etapa
-     WHERE registrado_em >= ? AND registrado_em <= ?${extraSql}`,
-  ).bind(inicio, fim, ...binds).first();
-  return num(row?.total);
-}
-
 /**
  * GET /api/funil/macro — visão principal da planilha.
  * Visitantes/Leads: RD Marketing. Qualificados+: Rubeus.
@@ -220,7 +203,13 @@ api.get('/funil/macro', async (c) => {
   const q = macroQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
-  const iv = intervaloDeQuery({ de: q.data.de, ate: q.data.ate, dias: q.data.dias ?? 30 });
+  const iv = intervaloDeQuery({
+    mes: q.data.mes,
+    ano: q.data.ano,
+    de: q.data.de,
+    ate: q.data.ate,
+    dias: q.data.dias ?? 30,
+  });
   if ('erro' in iv) return c.json({ erro: iv.erro }, 400);
 
   const filtros = clausulasFiltroCurso({
@@ -239,10 +228,6 @@ api.get('/funil/macro', async (c) => {
       )
     : null;
 
-  // Qualificados: tem curso. Filtros de curso/categoria já restringem.
-  const qualSql = `${filtros.sql} AND (curso_id IS NOT NULL OR (curso_codigo IS NOT NULL AND curso_codigo != ''))`;
-  const qualBinds = [...filtros.binds];
-
   const filtrosL = clausulasFiltroCurso({
     curso_codigo: q.data.curso_codigo,
     categoria: q.data.categoria,
@@ -250,48 +235,73 @@ api.get('/funil/macro', async (c) => {
     alias: 'l',
   });
 
-  const contarMacro = async (macro: string, inicio: string, fim: string) => {
-    const row = await c.env.DB.prepare(
-      `SELECT COUNT(DISTINCT COALESCE(l.email, l.telefone, l.contato_id)) AS total
-       FROM leads_etapa l
+  /*
+   * Um funil conta acumulado: quem se matriculou também é inscrito, também é
+   * oportunidade, também é qualificado.
+   *
+   * Antes cada etapa contava só quem estava PARADO nela no período, e por isso
+   * o painel exibia 78 inscrições contra 66 oportunidades — não porque alguém
+   * pulasse etapa, mas porque quem seguiu adiante saía da contagem de trás.
+   * Assim as taxas também passam a significar o que a planilha diz que
+   * significam: "de cada 100 oportunidades, quantas viraram inscrição".
+   *
+   * O topo alcançado por pessoa resolve isso de uma vez, e de quebra garante o
+   * que um funil promete de graça — cada etapa é menor ou igual à anterior.
+   */
+  const RANK_MACRO = `
+    WITH rank_macro(macro, nivel) AS (
+      VALUES ('qualificados', 1), ('oportunidade', 2), ('inscricao', 3), ('matricula', 4)
+    ),
+    topo AS (
+      SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+             MAX(rank_macro.nivel) AS nivel
+        FROM leads_etapa l
+        JOIN processo_etapas pe
+          ON pe.etapa_nome = l.etapa
+         AND (l.processo_id IS NULL OR pe.processo_id = l.processo_id)
+        JOIN rank_macro ON rank_macro.macro = pe.macro_etapa
        WHERE l.registrado_em >= ? AND l.registrado_em <= ?
-         AND (
-           EXISTS (
-             SELECT 1 FROM processo_etapas pe
-             WHERE pe.etapa_nome = l.etapa
-               AND pe.macro_etapa = ?
-               AND (l.processo_id IS NULL OR pe.processo_id = l.processo_id)
-           )
-           OR (? = 'oportunidade' AND lower(l.etapa) LIKE '%oportunidade%')
-           OR (? = 'inscricao' AND (lower(l.etapa) LIKE '%inscrit%' OR lower(l.etapa) LIKE '%inscri%'))
-           OR (? = 'matricula' AND lower(l.etapa) LIKE '%matricula%')
-         )
-         ${filtrosL.sql}`,
-    ).bind(inicio, fim, macro, macro, macro, macro, ...filtrosL.binds).first();
-    return num(row?.total);
+         REPLACE_FILTRO
+       GROUP BY pessoa
+    )`;
+
+  /*
+   * As quatro etapas numa consulta só. Eram oito idas ao D1 (quatro etapas x
+   * dois períodos) e agora são duas, o que também elimina a chance de duas
+   * etapas serem lidas de estados diferentes do banco.
+   */
+  const contarFunil = async (inicio: string, fim: string) => {
+    const row = await c.env.DB.prepare(
+      `${RANK_MACRO.replace('REPLACE_FILTRO', filtrosL.sql)}
+       SELECT
+         (SELECT COUNT(*) FROM topo WHERE nivel >= 1) AS qualificados,
+         (SELECT COUNT(*) FROM topo WHERE nivel >= 2) AS oportunidades,
+         (SELECT COUNT(*) FROM topo WHERE nivel >= 3) AS inscricoes,
+         (SELECT COUNT(*) FROM topo WHERE nivel >= 4) AS matriculas`,
+    ).bind(inicio, fim, ...filtrosL.binds).first();
+    return {
+      qualificados: num(row?.qualificados),
+      oportunidades: num(row?.oportunidades),
+      inscricoes: num(row?.inscricoes),
+      matriculas: num(row?.matriculas),
+    };
   };
 
-  const [
-    qualificados,
-    oportunidades,
-    inscricoes,
-    matriculas,
-    qualAnt,
-    oppAnt,
-    inscAnt,
-    matAnt,
-  ] = await Promise.all([
-    contarDistinct(c.env.DB, iv.inicioIso, iv.fimIso, qualSql, qualBinds),
-    contarMacro('oportunidade', iv.inicioIso, iv.fimIso),
-    contarMacro('inscricao', iv.inicioIso, iv.fimIso),
-    contarMacro('matricula', iv.inicioIso, iv.fimIso),
+  const vazio = { qualificados: 0, oportunidades: 0, inscricoes: 0, matriculas: 0 };
+  const [atual, anterior] = await Promise.all([
+    contarFunil(iv.inicioIso, iv.fimIso),
     q.data.comparar
-      ? contarDistinct(c.env.DB, iv.inicioAnteriorIso, iv.fimAnteriorIso, qualSql, qualBinds)
-      : Promise.resolve(0),
-    q.data.comparar ? contarMacro('oportunidade', iv.inicioAnteriorIso, iv.fimAnteriorIso) : Promise.resolve(0),
-    q.data.comparar ? contarMacro('inscricao', iv.inicioAnteriorIso, iv.fimAnteriorIso) : Promise.resolve(0),
-    q.data.comparar ? contarMacro('matricula', iv.inicioAnteriorIso, iv.fimAnteriorIso) : Promise.resolve(0),
+      ? contarFunil(iv.inicioAnteriorIso, iv.fimAnteriorIso)
+      : Promise.resolve(vazio),
   ]);
+
+  const { qualificados, oportunidades, inscricoes, matriculas } = atual;
+  const {
+    qualificados: qualAnt,
+    oportunidades: oppAnt,
+    inscricoes: inscAnt,
+    matriculas: matAnt,
+  } = anterior;
 
   const visitantes = rd.ok ? num(rd.dados.visitors) : null;
   const leadsRd = rd.ok ? num(rd.dados.leads) : null;
@@ -356,75 +366,164 @@ api.get('/funil/macro', async (c) => {
     };
   });
 
-  // Breakdown por categoria: Inscrições e Matrículas (como na planilha).
-  const categoriasLista = Object.keys(CATEGORIA_ROTULOS);
-  const porCategoria = [];
-  for (const cat of categoriasLista) {
+  /*
+   * Inscrições e matrículas por categoria — a tabela do meio da planilha.
+   *
+   * A categoria é resolvida por PESSOA, não pelo evento. Os eventos de inscrição
+   * e de matrícula chegam do Rubeus sem curso nenhum: das 309 linhas de
+   * inscrição e 45 de matrícula no banco, zero casam com o catálogo. Só o evento
+   * de qualificação traz curso. Perguntar o curso ao evento de matrícula é o que
+   * deixava seis das sete categorias zeradas — não havia o que casar.
+   *
+   * Então o curso vem da própria pessoa: o último curso que ela demonstrou em
+   * QUALQUER evento, e a matrícula dela conta na categoria desse curso. Ainda é
+   * parcial — quem nunca passou por um evento com curso continua fora, e é por
+   * isso que a tela mostra o total sem categoria em vez de escondê-lo.
+   */
+  const porCategoria = await (async () => {
     const fCat = clausulasFiltroCurso({
-      categoria: cat,
       curso_codigo: q.data.curso_codigo,
       modalidade: q.data.modalidade,
+      categoria: q.data.categoria,
       alias: 'l',
     });
-    const [insc, mat] = await Promise.all([
-      c.env.DB.prepare(
-        `SELECT COUNT(DISTINCT COALESCE(l.email, l.telefone, l.contato_id)) AS total
-         FROM leads_etapa l
-         WHERE l.registrado_em >= ? AND l.registrado_em <= ?
-           AND (
-             EXISTS (SELECT 1 FROM processo_etapas pe
-               WHERE pe.etapa_nome = l.etapa AND pe.macro_etapa = 'inscricao'
-                 AND (l.processo_id IS NULL OR pe.processo_id = l.processo_id))
-             OR lower(l.etapa) LIKE '%inscrit%' OR lower(l.etapa) LIKE '%inscri%'
-           )
-           ${fCat.sql}`,
-      ).bind(iv.inicioIso, iv.fimIso, ...fCat.binds).first(),
-      c.env.DB.prepare(
-        `SELECT COUNT(DISTINCT COALESCE(l.email, l.telefone, l.contato_id)) AS total
-         FROM leads_etapa l
-         WHERE l.registrado_em >= ? AND l.registrado_em <= ?
-           AND (
-             EXISTS (SELECT 1 FROM processo_etapas pe
-               WHERE pe.etapa_nome = l.etapa AND pe.macro_etapa = 'matricula'
-                 AND (l.processo_id IS NULL OR pe.processo_id = l.processo_id))
-             OR lower(l.etapa) LIKE '%matricula%'
-           )
-           ${fCat.sql}`,
-      ).bind(iv.inicioIso, iv.fimIso, ...fCat.binds).first(),
-    ]);
-    porCategoria.push({
+
+    const linhas = await c.env.DB.prepare(
+      `WITH pessoa_curso AS (
+         SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+                l.curso_codigo,
+                l.curso_id,
+                ROW_NUMBER() OVER (
+                  PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
+                  ORDER BY l.registrado_em DESC
+                ) AS recencia
+           FROM leads_etapa l
+          WHERE (l.curso_codigo IS NOT NULL AND l.curso_codigo != '')
+             OR (l.curso_id IS NOT NULL AND l.curso_id != '')
+       ),
+       curso_da_pessoa AS (
+         SELECT pessoa, curso_codigo, curso_id FROM pessoa_curso WHERE recencia = 1
+       ),
+       /*
+        * Acumulado, igual ao funil de cima.
+        *
+        * Contar só quem tem evento DE inscrição deixaria a tabela somando menos
+        * que a linha "Inscrições" do funil — quem foi direto para matrícula não
+        * gera evento de inscrição e sumiria do meio. Na planilha as sete
+        * categorias somam exatamente a linha do funil (82+3+8+0+0+1+27 = 121),
+        * e duas respostas diferentes para "quantas inscrições" na mesma tela é
+        * o tipo de divergência que faz alguém parar de confiar no painel.
+        */
+       marcos AS (
+         SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+                MAX(CASE pe.macro_etapa
+                      WHEN 'qualificados' THEN 1 WHEN 'oportunidade' THEN 2
+                      WHEN 'inscricao'    THEN 3 WHEN 'matricula'    THEN 4
+                    END) AS nivel
+           FROM leads_etapa l
+           JOIN processo_etapas pe
+             ON pe.etapa_nome = l.etapa
+            AND (l.processo_id IS NULL OR pe.processo_id = l.processo_id)
+          WHERE l.registrado_em >= ? AND l.registrado_em <= ?
+            ${fCat.sql}
+          GROUP BY pessoa
+         HAVING nivel >= 3
+       )
+       SELECT COALESCE((
+                SELECT cc.categoria FROM curso_categoria cc
+                 WHERE cc.categoria IS NOT NULL
+                   AND ((cd.curso_codigo IS NOT NULL AND cc.curso_codigo = cd.curso_codigo)
+                     OR (cd.curso_id     IS NOT NULL AND cc.curso_id     = cd.curso_id))
+                 LIMIT 1
+              ), '') AS categoria,
+              COUNT(*) AS inscricoes,
+              SUM(CASE WHEN m.nivel >= 4 THEN 1 ELSE 0 END) AS matriculas
+         FROM marcos m
+         LEFT JOIN curso_da_pessoa cd ON cd.pessoa = m.pessoa
+        GROUP BY categoria`,
+    ).bind(iv.inicioIso, iv.fimIso, ...fCat.binds).all();
+
+    const porChave = new Map(
+      (linhas.results as Array<{ categoria: string; inscricoes: number; matriculas: number }>)
+        .map((r) => [r.categoria, r]),
+    );
+
+    // As 7 categorias sempre aparecem, na ordem da planilha, mesmo zeradas —
+    // uma linha ausente e uma linha em zero contam histórias diferentes.
+    const lista = Object.keys(CATEGORIA_ROTULOS).map((cat) => ({
       categoria: cat,
       rotulo: CATEGORIA_ROTULOS[cat],
-      inscricoes: num(insc?.total),
-      matriculas: num(mat?.total),
-    });
-  }
+      inscricoes: num(porChave.get(cat)?.inscricoes),
+      matriculas: num(porChave.get(cat)?.matriculas),
+    }));
 
-  // Evolução mensal (ano corrente no intervalo).
+    const semCategoria = porChave.get('');
+    return {
+      lista,
+      sem_categoria: {
+        inscricoes: num(semCategoria?.inscricoes),
+        matriculas: num(semCategoria?.matriculas),
+      },
+    };
+  })();
+
+  /*
+   * Evolução mês a mês — a aba "Evolução do Funil" da planilha.
+   *
+   * Mesma regra acumulada do funil de cima, aplicada por mês, para as duas
+   * tabelas não se contradizerem. Antes esta consulta classificava por conta
+   * própria, com `LIKE '%oportunidade%'` e afins: "Oportunidade (Inscrição
+   * concluída)" entrava em oportunidades E em inscrições, e qualificados era
+   * "tem curso" — três definições diferentes das usadas logo acima, na mesma
+   * tela.
+   *
+   * O corte de mês usa -3 horas porque o Rubeus grava em UTC e a faculdade
+   * fecha o mês em Brasília; sem isso, evento da noite do dia 31 cai no mês
+   * seguinte.
+   */
   const evolucao = await c.env.DB.prepare(
-    `SELECT strftime('%Y-%m', registrado_em, '-3 hours') AS mes,
-            COUNT(DISTINCT CASE WHEN curso_id IS NOT NULL OR (curso_codigo IS NOT NULL AND curso_codigo != '')
-              THEN COALESCE(email, telefone, contato_id) END) AS qualificados,
-            COUNT(DISTINCT CASE WHEN lower(etapa) LIKE '%oportunidade%'
-              THEN COALESCE(email, telefone, contato_id) END) AS oportunidades,
-            COUNT(DISTINCT CASE WHEN lower(etapa) LIKE '%inscrit%' OR lower(etapa) LIKE '%inscri%'
-              THEN COALESCE(email, telefone, contato_id) END) AS inscricoes,
-            COUNT(DISTINCT CASE WHEN lower(etapa) LIKE '%matricula%'
-              THEN COALESCE(email, telefone, contato_id) END) AS matriculas
-     FROM leads_etapa
-     WHERE registrado_em >= ? AND registrado_em <= ?
-     GROUP BY mes ORDER BY mes`,
-  ).bind(iv.inicioIso, iv.fimIso).all();
+    `WITH rank_macro(macro, nivel) AS (
+       VALUES ('qualificados', 1), ('oportunidade', 2), ('inscricao', 3), ('matricula', 4)
+     ),
+     topo AS (
+       SELECT strftime('%Y-%m', l.registrado_em, '-3 hours') AS mes,
+              COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+              MAX(rank_macro.nivel) AS nivel
+         FROM leads_etapa l
+         JOIN processo_etapas pe
+           ON pe.etapa_nome = l.etapa
+          AND (l.processo_id IS NULL OR pe.processo_id = l.processo_id)
+         JOIN rank_macro ON rank_macro.macro = pe.macro_etapa
+        WHERE l.registrado_em >= ? AND l.registrado_em <= ?
+          ${filtrosL.sql}
+        GROUP BY mes, pessoa
+     )
+     SELECT mes,
+            COUNT(*) AS qualificados,
+            SUM(CASE WHEN nivel >= 2 THEN 1 ELSE 0 END) AS oportunidades,
+            SUM(CASE WHEN nivel >= 3 THEN 1 ELSE 0 END) AS inscricoes,
+            SUM(CASE WHEN nivel >= 4 THEN 1 ELSE 0 END) AS matriculas
+       FROM topo
+      GROUP BY mes ORDER BY mes`,
+  ).bind(iv.inicioIso, iv.fimIso, ...filtrosL.binds).all();
 
   return c.json({
-    periodo: { de: iv.de, ate: iv.ate, dias: iv.dias },
+    periodo: {
+      de: iv.de,
+      ate: iv.ate,
+      dias: iv.dias,
+      tipo: iv.tipo,
+      rotulo: iv.rotulo,
+      anterior: { de: iv.inicioAnteriorIso.slice(0, 10), ate: iv.fimAnteriorIso.slice(0, 10) },
+    },
     filtros: {
       curso_codigo: q.data.curso_codigo ?? null,
       categoria: q.data.categoria ?? null,
       modalidade: q.data.modalidade ?? null,
     },
     etapas,
-    por_categoria: porCategoria,
+    por_categoria: porCategoria.lista,
+    por_categoria_sem_curso: porCategoria.sem_categoria,
     evolucao: evolucao.results,
     rd: rd.ok
       ? { ok: true as const }
@@ -441,6 +540,8 @@ api.get('/funil', async (c) => {
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
   const iv = intervaloDeQuery({
+    mes: q.data.mes,
+    ano: q.data.ano,
     de: q.data.de,
     ate: q.data.ate,
     dias: q.data.dias ?? 90,
@@ -557,6 +658,8 @@ api.get('/funil/serie', async (c) => {
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
   const iv = intervaloDeQuery({
+    mes: q.data.mes,
+    ano: q.data.ano,
     de: q.data.de,
     ate: q.data.ate,
     dias: q.data.dias ?? 30,
