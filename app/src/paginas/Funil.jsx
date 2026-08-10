@@ -182,12 +182,18 @@ function CurvaDaEtapa({ funilId, etapa, periodoQs, chave }) {
   );
 }
 
+const POR_PAGINA = 24;
+
 function LeadsDoFunil({ funilId, aoAbrir }) {
   const [busca, setBusca] = useState('');
   const [aplicada, setAplicada] = useState('');
+  const [pagina, setPagina] = useState(1);
+
   const { dados, carregando } = useApi(
-    `/api/funil/leads${funilId ? `?funil_id=${encodeURIComponent(funilId)}` : ''}`,
-    `leads-${funilId}`,
+    `/api/funil/leads?pagina=${pagina}&por_pagina=${POR_PAGINA}` +
+      (funilId ? `&funil_id=${encodeURIComponent(funilId)}` : '') +
+      (aplicada.trim() ? `&busca=${encodeURIComponent(aplicada.trim())}` : ''),
+    `leads-${funilId}-${pagina}-${aplicada}`,
   );
 
   useEffect(() => {
@@ -195,19 +201,20 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
     return () => clearTimeout(t);
   }, [busca]);
 
+  /*
+   * Busca nova e troca de funil voltam para a primeira página.
+   * Ficar na página 5 de um resultado que agora tem 2 mostraria tela vazia com
+   * leads existindo logo atrás.
+   */
+  useEffect(() => {
+    setPagina(1);
+  }, [aplicada, funilId]);
+
   if (carregando || !dados) return <Esqueleto linhas={4} />;
 
-  const termo = aplicada.trim().toLowerCase();
-  const itens = termo
-    ? dados.itens.filter(
-        (l) =>
-          (l.contato_nome || '').toLowerCase().includes(termo) ||
-          String(l.contato_id).includes(termo) ||
-          (l.curso_codigo || '').toLowerCase().includes(termo),
-      )
-    : dados.itens;
+  const itens = dados.itens;
 
-  if (!dados.itens.length) {
+  if (!dados.total && !dados.busca) {
     return (
       <Estado
         titulo="Nenhum lead neste funil ainda"
@@ -229,7 +236,8 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
                      px-2 py-[5px] text-xs flex-1 min-w-[200px]"
         />
         <span className="text-[11px] text-tenue tnum">
-          {itens.length} de {dados.itens.length} lead(s)
+          {dados.total} lead(s){dados.busca ? ' encontrados' : ''}
+          {dados.paginas > 1 && ` · página ${dados.pagina} de ${dados.paginas}`}
         </span>
       </div>
 
@@ -273,6 +281,43 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
           </button>
         ))}
       </div>
+
+      {/* Busca sem resultado é diferente de funil vazio — o texto tem de dizer qual é. */}
+      {!itens.length && (
+        <Estado
+          titulo="Nenhum lead com esse termo"
+          mensagem="A busca procura em nome, e-mail, código do curso e id, no funil inteiro — não só nesta página."
+        />
+      )}
+
+      {dados.paginas > 1 && (
+        <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-borda">
+          <button
+            type="button"
+            onClick={() => setPagina((p) => Math.max(1, p - 1))}
+            disabled={dados.pagina <= 1}
+            className="text-xs px-3 py-[6px] rounded-[8px] border border-borda-forte bg-superficie
+                       text-secundario cursor-pointer hover:bg-superficie-hover hover:text-primario
+                       disabled:opacity-35 disabled:cursor-not-allowed"
+          >
+            ← Anteriores
+          </button>
+          <span className="text-[11px] text-tenue tnum">
+            {(dados.pagina - 1) * dados.por_pagina + 1}–
+            {Math.min(dados.pagina * dados.por_pagina, dados.total)} de {dados.total}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPagina((p) => Math.min(dados.paginas, p + 1))}
+            disabled={dados.pagina >= dados.paginas}
+            className="text-xs px-3 py-[6px] rounded-[8px] border border-borda-forte bg-superficie
+                       text-secundario cursor-pointer hover:bg-superficie-hover hover:text-primario
+                       disabled:opacity-35 disabled:cursor-not-allowed"
+          >
+            Próximos →
+          </button>
+        </div>
+      )}
     </>
   );
 }

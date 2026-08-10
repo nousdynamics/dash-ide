@@ -628,7 +628,26 @@ api.get('/funil/serie', async (c) => {
 
 api.get('/funil/leads', async (c) => {
   const fid = c.req.query('funil_id') ? Number(c.req.query('funil_id')) : null;
-  const limite = Math.min(Number(c.req.query('limite') ?? 200) || 200, 500);
+  const porPagina = Math.min(Math.max(Number(c.req.query('por_pagina') ?? 24) || 24, 6), 100);
+  const pagina = Math.max(Number(c.req.query('pagina') ?? 1) || 1, 1);
+  const offset = (pagina - 1) * porPagina;
+
+  /*
+   * Busca no servidor, junto da paginação.
+   *
+   * Filtrar no navegador só funcionava porque a lista inteira vinha de uma vez.
+   * Com página, uma busca client-side procuraria apenas dentro dos 24 abertos e
+   * diria "nenhum lead" para quem está na página 3 — pior que não ter busca.
+   */
+  const busca = (c.req.query('busca') ?? '').trim().toLowerCase();
+  const like = `%${busca}%`;
+  const filtroBusca = busca
+    ? ` AND (lower(COALESCE(contato_nome,'')) LIKE ?
+            OR lower(COALESCE(email,'')) LIKE ?
+            OR lower(COALESCE(curso_codigo,'')) LIKE ?
+            OR contato_id LIKE ?)`
+    : '';
+  const bindsBusca = busca ? [like, like, like, like] : [];
 
   /*
    * Um card por PESSOA, não por contato_id.
@@ -640,13 +659,14 @@ api.get('/funil/leads', async (c) => {
    *
    * Processo repetido NÃO é duplicata: a mesma pessoa pode se inscrever em dois
    * cursos, e isso é jornada legítima. Por isso o card conta os registros de
-   * processo distintos em vez de escondê-los — some a pessoa duplicada, fica o
-   * processo repetido, que é o que a operação precisa enxergar.
+   * processo distintos em vez de escondê-los.
+   *
+   * O filtro de busca entra no `base`, antes do agrupamento: basta UM evento da
+   * pessoa casar para ela aparecer inteira, com todos os processos.
    */
-  const { results } = await c.env.DB.prepare(
-    `WITH base AS (
+  const cte = `WITH base AS (
        SELECT COALESCE(email, telefone, contato_id) AS quem, *
-       FROM leads_etapa WHERE (? IS NULL OR funil_id = ?)
+       FROM leads_etapa WHERE (? IS NULL OR funil_id = ?)${filtroBusca}
      ),
      agg AS (
        SELECT quem,
@@ -656,26 +676,44 @@ api.get('/funil/leads', async (c) => {
               COUNT(DISTINCT curso_codigo)           AS cursos,
               MAX(registrado_em)                     AS ult
        FROM base GROUP BY quem
-     ),
-     ultimo AS (
-       SELECT b.* FROM base b
-        JOIN agg a ON a.quem = b.quem AND a.ult = b.registrado_em
-        GROUP BY b.quem
-     )
-     SELECT a.quem, a.eventos, a.ids_no_crm, a.processos, a.cursos,
-            a.ult AS registrado_em,
-            u.etapa, u.curso_codigo, u.processo_nome, u.origem,
-            u.contato_id, u.email, u.telefone,
-            -- O evento mais recente às vezes vem sem nome; qualquer um serve.
-            COALESCE(u.contato_nome,
-                     (SELECT MAX(b2.contato_nome) FROM base b2 WHERE b2.quem = a.quem)) AS contato_nome
-     FROM agg a JOIN ultimo u ON u.quem = a.quem
-     ORDER BY a.ult DESC LIMIT ?`,
-  )
-    .bind(fid, fid, limite)
-    .all();
+     )`;
 
-  return c.json({ funil_id: fid, total: results.length, itens: results });
+  const [pagRes, totalRes] = await Promise.all([
+    c.env.DB.prepare(
+      `${cte},
+       ultimo AS (
+         SELECT b.* FROM base b
+          JOIN agg a ON a.quem = b.quem AND a.ult = b.registrado_em
+          GROUP BY b.quem
+       )
+       SELECT a.quem, a.eventos, a.ids_no_crm, a.processos, a.cursos,
+              a.ult AS registrado_em,
+              u.etapa, u.curso_codigo, u.processo_nome, u.origem,
+              u.contato_id, u.email, u.telefone,
+              COALESCE(u.contato_nome,
+                       (SELECT MAX(b2.contato_nome) FROM base b2 WHERE b2.quem = a.quem)) AS contato_nome
+       FROM agg a JOIN ultimo u ON u.quem = a.quem
+       ORDER BY a.ult DESC LIMIT ? OFFSET ?`,
+    )
+      .bind(fid, fid, ...bindsBusca, porPagina, offset)
+      .all(),
+
+    // Total de PESSOAS que casam com o filtro — é o que pagina, não linhas.
+    c.env.DB.prepare(`${cte} SELECT COUNT(*) AS total FROM agg`)
+      .bind(fid, fid, ...bindsBusca)
+      .first<{ total: number }>(),
+  ]);
+
+  const total = num(totalRes?.total);
+  return c.json({
+    funil_id: fid,
+    total,
+    pagina,
+    por_pagina: porPagina,
+    paginas: Math.max(1, Math.ceil(total / porPagina)),
+    busca: busca || null,
+    itens: pagRes.results,
+  });
 });
 
 api.get('/funil/lead/:contato_id', async (c) => {
