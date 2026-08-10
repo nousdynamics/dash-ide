@@ -78,10 +78,105 @@ function customerId(env: Env): string {
  * corpo vem como JSON único — streaming aqui só adicionaria parsing manual de
  * chunks sem ganho.
  */
+/**
+ * Cache das respostas do Google Ads, na Cache API da borda.
+ *
+ * O painel disparava três consultas por abertura de tela, de novo a cada troca
+ * de período e por pessoa que abrisse — para um dado que o próprio Google avisa
+ * não ser gerado em tempo real. Cinco pessoas olhando de manhã eram dezenas de
+ * chamadas para o mesmo número.
+ *
+ * A validade sai do próprio período consultado: janela que termina no passado
+ * não muda mais, então vale horas; janela que inclui hoje ainda recebe
+ * conversão atrasada, e aí é minutos.
+ */
+const TTL_FECHADO_S = 6 * 60 * 60;
+const TTL_ABERTO_S = 15 * 60;
+
+function ttlDaConsulta(query: string): number {
+  /*
+   * Procura a data final do BETWEEN. Sem data na consulta — catálogo de
+   * campanha, lista de ação — o dado é estrutural e muda pouco: TTL longo.
+   */
+  const datas = query.match(/\d{4}-\d{2}-\d{2}/g);
+  if (!datas?.length) return TTL_FECHADO_S;
+  const fim = datas.sort().at(-1)!;
+  /*
+   * Fechado é "termina antes de ONTEM", não antes de hoje.
+   *
+   * O Google atribui conversão com atraso: o número de ontem ainda muda ao
+   * longo do dia de hoje. Como o painel usa ontem como fim padrão, tratar isso
+   * como fechado congelaria por 6 h justamente a tela que todo mundo abre.
+   * Comparação em Brasília — o Worker roda em UTC e às 21h daqui já é o dia
+   * seguinte lá.
+   */
+  const agoraBr = Date.now() - 3 * 3_600_000;
+  const ontemBr = new Date(agoraBr - 86_400_000).toISOString().slice(0, 10);
+  return fim < ontemBr ? TTL_FECHADO_S : TTL_ABERTO_S;
+}
+
+/** Chave estável e opaca: a consulta inteira, sem expor GAQL numa URL. */
+async function chaveDeCache(env: Env, query: string): Promise<Request> {
+  const material = `${customerId(env)}|${versaoApi(env)}|${query}`;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(material));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return new Request(`https://ads-cache.painel.interno/${hex}`, { method: 'GET' });
+}
+
 export async function consultar<T = Record<string, unknown>>(
   env: Env,
   query: string,
 ): Promise<T[]> {
+  const chave = await chaveDeCache(env, query);
+  const cache = caches.default;
+
+  /*
+   * Cache corrompido não derruba a tela.
+   *
+   * Uma entrada truncada — escrita cancelada, disco cheio, o que for — faria
+   * `json()` estourar e a tela mostrar erro por causa de um cache, que é
+   * otimização e nunca deveria ser caminho crítico. Se não der para ler,
+   * consulta a origem como se não houvesse cache.
+   */
+  const guardado = await cache.match(chave);
+  if (guardado) {
+    try {
+      const linhasEmCache = (await guardado.json()) as T[];
+      if (Array.isArray(linhasEmCache)) {
+        console.log(JSON.stringify({ evento: 'google_ads_cache_hit', query: query.slice(0, 80) }));
+        return linhasEmCache;
+      }
+    } catch {
+      console.warn(JSON.stringify({ evento: 'google_ads_cache_ilegivel', query: query.slice(0, 80) }));
+    }
+  }
+
+  const linhas = await consultarNaOrigem<T>(env, query);
+
+  /*
+   * `await` no put, mesmo custando alguns ms no miss.
+   *
+   * Sem esperar, o runtime cancela a escrita quando o request termina e a
+   * entrada fica truncada — o próximo acesso lê corpo vazio e a tela quebra.
+   * Foi exatamente o que aconteceu no primeiro teste: 92 ms de resposta e
+   * "Unexpected end of JSON input".
+   */
+  const ttl = ttlDaConsulta(query);
+  try {
+    await cache.put(
+      chave,
+      new Response(JSON.stringify(linhas), {
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': `max-age=${ttl}` },
+      }),
+    );
+  } catch {
+    /* falha de escrita só custa um miss no próximo acesso */
+  }
+
+  return linhas;
+}
+
+async function consultarNaOrigem<T>(env: Env, query: string): Promise<T[]> {
   const token = await obterAccessToken(env);
   const cid = customerId(env);
   const url = `https://googleads.googleapis.com/${versaoApi(env)}/customers/${cid}/googleAds:search`;
