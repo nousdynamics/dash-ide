@@ -398,9 +398,10 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
   const { meta } = await c.env.DB.prepare(
     `INSERT INTO leads_etapa (
        contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, etapa, status,
-       curso_id, curso_codigo, origem, modalidade, unidade, responsavel_comercial, registrado_em,
+       curso_id, curso_codigo, oferta_codigo, oferta_nome,
+       origem, modalidade, unidade, responsavel_comercial, registrado_em,
        funil_id, email, telefone
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       d.contato_id,
@@ -412,6 +413,8 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       d.status ?? null,
       d.curso_id ?? null,
       d.curso_codigo ?? null,
+      d.oferta_codigo ?? null,
+      d.oferta_nome ?? null,
       d.origem ?? null,
       d.modalidade ?? null,
       d.unidade ?? null,
@@ -462,7 +465,7 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
     contato_id: d.contato_id,
     etapa: d.etapa,
     processo: d.processo_nome,
-    tem_curso: Boolean(d.curso_id || d.curso_codigo),
+    tem_curso: Boolean(d.curso_id || d.curso_codigo || d.oferta_codigo || d.oferta_nome),
     tem_email: Boolean(d.email),
   }));
 

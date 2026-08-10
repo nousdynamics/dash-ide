@@ -172,6 +172,26 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
     'cursos.0.codCurso', 'curso.codCurso', 'curso.codigo', 'codCurso', 'cursoCodigo', 'curso',
   ]);
   preencher('curso_id', ['cursos.0.id', 'curso.id', 'cursoId']);
+  /*
+   * Oferta: mais específica que o curso e, em graduação, a única que existe —
+   * "Graduação Em Psicologia" só é oferta, por semestre e por turno.
+   */
+  if (cursoPrincipal.oferta && !primitivo(o.oferta_codigo)) o.oferta_codigo = cursoPrincipal.oferta;
+  preencher('oferta_codigo', [
+    'cursos.0.codOferta', 'curso.codOferta', 'codOferta', 'ofertaCodigo',
+    'cod_oferta', 'codigo_da_oferta',
+  ]);
+  /*
+   * Nome da oferta. Hoje o Rubeus não manda em etapa nenhuma — a Ficha de
+   * Inscrição, que é de onde vem "Aptos para a matrícula", chega urlencoded com
+   * nome/e-mail/etapa e nada de curso. Os aliases cobrem as grafias plausíveis
+   * do campo para que, no dia em que ele for marcado na configuração do
+   * webhook, a categoria passe a resolver sozinha e sem deploy.
+   */
+  preencher('oferta_nome', [
+    'cursos.0.nomeOferta', 'curso.nomeOferta', 'nomeOferta', 'oferta.nome',
+    'nome_da_oferta', 'nome_oferta', 'ofertaNome', 'oferta',
+  ]);
   preencher('modalidade', ['modalidade.nome', 'modalidade']);
   preencher('responsavel_comercial', ['responsavel.nome', 'responsavel', 'consultor']);
   // O `id` do topo só é o registro de processo quando o contato veio aninhado.
@@ -187,7 +207,9 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
 const primitivo = (v: unknown) => typeof v === 'string' || typeof v === 'number';
 
 /** Extrai curso principal do payload padrão do Registro de Processo. */
-function cursoPrincipalDoPayload(bruto: unknown): { id?: string; codigo?: string } {
+function cursoPrincipalDoPayload(
+  bruto: unknown,
+): { id?: string; codigo?: string; oferta?: string } {
   if (!bruto || typeof bruto !== 'object') return {};
   const o = bruto as Record<string, unknown>;
   const lista = Array.isArray(o.cursos) ? o.cursos : [];
@@ -199,6 +221,7 @@ function cursoPrincipalDoPayload(bruto: unknown): { id?: string; codigo?: string
     return {
       id: c.id != null ? String(c.id) : undefined,
       codigo: c.codCurso != null ? String(c.codCurso) : undefined,
+      oferta: c.codOferta != null ? String(c.codOferta) : undefined,
     };
   }
   const curso = o.curso;
@@ -207,6 +230,7 @@ function cursoPrincipalDoPayload(bruto: unknown): { id?: string; codigo?: string
     return {
       id: c.id != null ? String(c.id) : undefined,
       codigo: c.codCurso != null ? String(c.codCurso) : (c.codigo != null ? String(c.codigo) : undefined),
+      oferta: c.codOferta != null ? String(c.codOferta) : undefined,
     };
   }
   return {};
@@ -224,6 +248,8 @@ export const etapaSchema = z.object({
   status: z.string().nullish(),
   curso_id: idFlexivel.nullish(),
   curso_codigo: z.string().nullish(),
+  oferta_codigo: z.string().nullish(),
+  oferta_nome: z.string().nullish(),
   origem: z.string().nullish(),
   modalidade: z.string().nullish(),
   unidade: z.string().nullish(),

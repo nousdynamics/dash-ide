@@ -207,7 +207,7 @@ api.get('/overview', async (c) => {
 const CTE_ORIGEM_DA_PESSOA = `
   pessoa_curso AS (
     SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
-           l.curso_codigo, l.curso_id,
+           l.curso_codigo, l.curso_id, l.oferta_codigo, l.oferta_nome,
            ROW_NUMBER() OVER (
              PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
              ORDER BY l.registrado_em DESC
@@ -215,9 +215,12 @@ const CTE_ORIGEM_DA_PESSOA = `
       FROM leads_etapa l
      WHERE (l.curso_codigo IS NOT NULL AND l.curso_codigo != '')
         OR (l.curso_id IS NOT NULL AND l.curso_id != '')
+        OR (l.oferta_codigo IS NOT NULL AND l.oferta_codigo != '')
+        OR (l.oferta_nome IS NOT NULL AND l.oferta_nome != '')
   ),
   curso_da_pessoa AS (
-    SELECT pessoa, curso_codigo, curso_id FROM pessoa_curso WHERE recencia = 1
+    SELECT pessoa, curso_codigo, curso_id, oferta_codigo, oferta_nome
+      FROM pessoa_curso WHERE recencia = 1
   ),
   pessoa_funil AS (
     SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
@@ -245,8 +248,11 @@ const CTE_ORIGEM_DA_PESSOA = `
 const SQL_CATEGORIA_RESOLVIDA = `COALESCE(
   (SELECT cc.categoria FROM curso_categoria cc
     WHERE cc.categoria IS NOT NULL
-      AND ((cd.curso_codigo IS NOT NULL AND cc.curso_codigo = cd.curso_codigo)
-        OR (cd.curso_id     IS NOT NULL AND cc.curso_id     = cd.curso_id))
+      AND ((cd.oferta_codigo IS NOT NULL AND cc.oferta_codigo = cd.oferta_codigo)
+        OR (cd.curso_codigo  IS NOT NULL AND cc.curso_codigo  = cd.curso_codigo)
+        OR (cd.curso_id      IS NOT NULL AND cc.curso_id      = cd.curso_id)
+        OR (cd.oferta_nome   IS NOT NULL AND cd.oferta_nome != ''
+            AND cc.nome = cd.oferta_nome))
     LIMIT 1),
   (SELECT f.categoria_fallback FROM funis f WHERE f.id = fd.funil_id),
   ''
@@ -581,7 +587,21 @@ api.get('/funil/macro', async (c) => {
     por_categoria_nao_classificados: porCategoria.nao_classificados,
     evolucao: evolucao.results,
     rd: rd.ok
-      ? { ok: true as const }
+      ? {
+          ok: true as const,
+          /*
+           * O que o RD diz das etapas do meio, ao lado do que o Rubeus diz.
+           *
+           * Não entra no funil: "oportunidade" e "venda" no RD Marketing são as
+           * etapas DELE, marcadas por automação de marketing, e não a
+           * oportunidade e a matrícula do CRM. Fica exposto para dar para
+           * comparar — e para quem for reconstruir mês fechado saber com o quê
+           * está lidando.
+           */
+          qualificados: num(rd.dados.qualified_leads),
+          oportunidades: num(rd.dados.opportunities),
+          vendas: num(rd.dados.sales),
+        }
       : { ok: false as const, motivo: rd.motivo },
   });
 });
@@ -661,10 +681,11 @@ api.get('/funil/macro/pessoas', async (c) => {
     listagem AS (
       SELECT u.contato_id, u.contato_nome, u.email, u.telefone, u.etapa, u.registrado_em,
              cd.curso_codigo,
-             (SELECT k.nome FROM curso_catalogo k
-               WHERE (cd.curso_codigo IS NOT NULL AND k.curso_codigo = cd.curso_codigo)
-                  OR (cd.curso_id     IS NOT NULL AND k.curso_id     = cd.curso_id)
-               LIMIT 1) AS curso_nome,
+             COALESCE(cd.oferta_nome, (SELECT k.nome FROM curso_catalogo k
+               WHERE (cd.oferta_codigo IS NOT NULL AND k.oferta_codigo = cd.oferta_codigo)
+                  OR (cd.curso_codigo  IS NOT NULL AND k.curso_codigo  = cd.curso_codigo)
+                  OR (cd.curso_id      IS NOT NULL AND k.curso_id      = cd.curso_id)
+               LIMIT 1)) AS curso_nome,
              (SELECT f.nome FROM funis f WHERE f.id = fd.funil_id) AS funil_nome,
              ${SQL_CATEGORIA_RESOLVIDA} AS categoria
         FROM topo t
