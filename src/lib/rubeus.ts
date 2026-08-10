@@ -200,6 +200,123 @@ export function inferirMacroEtapa(nome: string): string | null {
   return null;
 }
 
+/**
+ * Preenche o curso dos leads que chegaram sem ele, consultando o Rubeus.
+ *
+ * O webhook de inscrição e matrícula não manda curso: das linhas dessas etapas,
+ * nenhuma casava com o catálogo, e a tabela por categoria vivia de "não
+ * identificado". Mas `/api/Contato/listarOportunidades` devolve, por contato,
+ * `cursoNome` e `nivelEnsinoNome` — e `nivelEnsinoNome` é exatamente o campo de
+ * que as regras de categoria vivem ("Pós-Graduação (Presencial)").
+ *
+ * Uma pessoa costuma ter mais de uma oportunidade, às vezes em cursos
+ * diferentes (RH e Psicologia no mesmo contato). Por isso a escolha não é "a
+ * primeira": casa pelo registro de processo quando o evento trouxe o id, senão
+ * pela etapa de mesmo nome, senão pela oportunidade mais recente até a data do
+ * evento. Pegar a última de todas atribuiria a matrícula de hoje ao curso que a
+ * pessoa procurou ano passado.
+ */
+export async function enriquecerCursoDosLeads(
+  env: Env,
+  db: D1Database,
+  limiteContatos = 40,
+): Promise<{ contatos: number; linhas: number }> {
+  const pendentes = await db.prepare(
+    `SELECT contato_id, COUNT(*) AS linhas
+       FROM leads_etapa
+      WHERE (curso_id IS NULL OR curso_id = '')
+        AND (curso_codigo IS NULL OR curso_codigo = '')
+        AND (oferta_codigo IS NULL OR oferta_codigo = '')
+        AND (oferta_nome IS NULL OR oferta_nome = '')
+        AND contato_id IS NOT NULL AND contato_id != ''
+      GROUP BY contato_id
+      ORDER BY MAX(registrado_em) DESC
+      LIMIT ?`,
+  ).bind(limiteContatos).all();
+
+  const stmts: D1PreparedStatement[] = [];
+  let contatos = 0;
+
+  for (const linha of pendentes.results as Array<{ contato_id: string }>) {
+    let oportunidades: OportunidadeRubeus[];
+    try {
+      oportunidades = await listarOportunidades(env, linha.contato_id);
+    } catch {
+      // Um contato que o CRM não resolve não pode derrubar a rodada inteira.
+      continue;
+    }
+    if (!oportunidades.length) continue;
+    contatos++;
+
+    const eventos = await db.prepare(
+      `SELECT id, etapa, registrado_em, registro_processo_id
+         FROM leads_etapa
+        WHERE contato_id = ?
+          AND (curso_id IS NULL OR curso_id = '')
+          AND (curso_codigo IS NULL OR curso_codigo = '')
+          AND (oferta_codigo IS NULL OR oferta_codigo = '')
+          AND (oferta_nome IS NULL OR oferta_nome = '')`,
+    ).bind(linha.contato_id).all();
+
+    for (const ev of eventos.results as Array<{
+      id: number; etapa: string; registrado_em: string; registro_processo_id: string | null;
+    }>) {
+      const escolhida =
+        (ev.registro_processo_id
+          ? oportunidades.find((o) => String(o.id) === String(ev.registro_processo_id))
+          : undefined) ??
+        oportunidades.find((o) => o.etapaNome === ev.etapa) ??
+        [...oportunidades]
+          .filter((o) => (o.momento ?? '') <= ev.registrado_em)
+          .sort((a, b) => String(b.momento ?? '').localeCompare(String(a.momento ?? '')))[0] ??
+        oportunidades[0];
+
+      if (!escolhida?.curso) continue;
+      stmts.push(
+        db.prepare(
+          `UPDATE leads_etapa
+              SET curso_id = ?,
+                  oferta_nome = COALESCE(oferta_nome, ?),
+                  modalidade = COALESCE(modalidade, ?)
+            WHERE id = ?`,
+        ).bind(
+          String(escolhida.curso),
+          escolhida.cursoNome ?? null,
+          escolhida.modalidadeNome ?? null,
+          ev.id,
+        ),
+      );
+
+      /*
+       * O curso pode não estar no catálogo, e sem ele o nível não existe para
+       * casar categoria. A oportunidade traz nome e nível juntos, então dá para
+       * completar a linha aqui em vez de esperar o próximo sync de catálogo.
+       */
+      if (escolhida.cursoNome) {
+        stmts.push(
+          db.prepare(
+            `INSERT INTO cursos (id, codigo, nome, nivel_ensino, modalidade, atualizado_em)
+             VALUES (?, NULL, ?, ?, ?, datetime('now'))
+             ON CONFLICT(id) DO UPDATE SET
+               nome = excluded.nome,
+               nivel_ensino = COALESCE(excluded.nivel_ensino, cursos.nivel_ensino),
+               modalidade = COALESCE(excluded.modalidade, cursos.modalidade),
+               atualizado_em = excluded.atualizado_em`,
+          ).bind(
+            String(escolhida.curso),
+            escolhida.cursoNome,
+            escolhida.nivelEnsinoNome ?? null,
+            escolhida.modalidadeNome ?? null,
+          ),
+        );
+      }
+    }
+  }
+
+  if (stmts.length) await db.batch(stmts);
+  return { contatos, linhas: stmts.length };
+}
+
 /** Persiste cursos e ofertas no D1. */
 export async function sincronizarCursos(env: Env, db: D1Database): Promise<{ cursos: number; ofertas: number }> {
   const [cursos, ofertas] = await Promise.all([listarCursos(env), listarOfertas(env)]);

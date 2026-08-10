@@ -4,6 +4,8 @@ import { intervaloDeQuery } from '../lib/periodo';
 import { funilMarketing } from '../lib/rdstation';
 import {
   ErroRubeus,
+  enriquecerCursoDosLeads,
+  listarOportunidades,
   sincronizarCursos,
   sincronizarEtapasDeOportunidades,
 } from '../lib/rubeus';
@@ -1125,10 +1127,36 @@ api.post('/admin/rubeus/sync', exigirAdmin, async (c) => {
   try {
     const cursos = await sincronizarCursos(c.env, c.env.DB);
     const etapas = await sincronizarEtapasDeOportunidades(c.env, c.env.DB, 40);
-    return c.json({ ok: true, cursos, etapas });
+    /*
+     * Resgata o curso de quem chegou sem ele — é o que tira a tabela por
+     * categoria do "não identificado".
+     *
+     * `limite` existe para recuperar atraso: é uma chamada ao Rubeus por
+     * contato, então o cron diário anda devagar de propósito, e quem quiser
+     * fechar o histórico de uma vez chama esta rota algumas vezes com o lote
+     * maior em vez de esperar uma semana.
+     */
+    const limite = Math.min(200, Math.max(1, Number(c.req.query('limite')) || 60));
+    const enriquecidos = await enriquecerCursoDosLeads(c.env, c.env.DB, limite);
+    return c.json({ ok: true, cursos, etapas, enriquecidos });
   } catch (e) {
     const status = e instanceof ErroRubeus ? e.status : 502;
     return c.json({ erro: 'sync_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
+  }
+});
+
+/**
+ * GET /api/admin/rubeus/oportunidades/:contatoId — o que a API devolve de um
+ * contato, cru. Existe para conferir de onde o curso pode ser resgatado quando
+ * o webhook não o manda, sem precisar sair do Worker com o token na mão.
+ */
+api.get('/admin/rubeus/oportunidades/:contatoId', exigirAdmin, async (c) => {
+  try {
+    const itens = await listarOportunidades(c.env, c.req.param('contatoId'));
+    return c.json({ ok: true, total: itens.length, itens });
+  } catch (e) {
+    const status = e instanceof ErroRubeus ? e.status : 502;
+    return c.json({ erro: 'consulta_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
   }
 });
 
