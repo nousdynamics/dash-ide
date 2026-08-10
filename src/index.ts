@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { exigirAcesso } from './lib/access';
+import { reconciliarRubeus } from './lib/sync';
 import type { AppEnv } from './lib/tipos';
 import ads from './routes/ads';
 import api from './routes/api';
@@ -82,4 +83,9 @@ app.onError((err, c) => {
   return c.json({ erro: 'erro_interno' }, 500);
 });
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(reconciliarRubeus(env));
+  },
+};

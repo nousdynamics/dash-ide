@@ -25,13 +25,11 @@ export function CardsPersonalizados({ defs, ctx, ctxAnterior }) {
           erro = e.message;
         }
         /*
-         * Fórmula que usa ação de conversão não tem comparação.
-         *
-         * O endpoint de ações só devolve o período aberto, então o contexto
-         * anterior repetiria o valor atual da ação com o investimento antigo —
-         * um "antes" que nunca existiu. Melhor não mostrar do que mostrar errado.
+         * Fórmula que depende de ação / visualizações de página não tem "antes".
+         * O endpoint de ações só cobre o período aberto.
          */
-        const usaAcao = /\bacao_[a-z0-9_]+/.test(m.formula);
+        const usaAcao =
+          /\bacao_[a-z0-9_]+/.test(m.formula) || /\bvisualizacoes_pagina\b/.test(m.formula);
         let antes = null;
         if (ctxAnterior && !usaAcao) {
           try {

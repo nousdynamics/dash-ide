@@ -138,9 +138,27 @@ export function Webhooks() {
   const [versao, setVersao] = useState(0);
   const [nome, setNome] = useState('');
   const [erroForm, setErroForm] = useState(null);
+  const [syncMsg, setSyncMsg] = useState(null);
   const { dados, carregando, erro } = useApi('/api/funis', `funis-${versao}`);
 
   const recarregar = () => setVersao((v) => v + 1);
+
+  const syncRubeus = async () => {
+    setSyncMsg('Sincronizando…');
+    try {
+      const r = await fetch('/api/admin/rubeus/sync', { method: 'POST' });
+      const c = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setSyncMsg(c.detalhe || 'Falha na sincronização');
+        return;
+      }
+      setSyncMsg(
+        `OK: ${c.cursos?.cursos ?? 0} cursos, ${c.cursos?.ofertas ?? 0} ofertas, ${c.etapas?.etapas ?? 0} etapas.`,
+      );
+    } catch {
+      setSyncMsg('Não foi possível falar com o servidor.');
+    }
+  };
 
   const criar = async (e) => {
     e.preventDefault();
@@ -169,12 +187,25 @@ export function Webhooks() {
   };
 
   const cabecalho = (
-    <div>
-      <div className="text-[19px] font-semibold tracking-tight">Funis e webhooks</div>
-      <div className="text-tenue text-xs mt-[2px]">
-        Um link por funil e por canal. O banco guarda só o hash do token, então o link aparece
-        uma única vez, ao ser gerado. Os leads recebidos ficam em{' '}
-        <strong className="text-secundario">Funil de leads</strong>.
+    <div className="flex items-start justify-between gap-3 flex-wrap">
+      <div>
+        <div className="text-[19px] font-semibold tracking-tight">Funis e webhooks</div>
+        <div className="text-tenue text-xs mt-[2px]">
+          Um link por funil e por canal. O banco guarda só o hash do token, então o link aparece
+          uma única vez, ao ser gerado. Os leads recebidos ficam em{' '}
+          <strong className="text-secundario">Funil de vendas</strong>.
+        </div>
+      </div>
+      <div className="flex flex-col items-end gap-1">
+        <button
+          type="button"
+          onClick={syncRubeus}
+          className="text-xs px-3 py-[6px] rounded-[8px] bg-superficie border border-borda-forte
+                     text-secundario cursor-pointer hover:bg-superficie-hover hover:text-primario"
+        >
+          Sincronizar cursos/etapas (Rubeus)
+        </button>
+        {syncMsg && <span className="text-[11px] text-tenue max-w-[280px] text-right">{syncMsg}</span>}
       </div>
     </div>
   );

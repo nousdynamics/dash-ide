@@ -25,6 +25,12 @@ GOOGLE_ADS_LOGIN_CUSTOMER_ID=""
 RD_STATION_CLIENT_ID=""
 RD_STATION_CLIENT_SECRET=""
 
+# --- Rubeus CRM ---
+# Canal de API (origem + token). Base opcional; padrão: crmide.apprubeus.com.br
+RUBEUS_ORIGEM="222"
+RUBEUS_TOKEN=""
+RUBEUS_BASE_URL="https://crmide.apprubeus.com.br"
+
 # Libera o painel em `wrangler dev`, onde não há Cloudflare Access na frente.
 # NUNCA publicar como secret: em produção a ausência desta variável é o que
 # obriga o Worker a exigir o JWT assinado do Access.

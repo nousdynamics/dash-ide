@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { ZodTypeAny, output as ZodOutput } from 'zod';
 import { CorpoInvalido, lerCorpoJson } from '../lib/corpo';
 import { hashDoToken } from '../lib/credenciais';
+import { aprenderEtapaDoEvento } from '../lib/rubeus';
 import { conversaSchema, etapaSchema, normalizarEtapa } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 
@@ -145,6 +146,25 @@ async function funilDoPayload(c: any, d: any): Promise<number | null> {
  * Fora do caminho crítico (waitUntil): diagnóstico não pode atrasar nem
  * derrubar a gravação do lead.
  */
+/**
+ * Tira do corpo o que o diagnóstico não precisa.
+ *
+ * O diário existe para descobrir o FORMATO do payload, não para guardar dado
+ * pessoal: 1.017 dos payloads recebidos traziam CPF e 1.020 a data de
+ * nascimento, em texto puro. O formato continua legível — o campo fica lá, com
+ * o valor mascarado — e o que vazaria num dump deixa de existir.
+ */
+function mascararPii(corpo: string | null): string | null {
+  if (!corpo) return corpo;
+  return corpo
+    // "cpf":"09492414406" e cpf=09492414406
+    .replace(/("cpf"\s*:\s*")[^"]*(")/gi, '$1<oculto>$2')
+    .replace(/(\bcpf=)[^&]*/gi, '$1%3Coculto%3E')
+    // nascimento em qualquer grafia
+    .replace(/("(?:dataNascimento|nascimento)"\s*:\s*")[^"]*(")/gi, '$1<oculto>$2')
+    .replace(/(\b(?:dataNascimento|nascimento)=)[^&]*/gi, '$1%3Coculto%3E');
+}
+
 function registrarEvento(
   c: any,
   status: string,
@@ -164,7 +184,7 @@ function registrarEvento(
                     WHERE w.canal = ? AND f.slug = ?), ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
           .bind(
-            canal, slug, canal, slug, status, detalhe ?? null, corpo?.slice(0, 4000) ?? null,
+            canal, slug, canal, slug, status, detalhe ?? null, mascararPii(corpo)?.slice(0, 4000) ?? null,
             lead?.contato_id != null ? String(lead.contato_id) : null,
             lead?.contato_nome != null ? String(lead.contato_nome) : null,
             lead?.etapa != null ? String(lead.etapa) : null,
@@ -173,9 +193,23 @@ function registrarEvento(
         // Mantém só as 50 últimas por webhook: o corpo tem dado de lead e não
         // precisa viver além do tempo de diagnosticar a integração.
         await c.env.DB.prepare(
+          /*
+           * `IS`, não `=`.
+           *
+           * Webhook por evento não tem funil, então `funil_slug` é NULL — e
+           * `NULL = NULL` em SQL não é verdadeiro, é NULL. A retenção nunca
+           * casava nenhuma linha e o diário cresceu sem limite: 1.643 payloads
+           * acumulados, 1.017 deles com CPF. Nos webhooks por funil, onde o
+           * slug é texto, o corte de 50 sempre funcionou — o que escondeu o bug.
+           *
+           * Consequência aceita: os cinco webhooks por evento passam a dividir o
+           * mesmo teto de 50, porque compartilham (canal, NULL). Para um diário
+           * de diagnóstico é o suficiente, e um teto compartilhado é melhor que
+           * teto nenhum guardando CPF.
+           */
           `DELETE FROM eventos_recebidos WHERE id IN (
              SELECT id FROM eventos_recebidos
-             WHERE canal = ? AND funil_slug = ?
+             WHERE canal IS ? AND funil_slug IS ?
              ORDER BY recebido_em DESC LIMIT -1 OFFSET 50)`,
         )
           .bind(canal, slug)
@@ -416,11 +450,19 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
     );
   }
 
+  // Catálogo de etapas: cada evento real ensina a ordem/macro do processo.
+  if (d.processo_id && d.etapa) {
+    c.executionCtx?.waitUntil(
+      aprenderEtapaDoEvento(c.env.DB, d.processo_id, d.etapa).catch(() => undefined),
+    );
+  }
+
   console.log(JSON.stringify({
     evento: 'etapa_gravada',
     contato_id: d.contato_id,
     etapa: d.etapa,
     processo: d.processo_nome,
+    tem_curso: Boolean(d.curso_id || d.curso_codigo),
     tem_email: Boolean(d.email),
   }));
 

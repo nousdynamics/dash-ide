@@ -72,10 +72,17 @@
       "database_id": "952edba7-5255-407a-bc60-6154097d3f8a",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+
+  // Reconciliação diária: catálogo de cursos + etapas reais do Rubeus.
+  // Webhooks continuam sendo a fonte em tempo real.
+  "triggers": {
+    "crons": ["0 9 * * *"]
+  }
 
   // Secrets (NÃO declarar aqui — usar `npx wrangler secret put <NOME>`):
   //   GOOGLE_ADS_* e RD_STATION_CLIENT_ID / RD_STATION_CLIENT_SECRET.
+  //   RUBEUS_ORIGEM / RUBEUS_TOKEN / RUBEUS_BASE_URL (opcional).
   //   Localmente vão em .dev.vars (já ignorado pelo git).
   //
   // Os tokens dos webhooks NÃO são secret de Worker: cada um vive numa linha do

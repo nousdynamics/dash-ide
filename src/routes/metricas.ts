@@ -28,6 +28,11 @@ export const BASES: Array<{ id: string; rotulo: string; ajuda: string }> = [
   { id: 'cliques', rotulo: 'Cliques', ajuda: 'Cliques no anúncio' },
   { id: 'impressoes', rotulo: 'Impressões', ajuda: 'Vezes que o anúncio apareceu' },
   { id: 'leads_crm', rotulo: 'Leads no Rubeus', ajuda: 'Pessoas distintas que entraram no CRM no período' },
+  {
+    id: 'visualizacoes_pagina',
+    rotulo: 'Visualizações de página',
+    ajuda: 'Soma das ações de conversão cujo nome é visualização de página (Google Ads)',
+  },
 ];
 
 /*

@@ -160,8 +160,18 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
   preencher('status', ['status.nome', 'situacaoNome', 'status']);
   preencher('origem', ['origem.nome', 'canal', 'origem_nome', 'origem']);
   preencher('unidade', ['unidade.nome', 'cidade', 'unidade_nome', 'unidade']);
-  preencher('curso_codigo', ['cursos.0.codCurso', 'curso', 'cursoCodigo']);
-  preencher('curso_id', ['cursos.0.id', 'cursoId']);
+  /*
+   * Curso: preferir o marcado como principal no array oficial do webhook
+   * (`cursos[].principal = "1"`), depois o primeiro da lista, depois `curso.*`
+   * (atividade/evento) e campos soltos do fluxo de automação.
+   */
+  const cursoPrincipal = cursoPrincipalDoPayload(bruto);
+  if (cursoPrincipal.codigo && !primitivo(o.curso_codigo)) o.curso_codigo = cursoPrincipal.codigo;
+  if (cursoPrincipal.id && !primitivo(o.curso_id)) o.curso_id = cursoPrincipal.id;
+  preencher('curso_codigo', [
+    'cursos.0.codCurso', 'curso.codCurso', 'curso.codigo', 'codCurso', 'cursoCodigo', 'curso',
+  ]);
+  preencher('curso_id', ['cursos.0.id', 'curso.id', 'cursoId']);
   preencher('modalidade', ['modalidade.nome', 'modalidade']);
   preencher('responsavel_comercial', ['responsavel.nome', 'responsavel', 'consultor']);
   // O `id` do topo só é o registro de processo quando o contato veio aninhado.
@@ -173,6 +183,34 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
   o.registrado_em ??= new Date().toISOString();
   return o;
 };
+
+const primitivo = (v: unknown) => typeof v === 'string' || typeof v === 'number';
+
+/** Extrai curso principal do payload padrão do Registro de Processo. */
+function cursoPrincipalDoPayload(bruto: unknown): { id?: string; codigo?: string } {
+  if (!bruto || typeof bruto !== 'object') return {};
+  const o = bruto as Record<string, unknown>;
+  const lista = Array.isArray(o.cursos) ? o.cursos : [];
+  const escolhido =
+    lista.find((c) => c && typeof c === 'object' && String((c as any).principal) === '1') ??
+    lista[0];
+  if (escolhido && typeof escolhido === 'object') {
+    const c = escolhido as Record<string, unknown>;
+    return {
+      id: c.id != null ? String(c.id) : undefined,
+      codigo: c.codCurso != null ? String(c.codCurso) : undefined,
+    };
+  }
+  const curso = o.curso;
+  if (curso && typeof curso === 'object') {
+    const c = curso as Record<string, unknown>;
+    return {
+      id: c.id != null ? String(c.id) : undefined,
+      codigo: c.codCurso != null ? String(c.codCurso) : (c.codigo != null ? String(c.codigo) : undefined),
+    };
+  }
+  return {};
+}
 
 // POST /webhook/rubeus/:funil
 export const etapaSchema = z.object({
@@ -237,5 +275,24 @@ export const paginacaoQuerySchema = z.object({
 
 export const funilQuerySchema = z.object({
   funil_id: z.string().min(1).optional(),
-  dias: z.coerce.number().int().min(1).max(365).default(90),
+  dias: z.coerce.number().int().min(1).max(365).optional(),
+  de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  curso_codigo: z.string().min(1).optional(),
+  categoria: z.string().min(1).optional(),
+  modalidade: z.string().min(1).optional(),
+  processo_id: z.string().min(1).optional(),
+}).refine((q) => q.de || q.ate || q.dias || true, { message: 'periodo' });
+
+export const macroQuerySchema = z.object({
+  dias: z.coerce.number().int().min(1).max(365).optional(),
+  de: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  ate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  curso_codigo: z.string().min(1).optional(),
+  categoria: z.string().min(1).optional(),
+  modalidade: z.string().min(1).optional(),
+  comparar: z
+    .union([z.literal('1'), z.literal('0'), z.literal('true'), z.literal('false')])
+    .optional()
+    .transform((v) => v === undefined || v === '1' || v === 'true'),
 });

@@ -148,18 +148,9 @@ export function VisaoGeral({ filtro, setFiltro }) {
   /*
    * Contexto das fórmulas.
    *
-   * Ação de conversão entra pelo NOME que o Google usa, casando por prefixo —
-   * "Visualizações de página (Hospedado pelo Google)" tem sufixo que muda
-   * conforme a origem, e exigir o nome exato quebraria a métrica no dia em que
-   * o Google renomear o sufixo.
-   */
-  /*
-   * Cada ação de conversão vira um identificador `acao_<nome>`, gerado do dado.
-   *
-   * Nomear na mão não funcionou: "visualizacoes_pagina" não existia nesta conta,
-   * porque o nome que o gerenciador mostra por campanha não é o que a API
-   * devolve. Gerando do dado, a tela oferece o que existe de verdade e não
-   * quebra quando alguém renomeia uma conversão no Google.
+   * Cada ação de conversão vira `acao_<nome>` a partir do dado real da API.
+   * `visualizacoes_pagina` soma ações cujo nome é visualização de página —
+   * base do Connect rate (visualizações ÷ cliques).
    */
   const idDaAcao = (nome) =>
     'acao_' +
@@ -170,8 +161,24 @@ export function VisaoGeral({ filtro, setFiltro }) {
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '');
 
+  const ehVisualizacaoPagina = (nome) => {
+    const n = (nome || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    return (
+      (n.includes('visualizacao') && n.includes('pagina')) ||
+      n.includes('page_view') ||
+      n.includes('page view')
+    );
+  };
+
   const porAcao = {};
-  for (const i of acoes.itens || []) porAcao[idDaAcao(i.acao)] = i.resultados;
+  let visualizacoesPagina = 0;
+  for (const i of acoes.itens || []) {
+    porAcao[idDaAcao(i.acao)] = i.resultados;
+    if (ehVisualizacaoPagina(i.acao)) visualizacoesPagina += i.resultados;
+  }
 
   const ctxMetricas = {
     investimento: t.investimento,
@@ -181,10 +188,10 @@ export function VisaoGeral({ filtro, setFiltro }) {
     cliques: t.cliques,
     impressoes: t.impressoes,
     leads_crm: totalLeadsCrm,
+    visualizacoes_pagina: visualizacoesPagina,
     ...porAcao,
   };
 
-  // A tela mostra as ações reais junto das bases fixas, com o total do período.
   const basesComAcoes = [
     ...(metricas.bases || []),
     ...(acoes.itens || []).map((i) => ({
@@ -194,10 +201,17 @@ export function VisaoGeral({ filtro, setFiltro }) {
     })),
   ];
 
-  // O período anterior não tem quebra por ação; o que dá para comparar, compara.
-  const ctxAnterior = ant ? { ...ctxMetricas, investimento: ant.investimento, conversoes: ant.resultados_primarios,
-    todas_conversoes: ant.resultados, conversoes_secundarias: ant.resultados_secundarios,
-    cliques: ant.cliques, impressoes: ant.impressoes } : null;
+  // Só totais Ads no período anterior — ações atuais não podem vazar no "antes".
+  const ctxAnterior = ant
+    ? {
+        investimento: ant.investimento,
+        conversoes: ant.resultados_primarios,
+        todas_conversoes: ant.resultados,
+        conversoes_secundarias: ant.resultados_secundarios,
+        cliques: ant.cliques,
+        impressoes: ant.impressoes,
+      }
+    : null;
 
   const kpis = [
     { rotulo: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, antes: ant && fmtBRL(ant.investimento), rodape: 'Google Ads', icone: '💰' },

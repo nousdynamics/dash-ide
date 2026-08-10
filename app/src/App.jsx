@@ -51,7 +51,7 @@ const ICONES = {
 
 const PAGINAS = [
   { id: 'overview', nome: 'Visão geral', curto: 'Visão' },
-  { id: 'funil', nome: 'Funil de leads', curto: 'Funil' },
+  { id: 'funil', nome: 'Funil de vendas', curto: 'Funil' },
   { id: 'campanhas', nome: 'Campanhas', curto: 'Camp.' },
   { id: 'conversas', nome: 'Conversas', curto: 'Chat' },
   // Emite credencial de webhook: só aparece para quem administra. Esconder o
@@ -191,7 +191,7 @@ export default function App() {
 
         <Suspense fallback={<Esqueleto linhas={5} />}>
           {rota === 'overview' && <VisaoGeral {...props} />}
-          {rota === 'funil' && <Funil />}
+          {rota === 'funil' && <Funil {...props} />}
           {rota === 'campanhas' && <Campanhas {...props} />}
           {rota === 'conversas' && <Conversas />}
           {rota === 'webhooks' && <Webhooks />}

@@ -1,24 +1,24 @@
 import { useEffect, useState } from 'react';
 import { Cartao, Estado, Esqueleto, Pill, Select } from '../componentes/base';
+import { FiltroPeriodo } from '../componentes/FiltroPeriodo';
 import { GraficoAcumulado } from '../componentes/Graficos';
 import { PainelLead } from '../componentes/PainelLead';
 import { useApi } from '../lib/api';
-import { fmtDataHora, fmtDec, fmtInt, iniciais } from '../lib/formato';
+import { queryPeriodo, resolverPeriodo } from '../lib/periodo';
+import { fmtDataHora, fmtDec, fmtDiaMes, fmtInt, iniciais } from '../lib/formato';
 
-const PERIODOS = [
-  ['7', 'Últimos 7 dias'],
-  ['30', 'Últimos 30 dias'],
-  ['90', 'Últimos 90 dias'],
-  ['180', 'Últimos 180 dias'],
-];
+const FONTES = {
+  rd_marketing: { rotulo: 'RD Marketing', tom: 'neutro' },
+  rubeus: { rotulo: 'Rubeus', tom: 'sucesso' },
+  misto: { rotulo: 'RD + Rubeus', tom: 'atencao' },
+  indisponivel: { rotulo: 'Indisponível', tom: 'perigo' },
+};
 
-/**
- * Variação contra o período anterior, em texto solto.
- *
- * Sem fundo de chip, ao contrário do ChipDelta: dentro do cartão de etapa ele
- * ficaria como um segundo bloco disputando atenção com o número grande, que é
- * o que a pessoa foi ali ver. A seta e a cor bastam para dar a direção.
- */
+function BadgeFonte({ fonte }) {
+  const f = FONTES[fonte] || FONTES.rubeus;
+  return <Pill tom={f.tom}>{f.rotulo}</Pill>;
+}
+
 function Variacao({ pct, abs, claro = false }) {
   if (pct === null || pct === undefined) {
     return <span className={`text-[11px] ${claro ? 'text-white/60' : 'text-tenue'}`}>sem base anterior</span>;
@@ -41,12 +41,6 @@ function Variacao({ pct, abs, claro = false }) {
   );
 }
 
-/**
- * Seta de conversão entre duas etapas.
- *
- * O recorte em ponta não é enfeite: ele dá direção à leitura. Uma etiqueta
- * retangular entre dois cartões seria lida como um terceiro cartão.
- */
 function SetaConversao({ pct, vertical = false }) {
   const rotulo = pct === null || pct === undefined ? '—' : `${fmtDec(pct)}%`;
   if (vertical) {
@@ -72,35 +66,43 @@ function SetaConversao({ pct, vertical = false }) {
   );
 }
 
-/** Esteira de etapas: cada cartão seleciona a etapa que o gráfico abaixo detalha. */
-function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar }) {
+function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar, comFonte = false, interativa = true }) {
+  const Celula = interativa ? 'button' : 'div';
   return (
     <>
-      {/* Larga demais para caber, rola dentro do próprio bloco — a página não. */}
       <div className="hidden md:block overflow-x-auto pb-1">
         <div className="flex items-stretch min-w-full">
           {etapas.map((e, i) => {
-            const ativa = e.etapa === selecionada;
+            const ativa = interativa && e.etapa === selecionada;
+            const vazio = e.total === null || e.total === undefined;
             return (
               <div key={e.etapa} className="flex items-stretch flex-1 min-w-[124px]">
                 {i > 0 && <SetaConversao pct={e.taxa_desde_anterior_pct} />}
-                <button
-                  type="button"
-                  onClick={() => aoSelecionar(e.etapa)}
-                  aria-pressed={ativa}
+                <Celula
+                  type={interativa ? 'button' : undefined}
+                  onClick={interativa ? () => aoSelecionar(e.etapa) : undefined}
+                  aria-pressed={interativa ? ativa : undefined}
                   className={`flex-1 min-w-0 flex flex-col justify-center rounded-[12px] px-3 py-4 text-center
-                    cursor-pointer border transition-colors
-                    focus-visible:outline-2 focus-visible:outline-azul-400 focus-visible:outline-offset-2
+                    border transition-colors
+                    ${interativa ? 'cursor-pointer focus-visible:outline-2 focus-visible:outline-azul-400 focus-visible:outline-offset-2' : ''}
                     ${ativa
                       ? 'bg-azul-600 border-azul-500 text-white'
-                      : 'bg-elevado border-transparent hover:bg-superficie-hover'}
+                      : 'bg-elevado border-transparent'}
+                    ${interativa && !ativa ? 'hover:bg-superficie-hover' : ''}
                     ${!ativa && maiorQueda === e.etapa ? 'border-atencao' : ''}`}
                 >
                   <div className={`text-[10px] font-semibold uppercase tracking-wide truncate
                                    ${ativa ? 'text-white/80' : 'text-secundario'}`}>
                     {e.etapa}
                   </div>
-                  <div className="text-[24px] font-bold tnum leading-tight mt-[2px]">{fmtInt(e.total)}</div>
+                  <div className="text-[24px] font-bold tnum leading-tight mt-[2px]">
+                    {vazio ? '—' : fmtInt(e.total)}
+                  </div>
+                  {comFonte && e.fonte && (
+                    <div className="mt-1 flex justify-center">
+                      <BadgeFonte fonte={e.fonte} />
+                    </div>
+                  )}
                   <div className="mt-1">
                     <Variacao pct={e.delta_pct} abs={e.delta_abs} claro={ativa} />
                   </div>
@@ -109,7 +111,7 @@ function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar }) {
                       maior queda
                     </span>
                   )}
-                </button>
+                </Celula>
               </div>
             );
           })}
@@ -118,16 +120,18 @@ function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar }) {
 
       <div className="md:hidden flex flex-col">
         {etapas.map((e, i) => {
-          const ativa = e.etapa === selecionada;
+          const ativa = interativa && e.etapa === selecionada;
+          const vazio = e.total === null || e.total === undefined;
           return (
             <div key={e.etapa}>
               {i > 0 && <SetaConversao pct={e.taxa_desde_anterior_pct} vertical />}
-              <button
-                type="button"
-                onClick={() => aoSelecionar(e.etapa)}
-                aria-pressed={ativa}
+              <Celula
+                type={interativa ? 'button' : undefined}
+                onClick={interativa ? () => aoSelecionar(e.etapa) : undefined}
+                aria-pressed={interativa ? ativa : undefined}
                 className={`w-full flex items-center justify-between gap-3 p-3 rounded-[12px] text-left
-                  cursor-pointer border
+                  border
+                  ${interativa ? 'cursor-pointer' : ''}
                   ${ativa ? 'bg-azul-600 border-azul-500 text-white' : 'bg-elevado border-transparent'}
                   ${!ativa && maiorQueda === e.etapa ? 'border-atencao' : ''}`}
               >
@@ -135,12 +139,17 @@ function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar }) {
                   <div className={`text-[11px] font-semibold ${ativa ? 'text-white/80' : 'text-secundario'}`}>
                     {e.etapa}
                   </div>
+                  {comFonte && e.fonte && (
+                    <div className="mt-1"><BadgeFonte fonte={e.fonte} /></div>
+                  )}
                   <div className="mt-px">
                     <Variacao pct={e.delta_pct} abs={e.delta_abs} claro={ativa} />
                   </div>
                 </div>
-                <div className="text-[19px] font-bold tnum shrink-0">{fmtInt(e.total)}</div>
-              </button>
+                <div className="text-[19px] font-bold tnum shrink-0">
+                  {vazio ? '—' : fmtInt(e.total)}
+                </div>
+              </Celula>
             </div>
           );
         })}
@@ -149,18 +158,12 @@ function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar }) {
   );
 }
 
-/**
- * Curva acumulada da etapa selecionada.
- *
- * Em componente próprio para que trocar de etapa refaça só esta consulta — a
- * esteira e a lista de leads não mudam, e remontá-las piscaria a tela inteira.
- */
-function CurvaDaEtapa({ funilId, etapa, dias }) {
+function CurvaDaEtapa({ funilId, etapa, periodoQs, chave }) {
   const { dados, carregando, erro } = useApi(
-    `/api/funil/serie?dias=${dias}` +
+    `/api/funil/serie?${periodoQs}` +
       (funilId ? `&funil_id=${encodeURIComponent(funilId)}` : '') +
       (etapa ? `&etapa=${encodeURIComponent(etapa)}` : ''),
-    `serie-${funilId}-${etapa}-${dias}`,
+    `serie-${funilId}-${etapa}-${chave}`,
   );
 
   if (erro) return <Cartao><Estado tipo="erro" titulo="Não foi possível carregar a curva" mensagem={erro} /></Cartao>;
@@ -179,12 +182,6 @@ function CurvaDaEtapa({ funilId, etapa, dias }) {
   );
 }
 
-/**
- * Cartões de lead do funil selecionado.
- *
- * Fica aqui, e não na tela de webhooks: quem olha o funil quer ver quem está
- * dentro dele. A tela de webhooks é de configuração, não de operação.
- */
 function LeadsDoFunil({ funilId, aoAbrir }) {
   const [busca, setBusca] = useState('');
   const [aplicada, setAplicada] = useState('');
@@ -205,7 +202,8 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
     ? dados.itens.filter(
         (l) =>
           (l.contato_nome || '').toLowerCase().includes(termo) ||
-          String(l.contato_id).includes(termo),
+          String(l.contato_id).includes(termo) ||
+          (l.curso_codigo || '').toLowerCase().includes(termo),
       )
     : dados.itens;
 
@@ -225,7 +223,7 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
           type="search"
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
-          placeholder="Buscar lead por nome ou id…"
+          placeholder="Buscar lead por nome, id ou curso…"
           aria-label="Buscar lead"
           className="bg-superficie text-primario border border-borda-forte rounded-[8px]
                      px-2 py-[5px] text-xs flex-1 min-w-[200px]"
@@ -238,7 +236,7 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
       <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]">
         {itens.map((l) => (
           <button
-            key={l.contato_id}
+            key={l.quem}
             type="button"
             onClick={() => aoAbrir(l.contato_id)}
             className="text-left bg-superficie border border-borda rounded-[12px] p-3
@@ -254,12 +252,24 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
                 {l.contato_nome || `Contato ${l.contato_id}`}
               </span>
             </div>
-            <div className="mt-2">
+            <div className="mt-2 flex flex-wrap gap-1">
               <Pill tom="sucesso">{l.etapa}</Pill>
+              {l.curso_codigo && <Pill tom="neutro">{l.curso_codigo}</Pill>}
+              {/* Processo repetido é jornada legítima — a mesma pessoa pode se
+                  inscrever em dois cursos. Fica visível em vez de somado. */}
+              {l.processos > 1 && <Pill tom="atencao">{l.processos} processos</Pill>}
             </div>
             <div className="text-[11px] text-tenue mt-2">
               {l.eventos} evento(s) · {fmtDataHora(l.registrado_em)}
+              {l.ids_no_crm > 1 && (
+                <span title="O Rubeus emitiu mais de um id de contato para esta pessoa; o painel juntou pelo e-mail">
+                  {' '}· {l.ids_no_crm} cadastros no CRM
+                </span>
+              )}
             </div>
+            {l.email && (
+              <div className="text-[11px] text-tenue truncate" title={l.email}>{l.email}</div>
+            )}
           </button>
         ))}
       </div>
@@ -267,57 +277,165 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
   );
 }
 
-/**
- * O funil é sempre de UM processo. Somar processos produz taxa acima de 100%:
- * cada processo usa um conjunto diferente de etapas, e uma etapa que existe em
- * dois deles acumula mais contatos que a etapa anterior, que existe só em um.
- */
-export function Funil() {
+function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso }) {
+  const p = queryPeriodo(filtro);
+  const qs =
+    `${p}` +
+    (categoria ? `&categoria=${encodeURIComponent(categoria)}` : '') +
+    (curso ? `&curso_codigo=${encodeURIComponent(curso)}` : '') +
+    `&comparar=${filtro.comparar ? '1' : '0'}`;
+
+  const { dados, carregando, erro } = useApi(`/api/funil/macro?${qs}`, `macro-${qs}`);
+  const { dados: catalogo } = useApi('/api/catalogo/cursos', 'catalogo-cursos');
+
+  if (erro) return <Cartao><Estado tipo="erro" titulo="Não foi possível carregar o funil macro" mensagem={erro} /></Cartao>;
+  if (carregando || !dados) return <Esqueleto linhas={8} />;
+
+  const categorias = catalogo?.categorias ?? [];
+  const cursos = catalogo?.itens ?? [];
+
+  return (
+    <>
+      <Cartao>
+        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+          <div>
+            <div className="text-[13px] font-semibold">Funil consolidado</div>
+            <div className="text-[11px] text-tenue mt-[2px]">
+              Espelha a planilha: RD Marketing no topo, Rubeus da qualificação à matrícula
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select
+              rotulo="Categoria"
+              valor={categoria}
+              aoTrocar={aoTrocarCategoria}
+              opcoes={[
+                ['', 'Todas as categorias'],
+                ...categorias.map((c) => [c.id, c.rotulo]),
+              ]}
+            />
+            <Select
+              rotulo="Curso"
+              valor={curso}
+              aoTrocar={aoTrocarCurso}
+              opcoes={[
+                ['', 'Todos os cursos'],
+                ...cursos
+                  .filter((c) => c.codigo)
+                  .slice(0, 200)
+                  .map((c) => [c.codigo, `${c.nome || c.codigo}${c.codigo ? ` (${c.codigo})` : ''}`]),
+              ]}
+            />
+          </div>
+        </div>
+
+        {!dados.rd?.ok && (
+          <div className="mb-3 text-[11px] text-atencao bg-superficie border border-borda rounded-[8px] px-3 py-2">
+            Visitantes/Leads do RD Marketing indisponíveis: {dados.rd?.motivo || 'conecte o OAuth ou verifique o plano Analysis.'}
+            {' '}Qualificação em diante segue com dados do Rubeus.
+          </div>
+        )}
+
+        <Esteira
+          etapas={dados.etapas}
+          maiorQueda={null}
+          selecionada={null}
+          aoSelecionar={() => {}}
+          comFonte
+          interativa={false}
+        />
+
+        <div className="text-[11px] text-tenue mt-3 leading-relaxed">
+          Cada etapa mostra a fonte dos números. Qualificados = leads com curso atribuído no Rubeus.
+        </div>
+      </Cartao>
+
+      <Cartao>
+        <div className="text-[13px] font-semibold mb-3">Inscrições e matrículas por categoria</div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="text-tenue border-b border-borda">
+                <th className="py-2 pr-3 font-medium">Categoria</th>
+                <th className="py-2 pr-3 font-medium tnum">Inscrições</th>
+                <th className="py-2 font-medium tnum">Matrículas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dados.por_categoria.map((r) => (
+                <tr key={r.categoria} className="border-b border-borda/60">
+                  <td className="py-2 pr-3">{r.rotulo}</td>
+                  <td className="py-2 pr-3 tnum">{fmtInt(r.inscricoes)}</td>
+                  <td className="py-2 tnum">{fmtInt(r.matriculas)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Cartao>
+
+      {dados.evolucao?.length > 0 && (
+        <Cartao>
+          <div className="text-[13px] font-semibold mb-3">Evolução no período (Rubeus)</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="text-tenue border-b border-borda">
+                  <th className="py-2 pr-3 font-medium">Mês</th>
+                  <th className="py-2 pr-3 font-medium tnum">Qualificados</th>
+                  <th className="py-2 pr-3 font-medium tnum">Oportunidades</th>
+                  <th className="py-2 pr-3 font-medium tnum">Inscrições</th>
+                  <th className="py-2 font-medium tnum">Matrículas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dados.evolucao.map((r) => (
+                  <tr key={r.mes} className="border-b border-borda/60">
+                    <td className="py-2 pr-3">{r.mes}</td>
+                    <td className="py-2 pr-3 tnum">{fmtInt(r.qualificados)}</td>
+                    <td className="py-2 pr-3 tnum">{fmtInt(r.oportunidades)}</td>
+                    <td className="py-2 pr-3 tnum">{fmtInt(r.inscricoes)}</td>
+                    <td className="py-2 tnum">{fmtInt(r.matriculas)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Cartao>
+      )}
+    </>
+  );
+}
+
+function DetalheRubeus({ filtro }) {
   const [funil, setFunil] = useState(null);
-  const [dias, setDias] = useState('30');
   const [etapaSel, setEtapaSel] = useState(null);
   const [leadAberto, setLeadAberto] = useState(null);
+  const p = queryPeriodo(filtro);
+  const chave = p;
   const { dados, carregando, erro } = useApi(
-    `/api/funil?dias=${dias}${funil ? `&funil_id=${encodeURIComponent(funil)}` : ''}`,
-    `${funil}-${dias}`,
+    `/api/funil?${p}${funil ? `&funil_id=${encodeURIComponent(funil)}` : ''}`,
+    `detalhe-${funil}-${chave}`,
   );
 
-  const cabecalho = (
-    <div>
-      <div className="text-[19px] font-semibold tracking-tight">Funil de leads</div>
-      <div className="text-tenue text-xs mt-[2px]">
-        Etapas descobertas a partir dos eventos do Rubeus · comparado com o período anterior
-      </div>
-    </div>
-  );
-
-  if (erro) return <>{cabecalho}<Cartao><Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} /></Cartao></>;
-  if (carregando || !dados) return <>{cabecalho}<Esqueleto /></>;
+  if (erro) return <Cartao><Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} /></Cartao>;
+  if (carregando || !dados) return <Esqueleto />;
 
   const funis = dados.funis_disponiveis || [];
-  // Na primeira visita assume o funil com mais leads.
   if (!funil && funis.length) {
     setFunil(String(funis[0].id));
-    return <>{cabecalho}<Esqueleto /></>;
+    return <Esqueleto />;
   }
 
   const comDado = dados.etapas.filter((e) => e.total > 0);
-  /*
-   * A etapa do gráfico segue a seleção enquanto ela existir neste recorte.
-   * Trocar de funil ou de período pode fazer a etapa escolhida sumir; nesse
-   * caso cai no topo do funil, que é o começo natural da leitura.
-   */
   const etapa = comDado.some((e) => e.etapa === etapaSel) ? etapaSel : comDado[0]?.etapa ?? null;
 
   return (
     <>
-      {cabecalho}
-
       <Cartao>
         <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-          <div className="text-[13px] font-semibold">Etapas do Rubeus</div>
+          <div className="text-[13px] font-semibold">Etapas do processo (Rubeus)</div>
           <div className="flex items-center gap-2 flex-wrap">
-            <Select rotulo="Período" valor={dias} aoTrocar={setDias} opcoes={PERIODOS} />
             {funis.length > 0 && (
               <Select
                 rotulo="Filtrar por funil"
@@ -336,11 +454,10 @@ export function Funil() {
               maiorQueda={dados.etapa_maior_queda}
               selecionada={etapa}
               aoSelecionar={setEtapaSel}
+              comFonte
             />
             <div className="text-[11px] text-tenue mt-3 leading-relaxed">
-              O número é de contatos distintos que passaram pela etapa; a seta entre os cartões é a
-              conversão desde a etapa anterior, e a variação embaixo compara com os {dias} dias
-              anteriores. Clique numa etapa para ver a curva dela.
+              Ordem preferencial vem do catálogo validado no Rubeus; sem mapeamento, ordena por volume.
             </div>
           </>
         ) : (
@@ -351,7 +468,7 @@ export function Funil() {
         )}
       </Cartao>
 
-      {etapa && <CurvaDaEtapa funilId={funil} etapa={etapa} dias={dias} />}
+      {etapa && <CurvaDaEtapa funilId={funil} etapa={etapa} periodoQs={p} chave={chave} />}
 
       <Cartao>
         <div className="text-[13px] font-semibold mb-3">Leads deste funil</div>
@@ -360,6 +477,62 @@ export function Funil() {
 
       {leadAberto && (
         <PainelLead contatoId={leadAberto} aoFechar={() => setLeadAberto(null)} />
+      )}
+    </>
+  );
+}
+
+/**
+ * Funil automático no estilo da planilha 2026.
+ * Macro (RD + Rubeus) é a view default; detalhe por processo fica secundário.
+ */
+export function Funil({ filtro, setFiltro }) {
+  const [aba, setAba] = useState('macro');
+  const [categoria, setCategoria] = useState('');
+  const [curso, setCurso] = useState('');
+  const { de, ate } = resolverPeriodo(filtro ?? { preset: '30d' });
+  const filtroLocal = filtro ?? { preset: '30d', de: null, ate: null, comparar: true };
+  const setFiltroLocal = setFiltro ?? (() => {});
+
+  return (
+    <>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-[19px] font-semibold tracking-tight">Funil de vendas</div>
+          <div className="text-tenue text-xs mt-[2px]">
+            {fmtDiaMes(de)} a {fmtDiaMes(ate)} · RD Marketing + Rubeus
+          </div>
+        </div>
+        <FiltroPeriodo filtro={filtroLocal} aoTrocar={setFiltroLocal} />
+      </div>
+
+      <div className="flex gap-1 p-[3px] rounded-[10px] bg-elevado border border-borda w-fit">
+        {[
+          ['macro', 'Visão consolidada'],
+          ['detalhe', 'Por processo (Rubeus)'],
+        ].map(([id, nome]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setAba(id)}
+            className={`text-xs px-3 py-[6px] rounded-[8px] border-0 cursor-pointer
+              ${aba === id ? 'bg-azul-600 text-white' : 'bg-transparent text-secundario hover:text-primario'}`}
+          >
+            {nome}
+          </button>
+        ))}
+      </div>
+
+      {aba === 'macro' ? (
+        <MacroView
+          filtro={filtroLocal}
+          categoria={categoria}
+          curso={curso}
+          aoTrocarCategoria={setCategoria}
+          aoTrocarCurso={setCurso}
+        />
+      ) : (
+        <DetalheRubeus filtro={filtroLocal} />
       )}
     </>
   );

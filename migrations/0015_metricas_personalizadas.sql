@@ -25,10 +25,9 @@ CREATE TABLE metricas_personalizadas (
 CREATE UNIQUE INDEX idx_metricas_nome ON metricas_personalizadas (nome);
 
 -- Connect rate entra semeado porque foi pedido nominalmente, mas com a
--- definição visível e editável: "conversa iniciada por clique" tem mais de uma
--- leitura, e a certa é a de quem opera a conta, não a minha.
+-- definição visível e editável. É visualizações de página ÷ cliques.
 INSERT INTO metricas_personalizadas (nome, formula, formato, descricao, ordem) VALUES
-  ('Connect rate', 'acao_conversation_started / cliques * 100', 'percentual',
-   'Cliques que viraram conversa iniciada. Confira a definicao: usa a acao "Conversation started".', 10),
+  ('Connect rate', 'visualizacoes_pagina / cliques * 100', 'percentual',
+   'Cliques que geraram visualização de página (Connect rate).', 10),
   ('Conversas por clique (CTWA)', 'acao_ctwa / cliques * 100', 'percentual',
    'Cliques que dispararam a acao CTWA, que e a maior fonte de conversao primaria da conta.', 20);
