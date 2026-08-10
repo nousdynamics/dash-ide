@@ -1,51 +1,98 @@
-export const PRESETS = [
-  { id: '7d', nome: 'Últimos 7 dias' },
-  { id: '30d', nome: 'Últimos 30 dias' },
-  { id: '90d', nome: 'Últimos 90 dias' },
-  { id: 'mes', nome: 'Este mês' },
-  { id: 'mes_anterior', nome: 'Mês passado' },
-  { id: 'custom', nome: 'Período personalizado' },
+/*
+ * Período é mês, ano ou intervalo — as três formas que a planilha usa.
+ *
+ * "Últimos 30 dias" saiu: a planilha fecha por mês, e uma janela deslizante
+ * nunca bate com a linha de junho da planilha nem com o mês que a diretoria
+ * cobra. Quem quiser a janela solta usa Intervalo, que dá o mesmo e diz a data.
+ */
+export const MODOS = [
+  { id: 'mes', nome: 'Mês' },
+  { id: 'ano', nome: 'Ano' },
+  { id: 'intervalo', nome: 'Intervalo' },
+];
+
+export const MESES = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
 ];
 
 const isoDia = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
+/** Anos oferecidos no seletor: o corrente e os dois anteriores. */
+export function anosDisponiveis() {
+  const atual = new Date().getFullYear();
+  return [atual, atual - 1, atual - 2];
+}
+
+export const mesAtual = () => {
+  const h = new Date();
+  return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}`;
+};
+
+/** Filtro inicial das telas. */
+export const filtroPadrao = () => ({
+  modo: 'mes',
+  mes: mesAtual(),
+  ano: String(new Date().getFullYear()),
+  de: null,
+  ate: null,
+  comparar: true,
+});
+
 /**
  * Traduz o filtro em datas concretas.
  *
- * "Últimos N dias" termina ONTEM, não hoje: o Google Ads fecha o dia no fuso da
- * conta, e o parcial de hoje entraria como queda falsa no último ponto da série.
+ * Mês e ano em curso param HOJE, não no fim do calendário: pedir até 31 de
+ * agosto no dia 10 mandaria o Google Ads somar três semanas que não
+ * aconteceram, e a série terminaria em três semanas de zero.
  */
 export function resolverPeriodo(filtro) {
   const hoje = new Date();
-  const ontem = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() - 1);
-
-  /*
-   * Trava de sanidade: nenhum preset devolve início depois do fim. O caso real
-   * é "Este mês" no dia 1º — o mês começa hoje mas "ontem" ainda é do mês
-   * anterior, e o intervalo saía invertido (ex.: 01/08 a 31/07).
-   */
   const ordenado = (de, ate) => (de > ate ? { de, ate: de } : { de, ate });
+  const naoFuturo = (d) => (d > hoje ? hoje : d);
 
-  if (filtro.preset === 'custom' && filtro.de && filtro.ate) return ordenado(filtro.de, filtro.ate);
-
-  if (filtro.preset === 'mes') {
-    return ordenado(isoDia(new Date(hoje.getFullYear(), hoje.getMonth(), 1)), isoDia(ontem));
-  }
-  if (filtro.preset === 'mes_anterior') {
-    const ini = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
-    const fim = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
-    return ordenado(isoDia(ini), isoDia(fim));
+  if (filtro?.modo === 'ano' && filtro.ano) {
+    const ano = Number(filtro.ano);
+    return ordenado(
+      isoDia(new Date(ano, 0, 1)),
+      isoDia(naoFuturo(new Date(ano, 11, 31))),
+    );
   }
 
-  const dias = { '7d': 7, '30d': 30, '90d': 90 }[filtro.preset] ?? 30;
-  const ini = new Date(ontem.getFullYear(), ontem.getMonth(), ontem.getDate() - (dias - 1));
-  return ordenado(isoDia(ini), isoDia(ontem));
+  if (filtro?.modo === 'intervalo' && filtro.de && filtro.ate) {
+    return ordenado(filtro.de, filtro.ate);
+  }
+
+  const [ano, mes] = (filtro?.mes || mesAtual()).split('-').map(Number);
+  return ordenado(
+    isoDia(new Date(ano, mes - 1, 1)),
+    isoDia(naoFuturo(new Date(ano, mes, 0))),
+  );
 }
 
+/** Rótulo curto do período, para cabeçalho de tela. */
+export function rotuloPeriodo(filtro) {
+  if (filtro?.modo === 'ano' && filtro.ano) return filtro.ano;
+  if (filtro?.modo === 'intervalo') {
+    const { de, ate } = resolverPeriodo(filtro);
+    return `${de} a ${ate}`;
+  }
+  const [ano, mes] = (filtro?.mes || mesAtual()).split('-').map(Number);
+  return `${MESES[mes - 1]} de ${ano}`;
+}
+
+/*
+ * `de`/`ate` sempre vão, porque as rotas do Google Ads só entendem intervalo.
+ * `mes`/`ano` viajam junto para quem entende calendário — é o que deixa o
+ * período anterior ser o mês anterior de verdade, e não trinta dias atrás.
+ */
 export const queryPeriodo = (filtro) => {
   const { de, ate } = resolverPeriodo(filtro);
-  return `de=${de}&ate=${ate}`;
+  const base = `de=${de}&ate=${ate}`;
+  if (filtro?.modo === 'ano' && filtro.ano) return `${base}&ano=${filtro.ano}`;
+  if (filtro?.modo === 'intervalo') return base;
+  return `${base}&mes=${filtro?.mes || mesAtual()}`;
 };
 
 /** O /api/overview do D1 ainda raciocina em dias, não em intervalo. */

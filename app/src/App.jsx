@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { buscar } from './lib/api';
 import { iniciais } from './lib/formato';
+import { filtroPadrao } from './lib/periodo';
 import { Esqueleto } from './componentes/base';
 
 /*
@@ -94,7 +95,7 @@ export default function App() {
   const [admin, setAdmin] = useState(false);
 
   // Período vive aqui para não zerar ao trocar de tela.
-  const [filtro, setFiltro] = useState({ preset: '30d', de: null, ate: null, comparar: true });
+  const [filtro, setFiltro] = useState(filtroPadrao);
 
   useEffect(() => {
     buscar('/api/me')

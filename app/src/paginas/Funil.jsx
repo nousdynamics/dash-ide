@@ -4,7 +4,7 @@ import { FiltroPeriodo } from '../componentes/FiltroPeriodo';
 import { GraficoAcumulado } from '../componentes/Graficos';
 import { PainelLead } from '../componentes/PainelLead';
 import { useApi } from '../lib/api';
-import { queryPeriodo, resolverPeriodo } from '../lib/periodo';
+import { MESES, filtroPadrao, queryPeriodo, resolverPeriodo, rotuloPeriodo } from '../lib/periodo';
 import { fmtDataHora, fmtDec, fmtDiaMes, fmtInt, iniciais } from '../lib/formato';
 
 const FONTES = {
@@ -13,6 +13,12 @@ const FONTES = {
   misto: { rotulo: 'RD + Rubeus', tom: 'atencao' },
   indisponivel: { rotulo: 'Indisponível', tom: 'perigo' },
 };
+
+/** "2026-06" vira "Junho/2026" — a coluna Mês da planilha, não a chave crua. */
+function rotuloMes(chave) {
+  const [ano, mes] = String(chave).split('-').map(Number);
+  return MESES[mes - 1] ? `${MESES[mes - 1]}/${ano}` : chave;
+}
 
 function BadgeFonte({ fonte }) {
   const f = FONTES[fonte] || FONTES.rubeus;
@@ -338,6 +344,8 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
 
   const categorias = catalogo?.categorias ?? [];
   const cursos = catalogo?.itens ?? [];
+  const semCat = dados.por_categoria_sem_curso ?? { inscricoes: 0, matriculas: 0 };
+  const temSemCategoria = semCat.inscricoes > 0 || semCat.matriculas > 0;
 
   return (
     <>
@@ -391,7 +399,8 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
         />
 
         <div className="text-[11px] text-tenue mt-3 leading-relaxed">
-          Cada etapa mostra a fonte dos números. Qualificados = leads com curso atribuído no Rubeus.
+          Contagem acumulada, como na planilha: quem se matriculou também conta como inscrito,
+          oportunidade e qualificado. A taxa entre duas etapas é a segunda dividida pela primeira.
         </div>
       </Cartao>
 
@@ -414,14 +423,37 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
                   <td className="py-2 tnum">{fmtInt(r.matriculas)}</td>
                 </tr>
               ))}
+              {/*
+                * Sem curso conhecido é linha, não arredondamento.
+                *
+                * O Rubeus manda inscrição e matrícula sem curso nenhum; o curso
+                * só aparece no evento de qualificação, e nem toda pessoa passa
+                * por um. Somar essa gente em "Curta duração" ou sumir com ela
+                * faria a tabela fechar bonito e mentir — a soma das categorias
+                * bateria com o funil sem que ninguém soubesse o que entrou.
+                */}
+              {temSemCategoria && (
+                <tr className="border-b border-borda/60 text-tenue">
+                  <td className="py-2 pr-3 italic">Sem curso identificado</td>
+                  <td className="py-2 pr-3 tnum">{fmtInt(semCat.inscricoes)}</td>
+                  <td className="py-2 tnum">{fmtInt(semCat.matriculas)}</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
+        {temSemCategoria && (
+          <div className="text-[11px] text-tenue mt-2 leading-relaxed">
+            O Rubeus não envia o curso nos eventos de inscrição e matrícula. O painel recupera o
+            curso pela própria pessoa, quando ela passou por alguma etapa que o traga — o resto fica
+            nesta linha em vez de ser distribuído por chute.
+          </div>
+        )}
       </Cartao>
 
       {dados.evolucao?.length > 0 && (
         <Cartao>
-          <div className="text-[13px] font-semibold mb-3">Evolução no período (Rubeus)</div>
+          <div className="text-[13px] font-semibold mb-3">Evolução mês a mês (Rubeus)</div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
@@ -430,17 +462,23 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
                   <th className="py-2 pr-3 font-medium tnum">Qualificados</th>
                   <th className="py-2 pr-3 font-medium tnum">Oportunidades</th>
                   <th className="py-2 pr-3 font-medium tnum">Inscrições</th>
-                  <th className="py-2 font-medium tnum">Matrículas</th>
+                  <th className="py-2 pr-3 font-medium tnum">Matrículas</th>
+                  {/* A conversão de ponta a ponta é a leitura que a planilha
+                      cobra do mês: de qualificado a matriculado. */}
+                  <th className="py-2 font-medium tnum">Qualif. → Matríc.</th>
                 </tr>
               </thead>
               <tbody>
                 {dados.evolucao.map((r) => (
                   <tr key={r.mes} className="border-b border-borda/60">
-                    <td className="py-2 pr-3">{r.mes}</td>
+                    <td className="py-2 pr-3">{rotuloMes(r.mes)}</td>
                     <td className="py-2 pr-3 tnum">{fmtInt(r.qualificados)}</td>
                     <td className="py-2 pr-3 tnum">{fmtInt(r.oportunidades)}</td>
                     <td className="py-2 pr-3 tnum">{fmtInt(r.inscricoes)}</td>
-                    <td className="py-2 tnum">{fmtInt(r.matriculas)}</td>
+                    <td className="py-2 pr-3 tnum">{fmtInt(r.matriculas)}</td>
+                    <td className="py-2 tnum text-azul-300 font-semibold">
+                      {r.qualificados > 0 ? `${fmtDec((r.matriculas / r.qualificados) * 100)}%` : '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -535,8 +573,8 @@ export function Funil({ filtro, setFiltro }) {
   const [aba, setAba] = useState('macro');
   const [categoria, setCategoria] = useState('');
   const [curso, setCurso] = useState('');
-  const { de, ate } = resolverPeriodo(filtro ?? { preset: '30d' });
-  const filtroLocal = filtro ?? { preset: '30d', de: null, ate: null, comparar: true };
+  const filtroLocal = filtro ?? filtroPadrao();
+  const { de, ate } = resolverPeriodo(filtroLocal);
   const setFiltroLocal = setFiltro ?? (() => {});
 
   return (
@@ -545,7 +583,7 @@ export function Funil({ filtro, setFiltro }) {
         <div>
           <div className="text-[19px] font-semibold tracking-tight">Funil de vendas</div>
           <div className="text-tenue text-xs mt-[2px]">
-            {fmtDiaMes(de)} a {fmtDiaMes(ate)} · RD Marketing + Rubeus
+            {rotuloPeriodo(filtroLocal)} · {fmtDiaMes(de)} a {fmtDiaMes(ate)} · RD Marketing + Rubeus
           </div>
         </div>
         <FiltroPeriodo filtro={filtroLocal} aoTrocar={setFiltroLocal} />
