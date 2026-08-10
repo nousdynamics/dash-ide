@@ -146,28 +146,53 @@ function n(v: unknown): number {
   return 0;
 }
 
+/*
+ * Uma linha do funil, seja ela o total do período ou um dia solto.
+ *
+ * A Analysis API responde com `*_count` (`visitors_count`, `contacts_count`…);
+ * versões anteriores usavam nomes secos (`visitors`, `leads`). Os dois jogos de
+ * nome ficam aceitos porque a conta já respondeu dos dois jeitos, e um período
+ * lido com a chave errada não dá erro — dá zero, que é pior.
+ */
+function linhaFunilRd(item: unknown): FunilRd {
+  const o = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+  return {
+    visitors: n(o.visitors_count ?? o.visitors ?? o.Visitors ?? o.visitantes),
+    leads: n(o.contacts_count ?? o.leads ?? o.Leads),
+    qualified_leads: n(o.qualified_contacts_count ?? o.qualified_leads ?? o.qualifiedLeads),
+    opportunities: n(o.opportunities_count ?? o.opportunities),
+    sales: n(o.sales_count ?? o.sales),
+  };
+}
+
+const somarFunilRd = (linhas: unknown[]): FunilRd =>
+  linhas.reduce<FunilRd>((acc, item) => {
+    const l = linhaFunilRd(item);
+    return {
+      visitors: n(acc.visitors) + n(l.visitors),
+      leads: n(acc.leads) + n(l.leads),
+      qualified_leads: n(acc.qualified_leads) + n(l.qualified_leads),
+      opportunities: n(acc.opportunities) + n(l.opportunities),
+      sales: n(acc.sales) + n(l.sales),
+    };
+  }, { visitors: 0, leads: 0, qualified_leads: 0, opportunities: 0, sales: 0 });
+
 function agregarFunilRd(bruto: unknown): FunilRd {
-  if (Array.isArray(bruto)) {
-    return bruto.reduce<FunilRd>((acc, item) => {
-      const o = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
-      return {
-        visitors: n(acc.visitors) + n(o.visitors ?? o.Visitors ?? o.visitantes),
-        leads: n(acc.leads) + n(o.leads ?? o.Leads),
-        qualified_leads: n(acc.qualified_leads) + n(o.qualified_leads ?? o.qualifiedLeads),
-        opportunities: n(acc.opportunities) + n(o.opportunities),
-        sales: n(acc.sales) + n(o.sales),
-      };
-    }, { visitors: 0, leads: 0, qualified_leads: 0, opportunities: 0, sales: 0 });
-  }
+  if (Array.isArray(bruto)) return somarFunilRd(bruto);
 
   const o = (bruto && typeof bruto === 'object' ? bruto : {}) as Record<string, unknown>;
-  // Às vezes vem { funnel: {...} } ou { metrics: {...} }
-  const nucleo = (o.funnel || o.metrics || o.data || o) as Record<string, unknown>;
-  return {
-    visitors: n(nucleo.visitors ?? nucleo.Visitors ?? nucleo.visitantes),
-    leads: n(nucleo.leads ?? nucleo.Leads),
-    qualified_leads: n(nucleo.qualified_leads ?? nucleo.qualifiedLeads),
-    opportunities: n(nucleo.opportunities),
-    sales: n(nucleo.sales),
-  };
+
+  /*
+   * `grouped_by: "daily"` devolve { funnel: [ {reference_day, ...}, ... ] } — uma
+   * linha por dia, para somar. O caminho antigo pegava `o.funnel`, caía num
+   * array e lia `.visitors` dele: sempre `undefined`, sempre zero. Era por isso
+   * que Visitantes e Leads apareciam vazios com a credencial funcionando.
+   */
+  for (const chave of ['funnel', 'metrics', 'data'] as const) {
+    const v = o[chave];
+    if (Array.isArray(v)) return somarFunilRd(v);
+    if (v && typeof v === 'object') return linhaFunilRd(v);
+  }
+
+  return linhaFunilRd(o);
 }
