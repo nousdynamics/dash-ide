@@ -291,6 +291,25 @@ export const funilQuerySchema = z.object({
   processo_id: z.string().min(1).optional(),
 });
 
+/** Quem está por trás de um número do funil — a lista que o ícone abre. */
+export const pessoasDaEtapaQuerySchema = z.object({
+  ...periodoCampos,
+  etapa: z.enum(['qualificados', 'oportunidade', 'inscricao', 'matricula']),
+  /*
+   * Categoria RESOLVIDA da pessoa, para abrir uma linha da tabela do meio.
+   * String vazia é "sem curso identificado" — é uma linha de verdade ali, e
+   * precisa ser abrível como as outras.
+   */
+  categoria_pessoa: z.string().optional(),
+  /* Desempata as linhas não classificadas, que são agrupadas por funil. */
+  funil_nome: z.string().optional(),
+  curso_codigo: z.string().min(1).optional(),
+  categoria: z.string().min(1).optional(),
+  modalidade: z.string().min(1).optional(),
+  pagina: z.coerce.number().int().min(1).default(1),
+  por_pagina: z.coerce.number().int().min(1).max(200).default(50),
+});
+
 export const macroQuerySchema = z.object({
   ...periodoCampos,
   curso_codigo: z.string().min(1).optional(),

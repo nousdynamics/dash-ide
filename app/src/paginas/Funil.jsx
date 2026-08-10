@@ -72,8 +72,22 @@ function SetaConversao({ pct, vertical = false }) {
   );
 }
 
-function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar, comFonte = false, interativa = true }) {
+function Esteira({
+  etapas,
+  maiorQueda,
+  selecionada,
+  aoSelecionar,
+  comFonte = false,
+  interativa = true,
+  aoAbrirLista = null,
+}) {
   const Celula = interativa ? 'button' : 'div';
+  /*
+   * Só as etapas do Rubeus abrem lista. Visitantes e Leads são um total
+   * agregado que o RD devolve por dia — não existe pessoa por trás deles aqui,
+   * e um ícone que abre uma gaveta vazia é pior que ícone nenhum.
+   */
+  const podeAbrir = (e) => aoAbrirLista && e.fonte === 'rubeus' && e.total > 0;
   return (
     <>
       <div className="hidden md:block overflow-x-auto pb-1">
@@ -104,11 +118,18 @@ function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar, comFonte = fal
                   <div className="text-[24px] font-bold tnum leading-tight mt-[2px]">
                     {vazio ? '—' : fmtInt(e.total)}
                   </div>
-                  {comFonte && e.fonte && (
-                    <div className="mt-1 flex justify-center">
-                      <BadgeFonte fonte={e.fonte} />
+                  {(comFonte && e.fonte) || podeAbrir(e) ? (
+                    <div className="mt-1 flex justify-center items-center gap-1">
+                      {comFonte && e.fonte && <BadgeFonte fonte={e.fonte} />}
+                      {podeAbrir(e) && (
+                        <BotaoLista
+                          rotulo={e.etapa}
+                          claro={ativa}
+                          aoAbrir={() => aoAbrirLista(e)}
+                        />
+                      )}
                     </div>
-                  )}
+                  ) : null}
                   <div className="mt-1">
                     <Variacao pct={e.delta_pct} abs={e.delta_abs} claro={ativa} />
                   </div>
@@ -152,14 +173,216 @@ function Esteira({ etapas, maiorQueda, selecionada, aoSelecionar, comFonte = fal
                     <Variacao pct={e.delta_pct} abs={e.delta_abs} claro={ativa} />
                   </div>
                 </div>
-                <div className="text-[19px] font-bold tnum shrink-0">
-                  {vazio ? '—' : fmtInt(e.total)}
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="text-[19px] font-bold tnum">
+                    {vazio ? '—' : fmtInt(e.total)}
+                  </div>
+                  {podeAbrir(e) && (
+                    <BotaoLista rotulo={e.etapa} claro={ativa} aoAbrir={() => aoAbrirLista(e)} />
+                  )}
                 </div>
               </Celula>
             </div>
           );
         })}
       </div>
+    </>
+  );
+}
+
+/** Ícone de lista — abre quem está por trás do número. */
+function IconeLista() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function BotaoLista({ rotulo, aoAbrir, claro = false }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        // A célula do funil também é clicável na aba de processo; sem parar a
+        // propagação, abrir a lista trocaria a etapa selecionada junto.
+        e.stopPropagation();
+        aoAbrir();
+      }}
+      title={`Ver quem são: ${rotulo}`}
+      aria-label={`Ver a lista de ${rotulo}`}
+      className={`inline-flex items-center justify-center w-[22px] h-[22px] rounded-[6px]
+                  border cursor-pointer transition-colors
+                  ${claro
+                    ? 'border-white/25 text-white/70 hover:bg-white/15 hover:text-white'
+                    : 'border-borda text-tenue hover:bg-superficie-hover hover:text-primario'}`}
+    >
+      <IconeLista />
+    </button>
+  );
+}
+
+/** Número da tabela com o ícone ao lado. Zero não abre nada — não há o que ver. */
+function CelulaComLista({ valor, aoAbrir }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      {fmtInt(valor)}
+      {valor > 0 && <BotaoLista rotulo="esta linha" aoAbrir={aoAbrir} />}
+    </span>
+  );
+}
+
+const POR_PAGINA_LISTA = 50;
+
+/**
+ * Gaveta com as pessoas que compõem um número do funil.
+ *
+ * Serve para conferir, não só para navegar: o total no topo é o mesmo do card
+ * que abriu a gaveta, e é assim que se descobre que "39 inscrições" está certo
+ * — ou que não está. Por isso o servidor conta com a mesma regra do agregado,
+ * em vez de a tela remontar a conta por fora.
+ */
+function ListaPessoas({ etapa, rotulo, categoriaPessoa, funilNome, rotuloCategoria, qsBase, aoFechar }) {
+  const [pagina, setPagina] = useState(1);
+  const [leadAberto, setLeadAberto] = useState(null);
+
+  const qs =
+    `${qsBase}&etapa=${encodeURIComponent(etapa)}` +
+    (categoriaPessoa !== null && categoriaPessoa !== undefined
+      ? `&categoria_pessoa=${encodeURIComponent(categoriaPessoa)}`
+      : '') +
+    (funilNome !== null && funilNome !== undefined
+      ? `&funil_nome=${encodeURIComponent(funilNome)}`
+      : '') +
+    `&pagina=${pagina}&por_pagina=${POR_PAGINA_LISTA}`;
+
+  const { dados, carregando, erro } = useApi(`/api/funil/macro/pessoas?${qs}`, `pessoas-${qs}`);
+
+  useEffect(() => {
+    const aoTeclar = (e) => e.key === 'Escape' && aoFechar();
+    document.addEventListener('keydown', aoTeclar);
+    const antes = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', aoTeclar);
+      document.body.style.overflow = antes;
+    };
+  }, [aoFechar]);
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40 flex">
+        <div className="flex-1 bg-black/60" onClick={aoFechar} aria-hidden="true" />
+        <aside
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Pessoas em ${rotulo}`}
+          className="w-full md:w-[560px] h-full bg-elevado border-l border-borda
+                     overflow-y-auto shadow-2xl flex flex-col"
+        >
+          <div className="sticky top-0 bg-elevado border-b border-borda px-4 py-3
+                          flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[15px] font-semibold truncate">{rotulo}</div>
+              <div className="text-[11px] text-tenue mt-[2px]">
+                {dados ? `${fmtInt(dados.total)} pessoa(s)` : '—'}
+                {rotuloCategoria ? ` · ${rotuloCategoria}` : ''}
+                {dados?.periodo?.rotulo ? ` · ${dados.periodo.rotulo}` : ''}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={aoFechar}
+              aria-label="Fechar"
+              className="w-7 h-7 shrink-0 rounded-[8px] border border-borda bg-superficie
+                         text-secundario hover:bg-superficie-hover cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="p-4 flex flex-col gap-2">
+            {erro && <Estado tipo="erro" titulo="Não foi possível carregar a lista" mensagem={erro} />}
+            {!erro && (carregando || !dados) && <Esqueleto linhas={6} />}
+
+            {dados?.itens?.length === 0 && (
+              <Estado
+                titulo="Ninguém neste recorte"
+                mensagem="Nenhuma pessoa alcançou esta etapa no período escolhido."
+              />
+            )}
+
+            {dados?.itens?.map((p) => (
+              <button
+                key={`${p.contato_id}-${p.registrado_em}`}
+                type="button"
+                onClick={() => setLeadAberto(p.contato_id)}
+                className="text-left bg-superficie border border-borda rounded-[12px] p-3
+                           hover:bg-superficie-hover hover:border-borda-forte cursor-pointer
+                           focus-visible:outline-2 focus-visible:outline-azul-400"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-7 h-7 rounded-full bg-azul-700 text-white flex items-center
+                                   justify-center text-[10px] font-semibold shrink-0">
+                    {iniciais(p.contato_nome)}
+                  </span>
+                  <span className="text-xs font-semibold truncate">
+                    {p.contato_nome || `Contato ${p.contato_id}`}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  <Pill tom="sucesso">{p.etapa}</Pill>
+                  {p.curso_nome
+                    ? <Pill tom="neutro">{p.curso_nome}</Pill>
+                    : <Pill tom="atencao">sem curso identificado</Pill>}
+                </div>
+                <div className="text-[11px] text-tenue mt-2">{fmtDataHora(p.registrado_em)}</div>
+                {p.email && (
+                  <div className="text-[11px] text-tenue truncate" title={p.email}>{p.email}</div>
+                )}
+              </button>
+            ))}
+
+            {dados?.paginas > 1 && (
+              <div className="flex items-center justify-between gap-3 mt-1 pt-3 border-t border-borda">
+                <button
+                  type="button"
+                  onClick={() => setPagina((p) => Math.max(1, p - 1))}
+                  disabled={dados.pagina <= 1}
+                  className="text-xs px-3 py-[6px] rounded-[8px] border border-borda-forte bg-superficie
+                             text-secundario cursor-pointer hover:bg-superficie-hover hover:text-primario
+                             disabled:opacity-35 disabled:cursor-not-allowed"
+                >
+                  ← Anteriores
+                </button>
+                <span className="text-[11px] text-tenue tnum">
+                  {(dados.pagina - 1) * dados.por_pagina + 1}–
+                  {Math.min(dados.pagina * dados.por_pagina, dados.total)} de {dados.total}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPagina((p) => Math.min(dados.paginas, p + 1))}
+                  disabled={dados.pagina >= dados.paginas}
+                  className="text-xs px-3 py-[6px] rounded-[8px] border border-borda-forte bg-superficie
+                             text-secundario cursor-pointer hover:bg-superficie-hover hover:text-primario
+                             disabled:opacity-35 disabled:cursor-not-allowed"
+                >
+                  Próximos →
+                </button>
+              </div>
+            )}
+          </div>
+        </aside>
+      </div>
+
+      {/* Fica por cima da gaveta (z-50 contra z-40): quem clicou numa pessoa
+          quer o detalhe dela sem perder a lista atrás. */}
+      {leadAberto && <PainelLead contatoId={leadAberto} aoFechar={() => setLeadAberto(null)} />}
     </>
   );
 }
@@ -330,11 +553,13 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
 
 function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso }) {
   const p = queryPeriodo(filtro);
-  const qs =
-    `${p}` +
+  const filtrosQs =
     (categoria ? `&categoria=${encodeURIComponent(categoria)}` : '') +
-    (curso ? `&curso_codigo=${encodeURIComponent(curso)}` : '') +
-    `&comparar=${filtro.comparar ? '1' : '0'}`;
+    (curso ? `&curso_codigo=${encodeURIComponent(curso)}` : '');
+  const qs = `${p}${filtrosQs}&comparar=${filtro.comparar ? '1' : '0'}`;
+
+  // O que a gaveta está mostrando: { etapa, rotulo, categoriaPessoa, rotuloCategoria }.
+  const [lista, setLista] = useState(null);
 
   const { dados, carregando, erro } = useApi(`/api/funil/macro?${qs}`, `macro-${qs}`);
   const { dados: catalogo } = useApi('/api/catalogo/cursos', 'catalogo-cursos');
@@ -344,8 +569,7 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
 
   const categorias = catalogo?.categorias ?? [];
   const cursos = catalogo?.itens ?? [];
-  const semCat = dados.por_categoria_sem_curso ?? { inscricoes: 0, matriculas: 0 };
-  const temSemCategoria = semCat.inscricoes > 0 || semCat.matriculas > 0;
+  const naoClassificados = dados.por_categoria_nao_classificados ?? [];
 
   return (
     <>
@@ -396,6 +620,7 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
           aoSelecionar={() => {}}
           comFonte
           interativa={false}
+          aoAbrirLista={(e) => setLista({ etapa: e.chave, rotulo: e.etapa })}
         />
 
         <div className="text-[11px] text-tenue mt-3 leading-relaxed">
@@ -419,8 +644,28 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
               {dados.por_categoria.map((r) => (
                 <tr key={r.categoria} className="border-b border-borda/60">
                   <td className="py-2 pr-3">{r.rotulo}</td>
-                  <td className="py-2 pr-3 tnum">{fmtInt(r.inscricoes)}</td>
-                  <td className="py-2 tnum">{fmtInt(r.matriculas)}</td>
+                  <td className="py-2 pr-3 tnum">
+                    <CelulaComLista
+                      valor={r.inscricoes}
+                      aoAbrir={() => setLista({
+                        etapa: 'inscricao',
+                        rotulo: 'Inscrições',
+                        categoriaPessoa: r.categoria,
+                        rotuloCategoria: r.rotulo,
+                      })}
+                    />
+                  </td>
+                  <td className="py-2 tnum">
+                    <CelulaComLista
+                      valor={r.matriculas}
+                      aoAbrir={() => setLista({
+                        etapa: 'matricula',
+                        rotulo: 'Matrículas',
+                        categoriaPessoa: r.categoria,
+                        rotuloCategoria: r.rotulo,
+                      })}
+                    />
+                  </td>
                 </tr>
               ))}
               {/*
@@ -432,21 +677,44 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
                 * faria a tabela fechar bonito e mentir — a soma das categorias
                 * bateria com o funil sem que ninguém soubesse o que entrou.
                 */}
-              {temSemCategoria && (
-                <tr className="border-b border-borda/60 text-tenue">
-                  <td className="py-2 pr-3 italic">Sem curso identificado</td>
-                  <td className="py-2 pr-3 tnum">{fmtInt(semCat.inscricoes)}</td>
-                  <td className="py-2 tnum">{fmtInt(semCat.matriculas)}</td>
+              {naoClassificados.map((r) => (
+                <tr key={r.rotulo} className="border-b border-borda/60 text-tenue">
+                  <td className="py-2 pr-3 italic">{r.rotulo}</td>
+                  <td className="py-2 pr-3 tnum">
+                    <CelulaComLista
+                      valor={r.inscricoes}
+                      aoAbrir={() => setLista({
+                        etapa: 'inscricao',
+                        rotulo: 'Inscrições',
+                        categoriaPessoa: '',
+                        funilNome: r.funil ?? '',
+                        rotuloCategoria: r.rotulo,
+                      })}
+                    />
+                  </td>
+                  <td className="py-2 tnum">
+                    <CelulaComLista
+                      valor={r.matriculas}
+                      aoAbrir={() => setLista({
+                        etapa: 'matricula',
+                        rotulo: 'Matrículas',
+                        categoriaPessoa: '',
+                        funilNome: r.funil ?? '',
+                        rotuloCategoria: r.rotulo,
+                      })}
+                    />
+                  </td>
                 </tr>
-              )}
+              ))}
             </tbody>
           </table>
         </div>
-        {temSemCategoria && (
+        {naoClassificados.length > 0 && (
           <div className="text-[11px] text-tenue mt-2 leading-relaxed">
             O Rubeus não envia o curso nos eventos de inscrição e matrícula. O painel recupera o
-            curso pela própria pessoa, quando ela passou por alguma etapa que o traga — o resto fica
-            nesta linha em vez de ser distribuído por chute.
+            curso pela própria pessoa e, quando nem isso existe, usa o funil de origem — que diz a
+            família mas não o curso. As linhas em itálico são o que falta identificar, agrupado por
+            funil, em vez de distribuído por chute.
           </div>
         )}
       </Cartao>
@@ -485,6 +753,18 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
             </table>
           </div>
         </Cartao>
+      )}
+
+      {lista && (
+        <ListaPessoas
+          etapa={lista.etapa}
+          rotulo={lista.rotulo}
+          categoriaPessoa={lista.categoriaPessoa ?? null}
+          funilNome={lista.funilNome ?? null}
+          rotuloCategoria={lista.rotuloCategoria}
+          qsBase={`${p}${filtrosQs}`}
+          aoFechar={() => setLista(null)}
+        />
       )}
     </>
   );

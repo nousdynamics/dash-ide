@@ -12,6 +12,7 @@ import {
   macroQuerySchema,
   paginacaoQuerySchema,
   periodoQuerySchema,
+  pessoasDaEtapaQuerySchema,
 } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 
@@ -194,6 +195,62 @@ api.get('/overview', async (c) => {
     })),
   });
 });
+
+/*
+ * De onde a pessoa veio: último curso e último funil que ela demonstrou.
+ *
+ * Fica num lugar só porque a tabela por categoria e a gaveta que abre a lista
+ * PRECISAM concordar. Se cada uma resolvesse a categoria do seu jeito, a soma
+ * da tabela e a contagem da gaveta divergiriam, e aí não dá para conferir
+ * número nenhum — que é justamente para o que a gaveta serve.
+ */
+const CTE_ORIGEM_DA_PESSOA = `
+  pessoa_curso AS (
+    SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+           l.curso_codigo, l.curso_id,
+           ROW_NUMBER() OVER (
+             PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
+             ORDER BY l.registrado_em DESC
+           ) AS recencia
+      FROM leads_etapa l
+     WHERE (l.curso_codigo IS NOT NULL AND l.curso_codigo != '')
+        OR (l.curso_id IS NOT NULL AND l.curso_id != '')
+  ),
+  curso_da_pessoa AS (
+    SELECT pessoa, curso_codigo, curso_id FROM pessoa_curso WHERE recencia = 1
+  ),
+  pessoa_funil AS (
+    SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+           l.funil_id,
+           ROW_NUMBER() OVER (
+             PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
+             ORDER BY l.registrado_em DESC
+           ) AS recencia
+      FROM leads_etapa l
+     WHERE l.funil_id IS NOT NULL
+  ),
+  funil_da_pessoa AS (
+    SELECT pessoa, funil_id FROM pessoa_funil WHERE recencia = 1
+  )`;
+
+/*
+ * Curso primeiro, funil depois.
+ *
+ * O curso é preciso — diz pós EAD contra pós presencial. O funil é grosso, mas
+ * é a configuração que o próprio time fez no Rubeus (um webhook por funil) e
+ * vale quando o curso não veio no payload. Só entra onde determina UMA
+ * categoria: `categoria_fallback` é nulo para "Pós-Graduação", que não separa
+ * presencial de EAD de medicina.
+ */
+const SQL_CATEGORIA_RESOLVIDA = `COALESCE(
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cc.categoria IS NOT NULL
+      AND ((cd.curso_codigo IS NOT NULL AND cc.curso_codigo = cd.curso_codigo)
+        OR (cd.curso_id     IS NOT NULL AND cc.curso_id     = cd.curso_id))
+    LIMIT 1),
+  (SELECT f.categoria_fallback FROM funis f WHERE f.id = fd.funil_id),
+  ''
+)`;
 
 /**
  * GET /api/funil/macro — visão principal da planilha.
@@ -389,21 +446,7 @@ api.get('/funil/macro', async (c) => {
     });
 
     const linhas = await c.env.DB.prepare(
-      `WITH pessoa_curso AS (
-         SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
-                l.curso_codigo,
-                l.curso_id,
-                ROW_NUMBER() OVER (
-                  PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
-                  ORDER BY l.registrado_em DESC
-                ) AS recencia
-           FROM leads_etapa l
-          WHERE (l.curso_codigo IS NOT NULL AND l.curso_codigo != '')
-             OR (l.curso_id IS NOT NULL AND l.curso_id != '')
-       ),
-       curso_da_pessoa AS (
-         SELECT pessoa, curso_codigo, curso_id FROM pessoa_curso WHERE recencia = 1
-       ),
+      `WITH ${CTE_ORIGEM_DA_PESSOA},
        /*
         * Acumulado, igual ao funil de cima.
         *
@@ -429,42 +472,54 @@ api.get('/funil/macro', async (c) => {
           GROUP BY pessoa
          HAVING nivel >= 3
        )
-       SELECT COALESCE((
-                SELECT cc.categoria FROM curso_categoria cc
-                 WHERE cc.categoria IS NOT NULL
-                   AND ((cd.curso_codigo IS NOT NULL AND cc.curso_codigo = cd.curso_codigo)
-                     OR (cd.curso_id     IS NOT NULL AND cc.curso_id     = cd.curso_id))
-                 LIMIT 1
-              ), '') AS categoria,
+       SELECT ${SQL_CATEGORIA_RESOLVIDA} AS categoria,
+              COALESCE(fu.nome, '') AS funil_nome,
               COUNT(*) AS inscricoes,
               SUM(CASE WHEN m.nivel >= 4 THEN 1 ELSE 0 END) AS matriculas
          FROM marcos m
          LEFT JOIN curso_da_pessoa cd ON cd.pessoa = m.pessoa
-        GROUP BY categoria`,
+         LEFT JOIN funil_da_pessoa fd ON fd.pessoa = m.pessoa
+         LEFT JOIN funis fu ON fu.id = fd.funil_id
+        GROUP BY categoria, funil_nome`,
     ).bind(iv.inicioIso, iv.fimIso, ...fCat.binds).all();
 
-    const porChave = new Map(
-      (linhas.results as Array<{ categoria: string; inscricoes: number; matriculas: number }>)
-        .map((r) => [r.categoria, r]),
-    );
+    type Linha = { categoria: string; funil_nome: string; inscricoes: number; matriculas: number };
+    const resultados = linhas.results as Linha[];
+
+    const somaDe = (cat: string) =>
+      resultados.filter((r) => r.categoria === cat).reduce(
+        (a, r) => ({ inscricoes: a.inscricoes + num(r.inscricoes), matriculas: a.matriculas + num(r.matriculas) }),
+        { inscricoes: 0, matriculas: 0 },
+      );
 
     // As 7 categorias sempre aparecem, na ordem da planilha, mesmo zeradas —
     // uma linha ausente e uma linha em zero contam histórias diferentes.
     const lista = Object.keys(CATEGORIA_ROTULOS).map((cat) => ({
       categoria: cat,
       rotulo: CATEGORIA_ROTULOS[cat],
-      inscricoes: num(porChave.get(cat)?.inscricoes),
-      matriculas: num(porChave.get(cat)?.matriculas),
+      ...somaDe(cat),
     }));
 
-    const semCategoria = porChave.get('');
-    return {
-      lista,
-      sem_categoria: {
-        inscricoes: num(semCategoria?.inscricoes),
-        matriculas: num(semCategoria?.matriculas),
-      },
-    };
+    /*
+     * Quem o curso não resolveu vai agrupado pelo funil de origem, não num
+     * balde único. "Pós-Graduação, curso não identificado: 16" diz em que
+     * família a pessoa está e o que falta saber; "sem curso: 28" só diz que o
+     * painel não sabe. A primeira dá para agir — é ir no Rubeus ver por que o
+     * curso não vem naquele webhook.
+     */
+    const naoClassificados = resultados
+      .filter((r) => !r.categoria)
+      .map((r) => ({
+        funil: r.funil_nome || null,
+        rotulo: r.funil_nome
+          ? `${r.funil_nome} — curso não identificado`
+          : 'Sem curso nem funil de origem',
+        inscricoes: num(r.inscricoes),
+        matriculas: num(r.matriculas),
+      }))
+      .sort((a, b) => b.inscricoes - a.inscricoes);
+
+    return { lista, nao_classificados: naoClassificados };
   })();
 
   /*
@@ -523,11 +578,136 @@ api.get('/funil/macro', async (c) => {
     },
     etapas,
     por_categoria: porCategoria.lista,
-    por_categoria_sem_curso: porCategoria.sem_categoria,
+    por_categoria_nao_classificados: porCategoria.nao_classificados,
     evolucao: evolucao.results,
     rd: rd.ok
       ? { ok: true as const }
       : { ok: false as const, motivo: rd.motivo },
+  });
+});
+
+/**
+ * GET /api/funil/macro/pessoas — quem está por trás de um número do funil.
+ *
+ * Um número agregado que ninguém consegue abrir é um número em que ninguém
+ * consegue mexer: dá para desconfiar de "39 inscrições", mas não dá para
+ * conferir. Esta rota devolve a lista que soma exatamente aquele card.
+ *
+ * A definição é a MESMA do agregado, de propósito — mesmo rank acumulado,
+ * mesmo recorte de período, mesmos filtros. Se a lista e o card divergirem por
+ * usarem critérios parecidos-mas-diferentes, a conferência vira mais uma
+ * dúvida em vez de resposta.
+ */
+api.get('/funil/macro/pessoas', async (c) => {
+  const q = pessoasDaEtapaQuerySchema.safeParse(c.req.query());
+  if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
+
+  const iv = intervaloDeQuery({
+    mes: q.data.mes,
+    ano: q.data.ano,
+    de: q.data.de,
+    ate: q.data.ate,
+    dias: q.data.dias ?? 30,
+  });
+  if ('erro' in iv) return c.json({ erro: iv.erro }, 400);
+
+  const nivelMinimo = { qualificados: 1, oportunidade: 2, inscricao: 3, matricula: 4 }[q.data.etapa];
+
+  const filtros = clausulasFiltroCurso({
+    curso_codigo: q.data.curso_codigo,
+    categoria: q.data.categoria,
+    modalidade: q.data.modalidade,
+    alias: 'l',
+  });
+
+  /*
+   * `categoria_pessoa` ausente = não filtra. Presente e vazia = só quem ficou
+   * sem curso identificado. São coisas diferentes, e `undefined` vs `''` é o
+   * que as separa — por isso o teste é em `!== undefined`, não em verdade.
+   */
+  const filtraCategoria = q.data.categoria_pessoa !== undefined;
+  const categoriaAlvo = q.data.categoria_pessoa ?? '';
+
+  const base = `
+    WITH rank_macro(macro, nivel) AS (
+      VALUES ('qualificados', 1), ('oportunidade', 2), ('inscricao', 3), ('matricula', 4)
+    ),
+    ${CTE_ORIGEM_DA_PESSOA},
+    topo AS (
+      SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+             MAX(rank_macro.nivel) AS nivel
+        FROM leads_etapa l
+        JOIN processo_etapas pe
+          ON pe.etapa_nome = l.etapa
+         AND (l.processo_id IS NULL OR pe.processo_id = l.processo_id)
+        JOIN rank_macro ON rank_macro.macro = pe.macro_etapa
+       WHERE l.registrado_em >= ? AND l.registrado_em <= ?
+         ${filtros.sql}
+       GROUP BY pessoa
+      HAVING nivel >= ?
+    ),
+    -- O evento mais recente DENTRO do período dá o nome, a etapa e a data que
+    -- a lista mostra. Fora do período seria outra pergunta.
+    ultimo AS (
+      SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+             l.contato_id, l.contato_nome, l.email, l.telefone, l.etapa, l.registrado_em,
+             ROW_NUMBER() OVER (
+               PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
+               ORDER BY l.registrado_em DESC
+             ) AS recencia
+        FROM leads_etapa l
+       WHERE l.registrado_em >= ? AND l.registrado_em <= ?
+    ),
+    listagem AS (
+      SELECT u.contato_id, u.contato_nome, u.email, u.telefone, u.etapa, u.registrado_em,
+             cd.curso_codigo,
+             (SELECT k.nome FROM curso_catalogo k
+               WHERE (cd.curso_codigo IS NOT NULL AND k.curso_codigo = cd.curso_codigo)
+                  OR (cd.curso_id     IS NOT NULL AND k.curso_id     = cd.curso_id)
+               LIMIT 1) AS curso_nome,
+             (SELECT f.nome FROM funis f WHERE f.id = fd.funil_id) AS funil_nome,
+             ${SQL_CATEGORIA_RESOLVIDA} AS categoria
+        FROM topo t
+        JOIN ultimo u ON u.pessoa = t.pessoa AND u.recencia = 1
+        LEFT JOIN curso_da_pessoa cd ON cd.pessoa = t.pessoa
+        LEFT JOIN funil_da_pessoa fd ON fd.pessoa = t.pessoa
+    )
+    SELECT %CAMPOS% FROM listagem
+     WHERE (? = 0 OR categoria = ?)
+       AND (? = 0 OR COALESCE(funil_nome, '') = ?)`;
+
+  const filtraFunil = q.data.funil_nome !== undefined;
+  const binds = [
+    iv.inicioIso, iv.fimIso, ...filtros.binds, nivelMinimo,
+    iv.inicioIso, iv.fimIso,
+    filtraCategoria ? 1 : 0, categoriaAlvo,
+    filtraFunil ? 1 : 0, q.data.funil_nome ?? '',
+  ];
+
+  const totalRow = await c.env.DB.prepare(base.replace('%CAMPOS%', 'COUNT(*) AS total'))
+    .bind(...binds).first();
+  const total = num(totalRow?.total);
+
+  const porPagina = q.data.por_pagina;
+  const paginas = Math.max(1, Math.ceil(total / porPagina));
+  const pagina = Math.min(q.data.pagina, paginas);
+
+  const itens = await c.env.DB.prepare(
+    `${base.replace('%CAMPOS%', '*')}
+     ORDER BY registrado_em DESC
+     LIMIT ? OFFSET ?`,
+  ).bind(...binds, porPagina, (pagina - 1) * porPagina).all();
+
+  return c.json({
+    periodo: { de: iv.de, ate: iv.ate, rotulo: iv.rotulo },
+    etapa: q.data.etapa,
+    rotulo_etapa: MACRO_ROTULOS[q.data.etapa],
+    categoria_pessoa: filtraCategoria ? categoriaAlvo : null,
+    total,
+    pagina,
+    paginas,
+    por_pagina: porPagina,
+    itens: itens.results,
   });
 });
 
