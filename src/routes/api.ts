@@ -71,7 +71,7 @@ const CATEGORIA_ROTULOS: Record<string, string> = {
   curta_duracao: 'Curta duração',
 };
 
-type FonteEtapa = 'rd_marketing' | 'rubeus' | 'misto' | 'indisponivel';
+type FonteEtapa = 'rd_marketing' | 'rubeus' | 'planilha' | 'misto' | 'indisponivel';
 
 /**
  * Filtros compartilhados de curso/categoria/modalidade sobre `leads_etapa`.
@@ -326,6 +326,7 @@ api.get('/funil/macro', async (c) => {
          AND (l.processo_id IS NULL OR pe.processo_id = l.processo_id)
         JOIN rank_macro ON rank_macro.macro = pe.macro_etapa
        WHERE l.registrado_em >= ? AND l.registrado_em <= ?
+         REPLACE_MESES
          REPLACE_FILTRO
        GROUP BY pessoa
     )`;
@@ -335,15 +336,34 @@ api.get('/funil/macro', async (c) => {
    * dois períodos) e agora são duas, o que também elimina a chance de duas
    * etapas serem lidas de estados diferentes do banco.
    */
+  /*
+   * Os meses que a planilha cobre saem da contagem medida.
+   *
+   * Não é para somar os dois: janeiro a junho tem resíduo de evento no D1 —
+   * uns poucos que a sincronização de oportunidades trouxe — e somá-lo ao
+   * número da planilha contaria a mesma matrícula duas vezes. Onde a planilha
+   * responde, ela responde sozinha; onde não há planilha, o medido responde
+   * sozinho. Nunca os dois pelo mesmo mês.
+   */
+  const mesesPlanilha = (await c.env.DB.prepare(
+    `SELECT DISTINCT mes FROM funil_historico
+      WHERE mes >= ? AND mes <= ?`,
+  ).bind(iv.de.slice(0, 7), iv.ate.slice(0, 7)).all()).results as Array<{ mes: string }>;
+
+  const listaMeses = mesesPlanilha.map((m) => m.mes);
+  const sqlMeses = listaMeses.length
+    ? ` AND strftime('%Y-%m', l.registrado_em, '-3 hours') NOT IN (${listaMeses.map(() => '?').join(',')})`
+    : '';
+
   const contarFunil = async (inicio: string, fim: string) => {
     const row = await c.env.DB.prepare(
-      `${RANK_MACRO.replace('REPLACE_FILTRO', filtrosL.sql)}
+      `${RANK_MACRO.replace('REPLACE_MESES', sqlMeses).replace('REPLACE_FILTRO', filtrosL.sql)}
        SELECT
          (SELECT COUNT(*) FROM topo WHERE nivel >= 1) AS qualificados,
          (SELECT COUNT(*) FROM topo WHERE nivel >= 2) AS oportunidades,
          (SELECT COUNT(*) FROM topo WHERE nivel >= 3) AS inscricoes,
          (SELECT COUNT(*) FROM topo WHERE nivel >= 4) AS matriculas`,
-    ).bind(inicio, fim, ...filtrosL.binds).first();
+    ).bind(inicio, fim, ...listaMeses, ...filtrosL.binds).first();
     return {
       qualificados: num(row?.qualificados),
       oportunidades: num(row?.oportunidades),
@@ -360,16 +380,83 @@ api.get('/funil/macro', async (c) => {
       : Promise.resolve(vazio),
   ]);
 
-  const { qualificados, oportunidades, inscricoes, matriculas } = atual;
-  const {
-    qualificados: qualAnt,
-    oportunidades: oppAnt,
-    inscricoes: inscAnt,
-    matriculas: matAnt,
-  } = anterior;
+  /*
+   * O que a planilha informa para os meses fechados, somado ao que foi medido
+   * nos meses que ela não cobre. Um mês nunca entra pelos dois.
+   */
+  const somaHistorico = async (de: string, ate: string) => {
+    const linhas = (await c.env.DB.prepare(
+      `SELECT etapa, SUM(valor) AS total FROM funil_historico
+        WHERE mes >= ? AND mes <= ? GROUP BY etapa`,
+    ).bind(de.slice(0, 7), ate.slice(0, 7)).all()).results as Array<{ etapa: string; total: number }>;
+    const m = new Map(linhas.map((l) => [l.etapa, num(l.total)]));
+    return {
+      qualificados: m.get('qualificados') ?? 0,
+      oportunidades: m.get('oportunidade') ?? 0,
+      inscricoes: m.get('inscricao') ?? 0,
+      matriculas: m.get('matricula') ?? 0,
+    };
+  };
 
-  const visitantes = rd.ok ? num(rd.dados.visitors) : null;
-  const leadsRd = rd.ok ? num(rd.dados.leads) : null;
+  /*
+   * Filtro de curso e planilha não convivem: o histórico é um total por mês,
+   * sem curso por trás. Pedir "Pós EAD em junho" não pode devolver o total de
+   * junho inteiro rotulado como Pós EAD.
+   */
+  const semFiltroDeCurso = !q.data.categoria && !q.data.curso_codigo && !q.data.modalidade;
+  const hist = semFiltroDeCurso ? await somaHistorico(iv.de, iv.ate) : vazio;
+  const histAnt = semFiltroDeCurso && q.data.comparar
+    ? await somaHistorico(iv.inicioAnteriorIso.slice(0, 10), iv.fimAnteriorIso.slice(0, 10))
+    : vazio;
+
+  const qualificados = atual.qualificados + hist.qualificados;
+  const oportunidades = atual.oportunidades + hist.oportunidades;
+  const inscricoes = atual.inscricoes + hist.inscricoes;
+  const matriculas = atual.matriculas + hist.matriculas;
+
+  /** Rubeus, planilha, ou os dois quando o período pega meses de cada tipo. */
+  const fonteDe = (medido: number, planilha: number): FonteEtapa =>
+    planilha > 0 ? (medido > 0 ? 'misto' : 'planilha') : 'rubeus';
+  const qualAnt = anterior.qualificados + histAnt.qualificados;
+  const oppAnt = anterior.oportunidades + histAnt.oportunidades;
+  const inscAnt = anterior.inscricoes + histAnt.inscricoes;
+  const matAnt = anterior.matriculas + histAnt.matriculas;
+
+  /*
+   * O RD manda no topo — menos quando o topo que ele mediu é menor que a etapa
+   * seguinte.
+   *
+   * Em janeiro o RD contou 86 leads e a planilha registra 1.162 qualificados.
+   * Não é divergência de definição, é buraco de medição: a conta só passou a
+   * marcar direito em abril, quando o número salta para 1.652. Publicar os 86
+   * desenharia 1.351% de conversão de lead para qualificado, e o primeiro a
+   * duvidar seria quem confia no painel.
+   *
+   * Onde a medição sobrevive à conferência ela vale, que foi a decisão tomada.
+   * Onde ela quebra a ordem do funil, o mês fechado responde pelo próprio topo,
+   * com a etiqueta dizendo de onde veio.
+   */
+  const topoHistorico = semFiltroDeCurso
+    ? (await c.env.DB.prepare(
+        `SELECT etapa, SUM(valor) AS total FROM funil_historico
+          WHERE mes >= ? AND mes <= ? AND etapa IN ('visitantes', 'leads')
+          GROUP BY etapa`,
+      ).bind(iv.de.slice(0, 7), iv.ate.slice(0, 7)).all()).results as Array<{
+        etapa: string; total: number;
+      }>
+    : [];
+  const topoPlan = new Map(topoHistorico.map((r) => [r.etapa, num(r.total)]));
+
+  const rdIncoerente =
+    rd.ok && qualificados > 0 && num(rd.dados.leads) < qualificados && topoPlan.size > 0;
+
+  const visitantes = rdIncoerente
+    ? (topoPlan.get('visitantes') ?? null)
+    : rd.ok ? num(rd.dados.visitors) : null;
+  const leadsRd = rdIncoerente
+    ? (topoPlan.get('leads') ?? null)
+    : rd.ok ? num(rd.dados.leads) : null;
+  const fonteTopo: FonteEtapa = rdIncoerente ? 'planilha' : rd.ok ? 'rd_marketing' : 'indisponivel';
   const visitantesAnt = rdAnt?.ok ? num(rdAnt.dados.visitors) : null;
   const leadsRdAnt = rdAnt?.ok ? num(rdAnt.dados.leads) : null;
 
@@ -396,20 +483,20 @@ api.get('/funil/macro', async (c) => {
       chave: 'visitantes',
       total: visitantes,
       anterior: visitantesAnt,
-      fonte: rd.ok ? 'rd_marketing' : 'indisponivel',
-      indisponivel: rd.ok ? undefined : rd.motivo,
+      fonte: fonteTopo,
+      indisponivel: rd.ok || rdIncoerente ? undefined : rd.motivo,
     },
     {
       chave: 'leads',
       total: leadsRd,
       anterior: leadsRdAnt,
-      fonte: rd.ok ? 'rd_marketing' : 'indisponivel',
-      indisponivel: rd.ok ? undefined : rd.motivo,
+      fonte: fonteTopo,
+      indisponivel: rd.ok || rdIncoerente ? undefined : rd.motivo,
     },
-    { chave: 'qualificados', total: qualificados, anterior: qualAnt, fonte: 'rubeus' },
-    { chave: 'oportunidade', total: oportunidades, anterior: oppAnt, fonte: 'rubeus' },
-    { chave: 'inscricao', total: inscricoes, anterior: inscAnt, fonte: 'rubeus' },
-    { chave: 'matricula', total: matriculas, anterior: matAnt, fonte: 'rubeus' },
+    { chave: 'qualificados', total: qualificados, anterior: qualAnt, fonte: fonteDe(atual.qualificados, hist.qualificados) },
+    { chave: 'oportunidade', total: oportunidades, anterior: oppAnt, fonte: fonteDe(atual.oportunidades, hist.oportunidades) },
+    { chave: 'inscricao', total: inscricoes, anterior: inscAnt, fonte: fonteDe(atual.inscricoes, hist.inscricoes) },
+    { chave: 'matricula', total: matriculas, anterior: matAnt, fonte: fonteDe(atual.matriculas, hist.matriculas) },
   ];
 
   const etapas: Passo[] = bruto.map((b, i) => {
@@ -526,6 +613,49 @@ api.get('/funil/macro', async (c) => {
         matriculas: num(r.matriculas),
       }))
       .sort((a, b) => b.inscricoes - a.inscricoes);
+
+    /*
+     * As categorias da planilha entram somadas às medidas, pela mesma regra das
+     * etapas: mês coberto pela planilha não é contado de novo pelo D1.
+     */
+    const histCat = semFiltroDeCurso
+      ? (await c.env.DB.prepare(
+          `SELECT categoria, SUM(inscricoes) AS inscricoes, SUM(matriculas) AS matriculas
+             FROM funil_historico_categoria
+            WHERE mes >= ? AND mes <= ? GROUP BY categoria`,
+        ).bind(iv.de.slice(0, 7), iv.ate.slice(0, 7)).all()).results as Array<{
+          categoria: string; inscricoes: number; matriculas: number;
+        }>
+      : [];
+    const porHist = new Map(histCat.map((r) => [r.categoria, r]));
+
+    for (const linha of lista) {
+      linha.inscricoes += num(porHist.get(linha.categoria)?.inscricoes);
+      linha.matriculas += num(porHist.get(linha.categoria)?.matriculas);
+    }
+
+    /*
+     * Em janeiro as sete categorias da planilha somam 89 inscrições contra 99
+     * na etapa do funil — divergência da própria planilha, em um dos seis
+     * meses. A diferença vira linha própria em vez de sumir: se a tabela não
+     * fechasse com o funil, a primeira conclusão de quem olha seria que o
+     * painel está errado.
+     */
+    const somaCatHist = histCat.reduce(
+      (a, r) => ({ i: a.i + num(r.inscricoes), m: a.m + num(r.matriculas) }),
+      { i: 0, m: 0 },
+    );
+    const naoDetalhado = {
+      inscricoes: Math.max(0, hist.inscricoes - somaCatHist.i),
+      matriculas: Math.max(0, hist.matriculas - somaCatHist.m),
+    };
+    if (naoDetalhado.inscricoes > 0 || naoDetalhado.matriculas > 0) {
+      naoClassificados.push({
+        funil: null,
+        rotulo: 'Planilha — sem detalhe por categoria',
+        ...naoDetalhado,
+      });
+    }
 
     return { lista, nao_classificados: naoClassificados };
   })();

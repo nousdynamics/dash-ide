@@ -10,7 +10,8 @@ import { fmtDataHora, fmtDec, fmtDiaMes, fmtInt, iniciais } from '../lib/formato
 const FONTES = {
   rd_marketing: { rotulo: 'RD Marketing', tom: 'neutro' },
   rubeus: { rotulo: 'Rubeus', tom: 'sucesso' },
-  misto: { rotulo: 'RD + Rubeus', tom: 'atencao' },
+  planilha: { rotulo: 'Planilha', tom: 'atencao' },
+  misto: { rotulo: 'Medido + planilha', tom: 'atencao' },
   indisponivel: { rotulo: 'Indisponível', tom: 'perigo' },
 };
 
@@ -570,6 +571,7 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
   const categorias = catalogo?.categorias ?? [];
   const cursos = catalogo?.itens ?? [];
   const naoClassificados = dados.por_categoria_nao_classificados ?? [];
+  const temPlanilha = dados.etapas.some((e) => e.fonte === 'planilha' || e.fonte === 'misto');
 
   return (
     <>
@@ -626,6 +628,13 @@ function MacroView({ filtro, categoria, curso, aoTrocarCategoria, aoTrocarCurso 
         <div className="text-[11px] text-tenue mt-3 leading-relaxed">
           Contagem acumulada, como na planilha: quem se matriculou também conta como inscrito,
           oportunidade e qualificado. A taxa entre duas etapas é a segunda dividida pela primeira.
+          {temPlanilha && (
+            <>
+              {' '}Etapas marcadas <strong>Planilha</strong> vêm dos meses fechados informados à mão
+              (janeiro a junho de 2026) — são um total por mês, sem pessoa por trás, e por isso não
+              abrem lista.
+            </>
+          )}
         </div>
       </Cartao>
 
