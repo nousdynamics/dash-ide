@@ -1146,6 +1146,39 @@ api.post('/admin/rubeus/sync', exigirAdmin, async (c) => {
 });
 
 /**
+ * POST /api/admin/rubeus/resgatar-cursos?limite=45 — só o resgate de curso.
+ *
+ * Rota própria por causa do teto de 50 subrequisições por invocação. Junto do
+ * sync de catálogo e da amostra de etapas, que já gastam mais de 40, sobravam
+ * oito contatos por chamada — e o `catch` do resgate engolia a falha, então o
+ * lote parecia pequeno em vez de estourado. Sozinho, o resgate usa o teto
+ * inteiro.
+ *
+ * Continua sendo repetível: cada chamada devolve quantos ainda faltam, e é para
+ * chamar até `restantes` zerar.
+ */
+api.post('/admin/rubeus/resgatar-cursos', exigirAdmin, async (c) => {
+  try {
+    const limite = Math.min(45, Math.max(1, Number(c.req.query('limite')) || 45));
+    const resultado = await enriquecerCursoDosLeads(c.env, c.env.DB, limite);
+    const restam = await c.env.DB.prepare(
+      `SELECT COUNT(DISTINCT contato_id) AS n
+         FROM leads_etapa
+        WHERE (curso_id IS NULL OR curso_id = '')
+          AND (curso_codigo IS NULL OR curso_codigo = '')
+          AND (oferta_codigo IS NULL OR oferta_codigo = '')
+          AND (oferta_nome IS NULL OR oferta_nome = '')
+          AND curso_consultado_em IS NULL
+          AND contato_id IS NOT NULL AND contato_id != ''`,
+    ).first();
+    return c.json({ ok: true, ...resultado, restantes: num(restam?.n) });
+  } catch (e) {
+    const status = e instanceof ErroRubeus ? e.status : 502;
+    return c.json({ erro: 'resgate_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
+  }
+});
+
+/**
  * GET /api/admin/rubeus/oportunidades/:contatoId — o que a API devolve de um
  * contato, cru. Existe para conferir de onde o curso pode ser resgatado quando
  * o webhook não o manda, sem precisar sair do Worker com o token na mão.

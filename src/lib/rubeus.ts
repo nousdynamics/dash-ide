@@ -221,21 +221,65 @@ export async function enriquecerCursoDosLeads(
   db: D1Database,
   limiteContatos = 40,
 ): Promise<{ contatos: number; linhas: number }> {
+  /*
+   * Quem chegou a inscrição ou matrícula vem primeiro.
+   *
+   * A fila bruta é dominada por lead de topo, que o Rubeus responde "Sem oferta
+   * de curso" porque a pessoa ainda não escolheu curso — e é justamente quem
+   * não aparece na tabela por categoria. Ordenar por quem já está no fundo do
+   * funil faz o lote diário atacar quem muda a tela.
+   */
   const pendentes = await db.prepare(
-    `SELECT contato_id, COUNT(*) AS linhas
-       FROM leads_etapa
-      WHERE (curso_id IS NULL OR curso_id = '')
-        AND (curso_codigo IS NULL OR curso_codigo = '')
-        AND (oferta_codigo IS NULL OR oferta_codigo = '')
-        AND (oferta_nome IS NULL OR oferta_nome = '')
-        AND contato_id IS NOT NULL AND contato_id != ''
-      GROUP BY contato_id
-      ORDER BY MAX(registrado_em) DESC
+    `SELECT l.contato_id,
+            MAX(CASE WHEN pe.macro_etapa IN ('inscricao', 'matricula') THEN 1 ELSE 0 END) AS fundo
+       FROM leads_etapa l
+       LEFT JOIN processo_etapas pe ON pe.etapa_nome = l.etapa
+      WHERE (l.curso_id IS NULL OR l.curso_id = '')
+        AND (l.curso_codigo IS NULL OR l.curso_codigo = '')
+        AND (l.oferta_codigo IS NULL OR l.oferta_codigo = '')
+        AND (l.oferta_nome IS NULL OR l.oferta_nome = '')
+        AND l.curso_consultado_em IS NULL
+        AND l.contato_id IS NOT NULL AND l.contato_id != ''
+      GROUP BY l.contato_id
+      ORDER BY fundo DESC, MAX(l.registrado_em) DESC
       LIMIT ?`,
   ).bind(limiteContatos).all();
 
+  const ids = (pendentes.results as Array<{ contato_id: string }>).map((r) => r.contato_id);
+  if (!ids.length) return { contatos: 0, linhas: 0 };
+
+  /*
+   * Os eventos de TODOS os contatos do lote numa consulta só.
+   *
+   * Era uma por contato, e o Worker tem teto de 50 subrequisições por
+   * invocação: com a consulta extra, cada contato custava dois, e o lote
+   * morria na metade sem erro visível — o `catch` engolia calado. Agora o
+   * custo é uma chamada ao Rubeus por contato, mais duas de banco no total.
+   */
+  const eventos = await db.prepare(
+    `SELECT id, contato_id, etapa, registrado_em, registro_processo_id
+       FROM leads_etapa
+      WHERE contato_id IN (${ids.map(() => '?').join(',')})
+        AND (curso_id IS NULL OR curso_id = '')
+        AND (curso_codigo IS NULL OR curso_codigo = '')
+        AND (oferta_codigo IS NULL OR oferta_codigo = '')
+        AND (oferta_nome IS NULL OR oferta_nome = '')`,
+  ).bind(...ids).all();
+
+  type Evento = {
+    id: number; contato_id: string; etapa: string;
+    registrado_em: string; registro_processo_id: string | null;
+  };
+  const eventosPorContato = new Map<string, Evento[]>();
+  for (const ev of eventos.results as Evento[]) {
+    const lista = eventosPorContato.get(ev.contato_id);
+    if (lista) lista.push(ev);
+    else eventosPorContato.set(ev.contato_id, [ev]);
+  }
+
   const stmts: D1PreparedStatement[] = [];
   let contatos = 0;
+  let resgatados = 0;
 
   for (const linha of pendentes.results as Array<{ contato_id: string }>) {
     let oportunidades: OportunidadeRubeus[];
@@ -243,24 +287,29 @@ export async function enriquecerCursoDosLeads(
       oportunidades = await listarOportunidades(env, linha.contato_id);
     } catch {
       // Um contato que o CRM não resolve não pode derrubar a rodada inteira.
+      // Fica sem marca de propósito: erro de rede merece nova tentativa amanhã.
       continue;
     }
-    if (!oportunidades.length) continue;
     contatos++;
 
-    const eventos = await db.prepare(
-      `SELECT id, etapa, registrado_em, registro_processo_id
-         FROM leads_etapa
-        WHERE contato_id = ?
-          AND (curso_id IS NULL OR curso_id = '')
-          AND (curso_codigo IS NULL OR curso_codigo = '')
-          AND (oferta_codigo IS NULL OR oferta_codigo = '')
-          AND (oferta_nome IS NULL OR oferta_nome = '')`,
-    ).bind(linha.contato_id).all();
+    /*
+     * Marca o contato como consultado ANTES de saber se deu em algo.
+     *
+     * "Perguntei e o Rubeus não tem curso para esta pessoa" é resposta, não
+     * falha, e precisa ser registrada — senão ela volta para a frente da fila
+     * amanhã e nas próximas mil rodadas, que foi exatamente o que travou o
+     * resgate em 8 contatos por lote.
+     */
+    stmts.push(
+      db.prepare(
+        `UPDATE leads_etapa SET curso_consultado_em = datetime('now')
+          WHERE contato_id = ? AND curso_consultado_em IS NULL`,
+      ).bind(linha.contato_id),
+    );
 
-    for (const ev of eventos.results as Array<{
-      id: number; etapa: string; registrado_em: string; registro_processo_id: string | null;
-    }>) {
+    if (!oportunidades.length) continue;
+
+    for (const ev of eventosPorContato.get(linha.contato_id) ?? []) {
       const escolhida =
         (ev.registro_processo_id
           ? oportunidades.find((o) => String(o.id) === String(ev.registro_processo_id))
@@ -272,6 +321,7 @@ export async function enriquecerCursoDosLeads(
         oportunidades[0];
 
       if (!escolhida?.curso) continue;
+      resgatados++;
       stmts.push(
         db.prepare(
           `UPDATE leads_etapa
@@ -314,7 +364,7 @@ export async function enriquecerCursoDosLeads(
   }
 
   if (stmts.length) await db.batch(stmts);
-  return { contatos, linhas: stmts.length };
+  return { contatos, linhas: resgatados };
 }
 
 /** Persiste cursos e ofertas no D1. */
