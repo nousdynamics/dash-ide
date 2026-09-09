@@ -66,6 +66,15 @@ function analisar(tokens, ctx) {
       // hasOwn, nunca `in`: `in` acha "constructor" no protótipo.
       if (!Object.hasOwn(ctx, t.v)) throw new FormulaInvalida(`métrica desconhecida: "${t.v}"`);
       const v = ctx[t.v];
+      /*
+       * `null` é ausência declarada, não zero.
+       *
+       * Uma base que não existe no período (nenhuma ação daquele tipo rodou)
+       * entra como null de propósito. Tratar como 0 faria a fórmula devolver
+       * "0%" — um número com cara de medição, quando o certo é dizer que não
+       * há o que medir.
+       */
+      if (v === null) throw new FormulaInvalida(`sem dado no período para "${t.v}"`);
       if (typeof v !== 'number') throw new FormulaInvalida(`métrica sem valor numérico: "${t.v}"`);
       return v;
     }

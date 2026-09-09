@@ -126,3 +126,78 @@ export function densificarPorDia(dados, de, ate) {
   }
   return saida;
 }
+
+/**
+ * Atalhos de período.
+ *
+ * Existem porque o caminho para "mês passado" eram três cliques em dois
+ * seletores — escolher o modo, achar o mês, conferir o ano —, e essa é a
+ * comparação que mais se faz. Um atalho é um clique e não deixa escolher um
+ * intervalo impossível.
+ *
+ * Cada um devolve um filtro inteiro, não um pedaço: aplicar atalho troca o modo
+ * junto, senão "30 dias" ficaria em modo mês e o seletor de mês continuaria
+ * mandando no resultado.
+ */
+export const ATALHOS_PERIODO = [
+  {
+    id: 'este_mes',
+    nome: 'Este mês',
+    monta: () => ({ modo: 'mes', mes: mesAtual() }),
+  },
+  {
+    id: 'mes_passado',
+    nome: 'Mês passado',
+    monta: () => {
+      const h = new Date();
+      const d = new Date(h.getFullYear(), h.getMonth() - 1, 1);
+      return { modo: 'mes', mes: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` };
+    },
+  },
+  {
+    id: 'ultimos_7',
+    nome: '7 dias',
+    monta: () => janelaDeDias(7),
+  },
+  {
+    id: 'ultimos_30',
+    nome: '30 dias',
+    monta: () => janelaDeDias(30),
+  },
+  {
+    id: 'este_ano',
+    nome: 'Este ano',
+    monta: () => ({ modo: 'ano', ano: String(new Date().getFullYear()) }),
+  },
+];
+
+/**
+ * Janela que termina HOJE, não ontem.
+ *
+ * O padrão do Google Ads é encerrar ontem, porque o dado de hoje ainda está
+ * incompleto. Aqui o atalho é explícito — quem clica em "7 dias" espera os sete
+ * dias até agora —, e o card já mostra a data resolvida ao lado.
+ */
+function janelaDeDias(n) {
+  const hoje = new Date();
+  const inicio = new Date(hoje.getTime() - (n - 1) * 86_400_000);
+  const iso = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { modo: 'intervalo', de: iso(inicio), ate: iso(hoje) };
+}
+
+/**
+ * Qual atalho corresponde ao filtro atual, se algum.
+ *
+ * Compara o período RESOLVIDO, não os campos: "01/09 a 08/09" escolhido à mão
+ * no modo intervalo é o mesmo período que "Este mês", e marcar o atalho aceso
+ * nos dois casos é o que faz a barra dizer a verdade sobre o que está sendo
+ * mostrado.
+ */
+export function atalhoAtivo(filtro) {
+  const atual = resolverPeriodo(filtro);
+  return ATALHOS_PERIODO.find((a) => {
+    const p = resolverPeriodo({ ...filtro, ...a.monta() });
+    return p.de === atual.de && p.ate === atual.ate;
+  })?.id ?? null;
+}

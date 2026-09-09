@@ -28,3 +28,8 @@
   # A casca do painel nunca é cacheada: ela é o que aponta para os bundles, e uma
   # cópia velha em disco mantém a tela viva depois da sessão do Access expirar.
   Cache-Control: no-store
+
+/assets/*
+  # Nomes estáveis (sem hash no Vite). Sem isto o browser pode manter Conversoes.js
+  # antigo e a tela “ainda está como antes” depois do deploy.
+  Cache-Control: no-cache

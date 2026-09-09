@@ -6,6 +6,24 @@ import { fmtBRL, fmtDec, fmtPct } from '../lib/formato';
 const FORMATOS = { moeda: fmtBRL, numero: fmtDec, percentual: fmtPct };
 
 /**
+ * O que a fórmula dá agora, ou por que não dá.
+ *
+ * Devolver o motivo junto com o valor é o que separa "medimos e deu zero" de
+ * "não há o que medir" — os dois apareciam como número na tela, e o segundo é
+ * o caso do Connect rate quando nenhuma ação de página rodou no período.
+ */
+function calcular(formula, ctx) {
+  try {
+    const valor = avaliar(formula, ctx);
+    return valor === null
+      ? { valor: null, aviso: 'sem valor no período (divisão por zero?)' }
+      : { valor, aviso: null };
+  } catch (e) {
+    return { valor: null, aviso: e.message };
+  }
+}
+
+/**
  * Cards das métricas que a pessoa montou.
  *
  * A fórmula é avaliada no navegador, com os mesmos totais que os outros cards
@@ -17,13 +35,7 @@ export function CardsPersonalizados({ defs, ctx, ctxAnterior }) {
   return (
     <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(158px,1fr))]">
       {defs.map((m) => {
-        let valor = null;
-        let erro = null;
-        try {
-          valor = avaliar(m.formula, ctx);
-        } catch (e) {
-          erro = e.message;
-        }
+        const { valor, aviso } = calcular(m.formula, ctx);
         /*
          * Fórmula que depende de ação / visualizações de página não tem "antes".
          * O endpoint de ações só cobre o período aberto.
@@ -32,11 +44,7 @@ export function CardsPersonalizados({ defs, ctx, ctxAnterior }) {
           /\bacao_[a-z0-9_]+/.test(m.formula) || /\bvisualizacoes_pagina\b/.test(m.formula);
         let antes = null;
         if (ctxAnterior && !usaAcao) {
-          try {
-            antes = avaliar(m.formula, ctxAnterior);
-          } catch {
-            /* sem comparação é aceitável; sem valor não é */
-          }
+          antes = calcular(m.formula, ctxAnterior).valor;
         }
         const fmt = FORMATOS[m.formato] ?? fmtDec;
         const delta = antes && antes !== 0 && valor !== null
@@ -53,13 +61,18 @@ export function CardsPersonalizados({ defs, ctx, ctxAnterior }) {
               ƒ
             </div>
             <div className="text-[11px] text-secundario font-medium">{m.nome}</div>
-            {erro ? (
-              <div className="text-[11px] text-perigo mt-1">{erro}</div>
+            {/*
+              Sem número, o card mostra "—" e o motivo — nunca 0.
+              Um "0%" aqui já passou meses sendo lido como resultado quando era
+              base faltando, e a métrica só existe para ser levada a sério.
+            */}
+            <div className="text-[21px] font-bold tnum my-[2px] mb-[6px] tracking-tight">
+              {aviso ? '—' : fmt(valor)}
+            </div>
+            {aviso ? (
+              <div className="text-[11px] text-tenue">{aviso}</div>
             ) : (
               <>
-                <div className="text-[21px] font-bold tnum my-[2px] mb-[6px] tracking-tight">
-                  {valor === null ? '—' : fmt(valor)}
-                </div>
                 <ChipDelta pct={delta} inverso={m.inverso} />
                 {antes !== null && (
                   <span className="block mt-1 text-[11px] text-tenue">
@@ -80,6 +93,9 @@ export function CardsPersonalizados({ defs, ctx, ctxAnterior }) {
 
 const VAZIA = { nome: '', formula: '', formato: 'numero', descricao: '', inverso: false, ordem: 0 };
 
+const ROTULO_FORMATO = { moeda: 'R$', numero: 'nº', percentual: '%' };
+
+
 /**
  * Editor de métrica.
  *
@@ -97,14 +113,7 @@ export function EditorMetricas({ dados, ctx, aoMudar }) {
   const nomes = bases.map((b) => b.id);
   const problema = form.formula ? validarFormula(form.formula, nomes) : null;
 
-  let previa = null;
-  if (form.formula && !problema) {
-    try {
-      previa = avaliar(form.formula, ctx);
-    } catch {
-      previa = null;
-    }
-  }
+  const previa = form.formula && !problema ? calcular(form.formula, ctx) : null;
 
   const salvar = async (e) => {
     e.preventDefault();
@@ -158,36 +167,74 @@ export function EditorMetricas({ dados, ctx, aoMudar }) {
         </button>
       </div>
 
-      {dados.itens.length > 0 && (
-        <div className="mt-3 flex flex-col">
-          {dados.itens.map((m) => (
-            <div key={m.id} className="flex items-center justify-between gap-3 py-2 border-t border-borda flex-wrap">
-              <div className="min-w-0">
-                <div className="text-xs font-semibold">{m.nome}</div>
-                <div className="text-[11px] text-tenue font-mono break-all">{m.formula}</div>
+      {dados.itens.length > 0 ? (
+        <div className="mt-3 border-t border-borda">
+          {dados.itens.map((m, i) => {
+            const { valor, aviso } = calcular(m.formula, ctx);
+            const fmt = FORMATOS[m.formato] ?? fmtDec;
+            return (
+              <div
+                key={m.id}
+                className={`flex items-start justify-between gap-3 py-[10px] flex-wrap
+                            ${i ? 'border-t border-borda' : ''}`}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-semibold">{m.nome}</span>
+                    <span
+                      title={`Formato: ${m.formato}`}
+                      className="text-[10px] font-semibold px-[5px] py-px rounded-[6px] bg-superficie text-tenue"
+                    >
+                      {ROTULO_FORMATO[m.formato] ?? m.formato}
+                    </span>
+                    {m.inverso && (
+                      <span
+                        title="Menor é melhor"
+                        className="text-[10px] font-semibold px-[5px] py-px rounded-[6px] bg-superficie text-tenue"
+                      >
+                        menor é melhor
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-tenue font-mono break-all mt-px">{m.formula}</div>
+                </div>
+
+                {/* O número do card, na mesma linha da definição que o produz. */}
+                <div className="basis-[168px] shrink-0 text-right">
+                  {aviso ? (
+                    <span className="text-[11px] text-perigo">{aviso}</span>
+                  ) : (
+                    <strong className="text-[15px] font-bold tnum">{fmt(valor)}</strong>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setForm({ ...m, descricao: m.descricao ?? '' });
+                      setEditando(m.id);
+                      setAberto(true);
+                    }}
+                    className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie text-secundario cursor-pointer hover:bg-superficie-hover"
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => remover(m.id)}
+                    className="text-[11px] px-2 py-[5px] rounded-[8px] border border-perigo/40 bg-perigo/12 text-perigo cursor-pointer"
+                  >
+                    Remover
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setForm({ ...m, descricao: m.descricao ?? '' });
-                    setEditando(m.id);
-                    setAberto(true);
-                  }}
-                  className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie text-secundario cursor-pointer hover:bg-superficie-hover"
-                >
-                  Editar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => remover(m.id)}
-                  className="text-[11px] px-2 py-[5px] rounded-[8px] border border-perigo/40 bg-perigo/12 text-perigo cursor-pointer"
-                >
-                  Remover
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-3 pt-3 border-t border-borda text-[11px] text-tenue">
+          Nenhuma métrica ainda. Comece por uma conta que você já faz na mão.
         </div>
       )}
 
@@ -227,13 +274,15 @@ export function EditorMetricas({ dados, ctx, aoMudar }) {
           <div className="text-[11px] min-h-[16px]">
             {problema ? (
               <span className="text-perigo">{problema}</span>
-            ) : previa !== null ? (
+            ) : previa?.aviso ? (
+              /* O motivo exato — "sem dado no período para X" separa base que
+                 não existe de divisão por zero, que pedem correções diferentes. */
+              <span className="text-tenue">{previa.aviso}</span>
+            ) : previa ? (
               <span className="text-sucesso">
                 No período atual daria{' '}
-                <strong className="tnum">{(FORMATOS[form.formato] ?? fmtDec)(previa)}</strong>
+                <strong className="tnum">{(FORMATOS[form.formato] ?? fmtDec)(previa.valor)}</strong>
               </span>
-            ) : form.formula ? (
-              <span className="text-tenue">Sem valor no período (divisão por zero?)</span>
             ) : null}
           </div>
 

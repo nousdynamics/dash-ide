@@ -4,30 +4,32 @@
  * Tokens do design system da IDE expostos ao Tailwind v4 via @theme, para que
  * `bg-superficie` e `text-secundario` existam como classe em vez de cada
  * componente carregar hex solto.
+ *
+ * Tema claro — fundo branco em toda a página.
  */
 @theme {
-  --color-base: #0a0e14;
-  --color-elevado: #10151d;
-  --color-superficie: #161c26;
-  --color-superficie-hover: #1c232f;
+  --color-base: #ffffff;
+  --color-elevado: #f4f6f8;
+  --color-superficie: #ffffff;
+  --color-superficie-hover: #eef1f5;
 
   --color-azul-900: #0b2545;
   --color-azul-700: #1d4e89;
   --color-azul-600: #2b5797;
   --color-azul-500: #3b74b8;
   --color-azul-400: #4f8fe8;
-  --color-azul-300: #7fb0f2;
+  --color-azul-300: #3b74b8;
 
-  --color-sucesso: #3ddc84;
-  --color-atencao: #f5a623;
-  --color-perigo: #f0553f;
+  --color-sucesso: #1a9f5c;
+  --color-atencao: #c47d0a;
+  --color-perigo: #d64532;
 
-  --color-primario: #f5f7fa;
-  --color-secundario: #9aa5b4;
-  --color-tenue: #626d7d;
+  --color-primario: #0a0e14;
+  --color-secundario: #4a5568;
+  --color-tenue: #7a8596;
 
-  --color-borda: rgba(255, 255, 255, 0.06);
-  --color-borda-forte: rgba(255, 255, 255, 0.1);
+  --color-borda: rgba(10, 14, 20, 0.08);
+  --color-borda-forte: rgba(10, 14, 20, 0.14);
 
   --font-sans: 'Inter', system-ui, sans-serif;
 
@@ -58,7 +60,7 @@
     font-feature-settings: 'tnum' 1;
   }
   input[type='date'] {
-    color-scheme: dark;
+    color-scheme: light;
   }
 }
 
@@ -70,12 +72,11 @@
   .cartao {
     position: relative;
     background:
-      linear-gradient(155deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 42%),
+      linear-gradient(155deg, rgba(43, 87, 151, 0.04) 0%, rgba(255, 255, 255, 0) 42%),
       var(--color-superficie);
     border: 1px solid var(--color-borda);
-    border-top-color: rgba(255, 255, 255, 0.14);
     border-radius: var(--radius-card);
     padding: 16px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+    box-shadow: 0 1px 3px rgba(10, 14, 20, 0.04), 0 4px 16px rgba(10, 14, 20, 0.04);
   }
 }

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { ZodTypeAny, output as ZodOutput } from 'zod';
 import { CorpoInvalido, lerCorpoJson } from '../lib/corpo';
+import { avaliarLead } from '../lib/conversoes';
 import { hashDoToken } from '../lib/credenciais';
 import { aprenderEtapaDoEvento } from '../lib/rubeus';
 import { conversaSchema, etapaSchema, normalizarEtapa } from '../lib/schemas';
@@ -395,13 +396,47 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
   const doPayload = await funilDoPayload(c, d);
   const funilFinal = doPayload ?? funilId;
 
+  /*
+   * O mesmo evento já está gravado?
+   *
+   * Medido em produção (05/09/2026): 321 linhas exatamente duplicadas — mesmo
+   * contato, mesma etapa, mesmo `registrado_em`, mesmo processo. O Rubeus
+   * reemite o gatilho (reprocessamento, o operador salvando duas vezes) e nada
+   * impedia a segunda gravação.
+   *
+   * A checagem mora aqui, e não num índice UNIQUE, porque o índice não pode
+   * nascer sobre dados que já o violam — a migration falharia no meio do
+   * deploy. Quando as 321 forem revisadas e removidas, isto vira uma linha de
+   * SQL e a regra passa para o banco, que é o lugar certo dela.
+   *
+   * Corrida entre dois webhooks simultâneos ainda pode escapar: o resultado é o
+   * comportamento de hoje, não um pior.
+   */
+  const jaExiste = await c.env.DB.prepare(
+    `SELECT id FROM leads_etapa
+      WHERE contato_id = ? AND etapa = ? AND registrado_em = ?
+        AND COALESCE(processo_id, '') = COALESCE(?, '')
+      LIMIT 1`,
+  ).bind(d.contato_id, d.etapa, d.registrado_em, d.processo_id ?? null).first();
+
+  if (jaExiste) {
+    console.log(JSON.stringify({
+      evento: 'etapa_repetida_ignorada',
+      contato_id: d.contato_id,
+      etapa: d.etapa,
+      registrado_em: d.registrado_em,
+    }));
+    return c.json({ ok: true, repetido: true }, 200);
+  }
+
   const { meta } = await c.env.DB.prepare(
     `INSERT INTO leads_etapa (
        contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, etapa, status,
        curso_id, curso_codigo, oferta_codigo, oferta_nome,
        origem, modalidade, unidade, responsavel_comercial, registrado_em,
-       funil_id, email, telefone
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       funil_id, email, telefone, gclid, gbraid, wbraid,
+       cep, cidade, estado, valor_curso, url_origem, pessoa_id
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
     .bind(
       d.contato_id,
@@ -423,6 +458,22 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       funilFinal,
       d.email ?? null,
       d.telefone ?? null,
+      d.gclid ?? null,
+      d.gbraid ?? null,
+      d.wbraid ?? null,
+      d.cep ?? null,
+      d.cidade ?? null,
+      d.estado ?? null,
+      d.valor_curso ?? null,
+      d.url_origem ?? null,
+      /*
+       * Chute inicial da chave de pessoa, corrigido logo abaixo.
+       *
+       * Vai preenchido no INSERT para que a linha nunca exista com
+       * `pessoa_id` nulo — uma linha sem chave some de toda contagem do funil,
+       * que é pior do que uma chave provisória por alguns milissegundos.
+       */
+      d.email ?? d.telefone ?? d.contato_id,
     )
     .run();
 
@@ -434,17 +485,23 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
    * todas as passagens do mesmo e-mail que chegaram sem ele ficam completas —
    * senão o cruzamento com RD e Evolution só enxergaria metade da jornada.
    */
-  if (d.email || d.telefone) {
+  if (d.email || d.telefone || d.cep) {
     c.executionCtx?.waitUntil(
       c.env.DB.prepare(
+        /*
+         * O CEP viaja junto: ele só chega na Ficha de Inscrição, e é o que
+         * completa o identificador de endereço do Google para as outras
+         * passagens do mesmo lead.
+         */
         `UPDATE leads_etapa
             SET email    = COALESCE(email, ?),
-                telefone = COALESCE(telefone, ?)
-          WHERE (email IS NULL OR telefone IS NULL)
+                telefone = COALESCE(telefone, ?),
+                cep      = COALESCE(cep, ?)
+          WHERE (email IS NULL OR telefone IS NULL OR cep IS NULL)
             AND (contato_id = ? OR (? IS NOT NULL AND email = ?) OR (? IS NOT NULL AND telefone = ?))`,
       )
         .bind(
-          d.email ?? null, d.telefone ?? null,
+          d.email ?? null, d.telefone ?? null, d.cep ?? null,
           d.contato_id,
           d.email ?? null, d.email ?? null,
           d.telefone ?? null, d.telefone ?? null,
@@ -453,12 +510,68 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
     );
   }
 
+  /*
+   * Recalcula a chave de pessoa deste contato.
+   *
+   * Precisa rodar DEPOIS da propagação de identidade acima: é ela que espalha o
+   * e-mail recém-chegado para as passagens antigas, e a chave sai justamente do
+   * melhor identificador presente em qualquer linha do contato.
+   *
+   * Sem isto, o lead que chegou pelo sync sem e-mail ficaria chaveado pelo
+   * `contato_id` para sempre, e a pessoa apareceria duas vezes na contagem —
+   * o defeito que a migration 0033 corrigiu no histórico.
+   *
+   * Fora do caminho crítico, e limitado às linhas de um contato: é barato.
+   */
+  c.executionCtx?.waitUntil(
+    c.env.DB.prepare(
+      `UPDATE leads_etapa
+          SET pessoa_id = (
+            SELECT COALESCE(MIN(l2.email), MIN(l2.telefone), leads_etapa.contato_id)
+              FROM leads_etapa l2 WHERE l2.contato_id = leads_etapa.contato_id
+          )
+        WHERE contato_id = ?`,
+    ).bind(d.contato_id).run(),
+  );
+
   // Catálogo de etapas: cada evento real ensina a ordem/macro do processo.
   if (d.processo_id && d.etapa) {
     c.executionCtx?.waitUntil(
       aprenderEtapaDoEvento(c.env.DB, d.processo_id, d.etapa).catch(() => undefined),
     );
   }
+
+  /*
+   * Conversão offline, fora do caminho crítico.
+   *
+   * `waitUntil` e `catch` engolindo: o webhook precisa devolver 201 para o
+   * Rubeus porque a etapa JÁ está gravada no funil — que é o que ele veio
+   * entregar. Se o Google ou o CRM estiverem fora do ar, a conversão fica
+   * pendente e o reprocessamento diário a alcança; devolver erro aqui faria o
+   * Rubeus tratar como falha um evento que foi recebido com sucesso.
+   */
+  c.executionCtx?.waitUntil(
+    avaliarLead(c.env, {
+      id: meta.last_row_id as number,
+      contato_id: d.contato_id,
+      contato_nome: d.contato_nome ?? null,
+      email: d.email ?? null,
+      telefone: d.telefone ?? null,
+      registro_processo_id: d.registro_processo_id ?? null,
+      processo_id: d.processo_id ?? null,
+      processo_nome: d.processo_nome ?? null,
+      etapa: d.etapa,
+      curso_id: d.curso_id ?? null,
+      registrado_em: d.registrado_em,
+      cep: d.cep ?? null,
+      valor_curso: d.valor_curso ?? null,
+      gclid: d.gclid ?? null,
+      gbraid: d.gbraid ?? null,
+      wbraid: d.wbraid ?? null,
+    }).catch((e) => {
+      console.error(JSON.stringify({ evento: 'conversao_falhou', contato_id: d.contato_id, msg: String(e) }));
+    }),
+  );
 
   console.log(JSON.stringify({
     evento: 'etapa_gravada',

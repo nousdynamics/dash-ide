@@ -152,6 +152,14 @@ ads.get('/overview', async (c) => {
   ]);
 
   const totais = totalizar(linhasTotais.map((l) => l.metrics));
+  /*
+   * Uma vez só.
+   *
+   * Estava sendo calculado duas vezes na mesma expressão — uma para `totais` da
+   * comparação e outra dentro de `deltas` —, percorrendo a lista do período
+   * anterior em dobro para chegar ao mesmo objeto.
+   */
+  const totaisAnterior = anterior ? totalizar(linhasAnterior.map((l) => l.metrics)) : null;
 
   const serie = linhasDiario.map((l) => ({
     data: l.segments.date,
@@ -168,8 +176,8 @@ ads.get('/overview', async (c) => {
     plataforma: 'google_ads',
     totais,
     // Comparação com a janela anterior de mesmo tamanho.
-    comparacao: anterior
-      ? { periodo: anterior, totais: totalizar(linhasAnterior.map((l) => l.metrics)), deltas: deltas(totais, totalizar(linhasAnterior.map((l) => l.metrics))) }
+    comparacao: anterior && totaisAnterior
+      ? { periodo: anterior, totais: totaisAnterior, deltas: deltas(totais, totaisAnterior) }
       : null,
     serie_diaria: serie,
   });
@@ -247,24 +255,54 @@ ads.get('/campanhas', async (c) => {
 ads.get('/resultados-por-acao', async (c) => {
   const { de, ate } = intervalo(c);
 
-  const linhas = await consultar<{
-    segments: { conversionActionName?: string; conversionActionCategory?: string };
-    metrics: Record<string, unknown>;
-  }>(
-    c.env,
-    `SELECT segments.conversion_action_name, segments.conversion_action_category,
-            metrics.all_conversions, metrics.conversions
-     FROM customer WHERE ${ondeData(de, ate)}`,
-  );
+  /*
+   * Duas consultas: o desempenho por ação e a origem de cada ação.
+   *
+   * O segmento não traz `conversion_action.origin`, e sem ela "visualização de
+   * página" mistura duas coisas que não se somam: a página do site (WEBSITE) e
+   * o Perfil da Empresa no Google (GOOGLE_HOSTED — "Local actions - Menu
+   * views", "Website visits"). Connect rate é sobre a landing; contar menu do
+   * Perfil como visualização de página infla a conta com outro produto.
+   *
+   * GAQL não faz join, então o catálogo vem em consulta própria e o encontro é
+   * por id aqui. Ele não tem data, logo cai no TTL longo do cache.
+   */
+  const [linhas, catalogo] = await Promise.all([
+    consultar<{
+      segments: {
+        conversionAction?: string;
+        conversionActionName?: string;
+        conversionActionCategory?: string;
+      };
+      metrics: Record<string, unknown>;
+    }>(
+      c.env,
+      `SELECT segments.conversion_action, segments.conversion_action_name,
+              segments.conversion_action_category,
+              metrics.all_conversions, metrics.conversions
+       FROM customer WHERE ${ondeData(de, ate)}`,
+    ),
+    consultar<{ conversionAction: { id?: string; origin?: string } }>(
+      c.env,
+      'SELECT conversion_action.id, conversion_action.origin FROM conversion_action',
+    ),
+  ]);
+
+  const origemPorId = new Map<string, string>();
+  for (const l of catalogo) {
+    if (l.conversionAction?.id) origemPorId.set(String(l.conversionAction.id), l.conversionAction.origin ?? 'UNKNOWN');
+  }
 
   const porAcao = new Map<string, {
-    acao: string; categoria: string | null; resultados: number; primarios: number;
+    acao: string; categoria: string | null; origem: string | null; resultados: number; primarios: number;
   }>();
   for (const l of linhas) {
     const acao = l.segments.conversionActionName ?? '(sem nome)';
+    const id = (l.segments.conversionAction ?? '').split('/').pop() ?? '';
     const atual = porAcao.get(acao) ?? {
       acao,
       categoria: l.segments.conversionActionCategory ?? null,
+      origem: origemPorId.get(id) ?? null,
       resultados: 0,
       primarios: 0,
     };
@@ -284,6 +322,9 @@ ads.get('/resultados-por-acao', async (c) => {
     itens: itens.map((i) => ({
       acao: i.acao,
       categoria: i.categoria,
+      // WEBSITE, GOOGLE_HOSTED, CALL_FROM_ADS… — quem monta fórmula precisa
+      // saber se a ação é do site ou do Perfil da Empresa.
+      origem: i.origem,
       resultados: i.resultados,
       // Uma ação sem nenhuma conversão contada em `conversions` é secundária —
       // é assim que o Google separa as duas, sem expor a flag no segmento.

@@ -123,14 +123,287 @@ parcial é gravada.
 | Funil por etapa | D1 `leads_etapa`, alimentado pelo webhook do Rubeus |
 | Conversas de WhatsApp | D1 `conversas_whatsapp`, alimentado pela Evolution API |
 
-**O n8n não alimenta o painel em regime normal.** Ele segue existindo para
-enviar conversão offline ao Google Ads, e a migration `0003` removeu
-`metricas_anuncio` (substituída pela consulta ao vivo) e `conversoes_ads` (que
-só o callback dele preencheria).
+**O n8n não alimenta o painel, e não envia mais conversão.** A conversão
+offline saiu de lá e virou a tela `#/conversoes` — ver a seção abaixo. A
+migration `0003` já havia removido `metricas_anuncio` (substituída pela consulta
+ao vivo) e `conversoes_ads` (que só o callback dele preencheria).
 
 O canal `n8n` dos webhooks é **contingência**, não rotina: serve para reenviar
 evento perdido e para injetar dado à mão quando o Rubeus ou a Evolution
 falham. Não remover achando que é resíduo da arquitetura antiga.
+
+## Conversão offline
+
+Saiu do n8n e virou tela do painel (`#/conversoes`, só para quem administra).
+O fluxo antigo — "Fluxo Faculdade IDE - Teste Webhook + API Rubeus" — fazia o
+mesmo percurso por fora, com uma segunda cópia das credenciais do Google e do
+Rubeus, e **nunca enviou nada**: ele procurava um campo personalizado `gclid` no
+contato do Rubeus, e esse campo não existia na conta. Toda execução caía no ramo
+"sem click ID".
+
+O percurso agora:
+
+```
+webhook do Rubeus  →  gatilho (etapa → evento)  →  reserva com orderId único
+                   →  enriquece (curso, nível, click id)  →  Data Manager API
+                   →  diagnóstico (o veredito, ~30 min depois)
+                   →  planilha de backup
+```
+
+A última etapa não é enfeite: `events:ingest` responder 200 significa que o
+Google **aceitou a requisição**, não que contabilizou a conversão. Ver
+**O veredito do Google**, abaixo.
+
+### Duas formas de atribuir, nesta ordem
+
+1. **click id** (`gclid`/`gbraid`/`wbraid`), quando existir;
+2. **conversão aprimorada** — e-mail e telefone em SHA-256 hex, que o Rubeus já
+   tem hoje para praticamente todo lead.
+
+O segundo é o que faz isto funcionar antes de qualquer mudança no site. Quando
+os dois existem, vão juntos no mesmo evento — a Data Manager API permite, e o
+Google recomenda.
+
+### Como o gclid chega ao Rubeus
+
+O gclid só existe no navegador de quem clicou no anúncio; o CRM não o vê
+sozinho. A ponte tem três tempos, e o painel faz todos:
+
+1. **captura** — `/coleta/ide-clique.js` vai nas páginas do site (via GTM ou
+   direto). Guarda o click id da URL do anúncio num cookie de primeira parte e,
+   quando a pessoa envia um formulário com e-mail ou telefone, manda os três
+   para `/coleta/clique`;
+2. **cruzamento** — quando o webhook trouxer aquele lead, o painel acha a
+   captura por e-mail/telefone (janela de 90 dias, a mais recente vence);
+3. **devolução** — grava o click id no campo personalizado do Rubeus via
+   `/api/Contato/cadastro`, para que o CRM passe a ter o dado.
+
+`/coleta` fica fora do Cloudflare Access de propósito — quem chama é o navegador
+de um visitante anônimo. A porta só aceita entrada, confere o `Origin` contra a
+lista de sites permitidos, valida a forma do click id e tem teto diário.
+
+A coluna do campo personalizado **não** é fixa no código: o painel a descobre
+pelo nome em `/api/Instituicao/campoPersonalizado`. A coluna do Rubeus
+(`campopersonalizado_24_compl_cont`) é um número de slot, e recriar o campo gera
+outro número — um valor fixo passaria a escrever em cima de "Profissão" sem
+nenhum erro visível.
+
+### Transporte: Data Manager API, não Google Ads API
+
+A primeira versão usava `uploadClickConversions`, como o n8n. O Google recusou,
+com todas as letras:
+
+> New integrations for uploading click conversions should use the Data Manager
+> API. Usage of ConversionUploadService.UploadClickConversions is limited to
+> existing users.
+
+A conta nunca subiu conversão offline, então é integração nova — aquele caminho
+está fechado para ela. O envio vai para `datamanager.googleapis.com/v1/events:ingest`,
+que exige o escopo `https://www.googleapis.com/auth/datamanager`. Relatório e
+cadastro de ações de conversão continuam na Google Ads API.
+
+**O consentimento antigo não cobre esse escopo.** Por isso existe
+`/oauth/google/iniciar`: reconsente com tudo de uma vez e guarda o refresh token
+em `credenciais_oauth`, que passa a vencer o secret `GOOGLE_ADS_REFRESH_TOKEN`.
+O secret continua valendo para as telas de mídia, que só precisam de `adwords` —
+elas não param enquanto a reconexão não acontece.
+
+O redirect `https://painel.ide.edu.br/oauth/google/callback` precisa estar
+registrado no cliente OAuth, no Google Cloud Console. É o único passo manual.
+
+### O veredito do Google
+
+`events:ingest` valida em *fast-fail*: ou a requisição inteira passa, ou nenhum
+evento dela passa — não existe o `partialFailure` da Google Ads API. Duas
+consequências, e o painel trata as duas:
+
+- **um evento ruim derruba o lote.** Quando um lote é recusado com `400`, o
+  painel reenvia os eventos um a um para isolar o culpado. Sem isso, um gclid
+  expirado marcaria como recusadas 59 conversões que o Google teria aceitado, e
+  elas voltariam à fila todo dia até estourar o teto de tentativas. Só `400`
+  dispara o isolamento: `403` (escopo), `401` e `429` são da conta inteira, e
+  isolar ali seria repetir a mesma recusa N vezes.
+- **200 não é resultado.** O resultado real sai em
+  `requestStatus:retrieve?requestId=…`, cerca de 30 min depois, e é lá que
+  aparece `SUCCESS`, `PARTIAL_SUCCESS` ou `FAILED` com a contagem de registros
+  por motivo. O `requestId` de cada envio fica em `conversoes_offline.request_id`
+  e numa fila própria (`conversao_requisicoes`), consultada com backoff de 1,3×
+  a partir de 30 min, teto de 60 min, até 24 h.
+
+Por isso o cron passou a ter dois horários: `0 9 * * *` para a reconciliação
+pesada e a planilha, e `0,30 * * * *` para essa passada curta. Com só o diário,
+todo veredito chegaria com um dia de atraso — e a tela passaria esse dia dizendo
+"enviada" para conversão que o Google descartou.
+
+`PARTIAL_SUCCESS` **não** devolve as linhas à fila automaticamente: o Google diz
+quantos registros caíram e por quê, mas não quais. Reenviar o lote duplicaria as
+que deram certo. O painel marca, mostra o motivo, e o reenvio é por linha, num
+botão.
+
+Modo teste (`validateOnly`) não gera diagnóstico — o Google valida e descarta
+sem processar.
+
+### Monitor de conversões
+
+Dentro da mesma tela, abaixo da configuração. Responde o que vem depois de
+"está ligado?": o que saiu, de qual curso, com que atribuição, e o que o Google
+fez com aquilo.
+
+Três camadas de verdade, deliberadamente em colunas separadas:
+
+| coluna | o que diz |
+|---|---|
+| `status` | o que o **painel** fez: enviou, não enviou, por quê |
+| `diagnostico` | o que o **Google** fez depois de aceitar a requisição |
+| `identificadores` | como o lead foi ligado ao clique (gclid, hash, nada) |
+
+Fundir as duas primeiras apagaria a distinção que diz onde está o defeito: "nós
+não mandamos" pede correção no mapa de etapas, "mandamos e o Google não
+aproveitou" pede correção na qualidade do identificador.
+
+Filtros: período (pela data do **evento**, que é como o Google Ads também as
+data), tipo de curso (nível de ensino), curso, evento, processo do Rubeus, ação
+de conversão, situação no painel, veredito do Google, atribuição, modo e busca
+livre. Multi-seleção viaja em parâmetros repetidos (`curso=A&curso=B`), nunca
+separada por vírgula — nome de curso vem de digitação livre no Rubeus e tem
+vírgula.
+
+O seletor de curso se estreita ao nível já escolhido, os valores dos seletores
+saem do que já foi registrado (curso novo aparece sozinho, sem deploy), e
+`GET /api/conversoes/registro.csv` baixa exatamente a janela filtrada — com BOM,
+e com `'` na frente de célula que comece com `=`, `+`, `-` ou `@`, porque nome de
+lead vem de digitação livre e uma planilha trata isso como fórmula.
+
+### Consentimento
+
+`consent` só é enviado quando a tela afirma tê-lo. O padrão é **não informar**,
+que é diferente de negar: omitido, o Google aplica a regra da conta; negado, ele
+descarta o identificador e a conversão aprimorada para de casar.
+
+Marcar "concedido" é uma declaração em nome da faculdade sobre um consentimento
+que só quem administra a captação pode confirmar — por isso mora na tela, com o
+padrão no lado que não afirma nada, em vez de cravado no código.
+
+### O valor do curso
+
+**Correção de 05/09/2026.** Este README afirmava que o Rubeus não tem o preço em
+lugar nenhum. Isso é verdade para a **API** — `valorCurso` nulo em todas as
+oportunidades conferidas, `valor` nulo nas 689 ofertas, campo personalizado
+"VALOR DO CURSO" vazio — e **falso para o webhook**, que manda `valor_do_curso`
+no corpo. Conferido nos payloads reais guardados em `eventos_recebidos`. O
+parser não lia esse campo, e o valor ia para o lixo na porta de entrada.
+
+A ordem de precedência do valor da conversão, do mais confiável para o menos:
+
+1. **`valor_do_curso` do webhook** — o preço daquela matrícula;
+2. **API do Rubeus** (`valorCurso` / campo personalizado) — hoje sempre nulo,
+   mas lida, para migrar sozinho no dia em que for preenchida;
+3. **`conversao_acoes`** — o valor digitado na tela, por evento × nível de
+   ensino. Deixou de ser a fonte e virou a rede de segurança.
+
+Isso importa para lance: com o valor fixo da tela, o Smart Bidding otimizava
+para a média do nível de ensino em vez do preço do curso que foi vendido.
+
+### A contagem de leads estava 45% inflada
+
+Medido em 08/09/2026: o painel mostrava **1.881 leads** onde existem **1.298
+pessoas**. 583 que nunca existiram.
+
+A causa era uma linha de SQL repetida em 17 lugares:
+
+```sql
+COUNT(DISTINCT COALESCE(email, telefone, contato_id))
+```
+
+O `COALESCE` resolve por **linha**, e a mesma pessoa tem várias — uma por etapa.
+Quando a linha da inscrição traz e-mail e a do sync do Rubeus não traz (90%
+delas não trazem), a primeira é contada pelo e-mail e a segunda pelo
+`contato_id`. Duas chaves, uma pessoa. São 584 contatos nessa situação.
+
+A intenção estava certa e continua valendo — quem tem e-mail deve ser contado
+pelo e-mail, porque a mesma pessoa às vezes existe sob dois `contato_id` (78
+e-mails em produção). O errado era resolver por linha em vez de por pessoa.
+
+`leads_etapa.pessoa_id` (migration 0033) materializa a chave certa: o melhor
+identificador que o contato tem em **qualquer** uma de suas linhas. `MIN` e não
+"o mais recente" porque a chave precisa ser estável — um alvo que muda quando
+chega evento novo faria o mesmo lead ser contado como pessoa diferente antes e
+depois, que é o defeito original.
+
+Mantida em dia pelo webhook, não por trigger: um trigger rodaria a agregação por
+contato a cada INSERT, dentro do caminho crítico que precisa devolver 201 rápido
+para o Rubeus.
+
+### Identidade: uma biblioteca só, e a costura
+
+`src/lib/identidade.ts` é a fonte única da normalização de e-mail, telefone,
+CEP e nome. Antes existia **em duplicata** — uma cópia em `schemas.ts` (usada
+quando o webhook grava o lead) e outra em `cliques.ts` (usada quando o script do
+site grava a captura). As duas precisam produzir a mesma string, porque o
+cruzamento entre clique e lead é uma comparação de igualdade entre elas; duas
+cópias ficam iguais só até alguém corrigir uma, e o sintoma seria o cruzamento
+parar de casar sem erro em lugar nenhum.
+
+**A costura** resolve um problema medido em produção (05/09/2026):
+
+| fonte das linhas de `leads_etapa` | linhas | com e-mail | com telefone |
+|---|---|---|---|
+| webhook | 3.837 | 2.605 (68%) | 3.709 (97%) |
+| sync do Rubeus | 3.510 | 369 (10%) | 457 (13%) |
+
+O parser do webhook está correto — quem chega sem identidade é o sync, que grava
+a etapa sem buscar o contato. O ponto é que **o painel já tinha o dado em outra
+linha**: 723 contatos nunca tiveram e-mail em nenhuma passagem, mas 410 deles
+têm telefone em alguma. `identidadeDoContato()` varre todas as linhas do contato
+antes de gastar chamada ao Rubeus — mais barato, e funciona com o CRM fora do ar.
+
+**O contato canônico** resolve o outro lado: 78 e-mails e 79 telefones aparecem
+sob `contato_id` diferentes — cerca de 90 cadastros que são a mesma pessoa. Como
+o `orderId` é `contato + evento` e o Google deduplica por ele, a mesma matrícula
+sob dois ids viraria **duas conversões** na conta de anúncios. O painel passa a
+resolver o menor id que compartilha e-mail ou telefone, e usa esse no `orderId`.
+Nada é fundido no Rubeus — fundir cadastro é decisão de quem opera o CRM.
+
+Quando os dois cadastros têm metade do dado cada (um com o e-mail do formulário,
+outro com o telefone e o CEP da ficha), a costura varre os dois.
+
+### Três vias de atribuição, não duas
+
+O identificador de **endereço** entrou como terceira via, e alcança justamente o
+lead sem gclid e sem e-mail. Exige os quatro juntos — nome, sobrenome, país e
+CEP —, e o formato não é uniforme: nome e sobrenome vão em SHA-256, país e CEP
+vão **em claro**. Hashear os quatro é o engano natural e faz o Google aceitar o
+evento sem casar com ninguém.
+
+O CEP chega na Ficha de Inscrição do Rubeus (`cep`, `cidade`, `estado` no
+corpo) e é espalhado para as outras passagens do mesmo lead pelo webhook.
+
+### Duplicatas em `leads_etapa`
+
+321 linhas exatamente duplicadas (162 grupos) — mesmo contato, etapa,
+`registrado_em` e processo. Nada impedia a segunda gravação.
+
+A prevenção está em `src/routes/webhooks.ts`, que consulta antes de gravar, e
+**não** num índice UNIQUE: o índice não pode nascer sobre dados que já o violam,
+e a migration falharia no meio do deploy. Quando as 321 forem revisadas e
+removidas, `idx_leads_repetido` vira UNIQUE numa migration de uma linha e a
+regra sai do código para o banco, que é o lugar dela.
+
+O funil conta contatos distintos por etapa, então essas linhas não estão
+inflando número hoje — por isso a limpeza pode esperar revisão humana.
+
+### Segurança do que sai
+
+- Nasce **desligado e em modo teste**. Em teste o envio usa `validateOnly`: o
+  Google valida tudo, devolve os mesmos erros e não contabiliza nada. Passar
+  para real reenvia o que foi simulado na janela, porque nunca chegou a contar.
+- `orderId` estável por (contato, evento, registro de processo) — o Rubeus
+  reemite gatilho, e sem isso a mesma matrícula contaria várias vezes.
+- Escrever no Rubeus é interruptor separado, desligado por padrão:
+  `/api/Contato/cadastro` é o mesmo endpoint que cria contato, e errar ali
+  altera cadastro real em vez de devolver erro.
+- Teto de cinco tentativas por linha: gclid expirado falha para sempre, e
+  reencostar nele todo dia só gastaria cota.
 
 ## Funis e webhooks
 
@@ -178,6 +451,33 @@ então duplicata não infla número, e conversa é upsert.
 allowlist de ação e sem usar `primary_for_goal`, que nesta conta marca como
 primária inscrição em canal do YouTube e como secundária o "Concluiu Inscrição".
 A métrica já nasce agregável por plataforma, para o Meta Ads somar depois.
+
+## Filtros
+
+Uma barra só, ancorada abaixo do título (`app/src/componentes/BarraFiltros.jsx`).
+Substituiu o `FiltroPeriodo`, que era uma fileira solta de controles entre o
+título e o conteúdo. Três problemas, três correções:
+
+- **Lugar** — no Funil havia uma SEGUNDA leva de filtros dentro do cartão de
+  baixo, com conjuntos diferentes conforme a aba (seis listas na consolidada,
+  quatro na por processo). Quem queria recortar o número procurava em dois
+  lugares. Agora tudo que filtra a tela mora na mesma faixa.
+- **Recursos** — dava para escolher mês, ano ou intervalo e nada mais. "Mês
+  passado" custava três cliques em dois seletores, e é a comparação mais feita.
+  Entraram atalhos: Este mês, Mês passado, 7 dias, 30 dias, Este ano. O atalho
+  acende comparando o período **resolvido**, então escolher 01/09–08/09 à mão
+  acende "Este mês" — a barra não mente sobre o que está mostrando.
+- **Espaçamento** — o seletor de modo era um `<select>` que nascia com `w-full`
+  e ocupava a largura da tela sozinho, empurrando o resto para outra linha.
+  Virou um segmentado: mostra as três opções de uma vez e troca com um clique.
+
+O `w-full` do `Select` era a causa raiz e afetava toda barra de filtros do
+painel. A base não impõe mais largura; quem precisa preencher a célula pede
+`className="w-full"` — exceção declarada em vez de regra imposta.
+
+De quebra, o Funil pedia `/api/catalogo/cursos` e `/api/catalogo/filtros` em
+cada aba, montando as mesmas listas duas vezes. A busca subiu para o componente
+pai e as duas abas leem do mesmo lugar.
 
 ## Frontend
 
@@ -314,7 +614,55 @@ Registradas aqui porque afetam quem for continuar:
 
 ## Pendências que não são código
 
-Continuam valendo os itens da seção 3 do plano (campo `gclid` no Rubeus, ações
-de conversão no Google Ads, tokens). Nenhum valor real foi commitado — os
-lugares que precisam de credencial estão marcados com `TODO` no `wrangler.jsonc`
-e no `.dev.vars.example`.
+Nenhum valor real foi commitado — os lugares que precisam de credencial estão
+marcados com `TODO` no `wrangler.jsonc` e no `.dev.vars.example`.
+
+Para a conversão offline entrar em operação, nesta ordem:
+
+1. **Registrar o redirect** `https://painel.ide.edu.br/oauth/google/callback` no
+   cliente OAuth do Google Cloud Console, e habilitar a **Data Manager API** no
+   projeto. Depois, "Conectar Google" na tela — sem isso todo envio volta 403.
+   Confirmado em 05/09/2026 com uma chamada real em `validateOnly`: a Data
+   Manager API respondeu `403 ACCESS_TOKEN_SCOPE_INSUFFICIENT` — "Request had
+   insufficient authentication scopes". O transporte está pronto e o token
+   atual, herdado do secret, não carrega `datamanager`. É o único passo que
+   falta para o primeiro envio sair.
+2. **Aceitar os termos de dados do cliente** no Google Ads (Ferramentas →
+   Conversões). É o que autoriza a conversão aprimorada por e-mail/telefone.
+3. **Criar as ações de conversão** por evento × nível de ensino. A conta tem 45
+   ações, e nenhuma é do tipo `UPLOAD_CLICKS` — as existentes são de página, de
+   chamada ou do GA4, e não aceitam envio offline. A tela cria pela API, uma por
+   célula da grade.
+4. **Criar o campo personalizado de gclid** no Rubeus (em Contato) e apertar
+   "Procurar o campo de gclid" na tela. Conferido em 19/08/2026: os 45 campos da
+   conta não incluem gclid, gbraid, wbraid nem UTM.
+5. **Colar a tag** `/coleta/ide-clique.js` nas landing pages e na página do
+   formulário, e ligar a captura.
+
+Os passos 4 e 5 melhoram a atribuição; **não** são pré-requisito. Com 1 a 3
+feitos, a conversão já sai por e-mail/telefone em hash.
+
+## Checklist operacional (pós-reunião Nathália × Ryan)
+
+Itens que **não** entram no repositório — ficam com operação / marketing / CRM:
+
+1. **Reunião Rubeus** — alinhar etapas canônicas por processo e o que deve
+   aparecer no funil (qualificados vs intenção). O mapa no painel (`#/etapas`)
+   só aplica a decisão; não a inventa.
+2. **Tags RD Marketing** — revisar automações e tags que inflacionam leads (pico
+   artificial). O Macro alerta quando leads RD > 2× a média histórica; o número
+   continua visível.
+3. **gclid no site** — garantir captura na landing e devolução ao Rubeus (campo
+   personalizado + tag `/coleta/ide-clique.js`). Ver pendências de conversão
+   offline acima.
+4. **Ações Google Ads** — criar/confirmar ações `UPLOAD_CLICKS` por evento ×
+   nível; aceitar termos de dados do cliente.
+
+### Limitação: fichas duplicadas no CRM
+
+O Rubeus às vezes emite **mais de um id de contato** para a mesma pessoa
+(e-mail/telefone repetidos). O painel junta pelo e-mail/telefone quando consegue,
+e marca "N cadastros no CRM" na lista de leads — mas **não deduplica fichas no
+Rubeus**. Contagens de funil podem ainda refletir a duplicata se os ids não
+compartilham identificador. Limpeza de cadastro é operação no CRM, não neste
+painel.

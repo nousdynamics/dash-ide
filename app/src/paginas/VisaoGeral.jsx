@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Cartao, ChipDelta, Estado, Esqueleto } from '../componentes/base';
-import { FiltroPeriodo } from '../componentes/FiltroPeriodo';
+import { BarraFiltros } from '../componentes/BarraFiltros';
 import { GraficoArea, GraficoBarras, GraficoCombinado, Ranking } from '../componentes/Graficos';
 import { CardsPersonalizados, EditorMetricas } from '../componentes/MetricasPersonalizadas';
 import { useApi } from '../lib/api';
@@ -103,7 +103,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
             ` · comparado com ${fmtDiaMes(dados[0].comparacao.periodo.de)} a ${fmtDiaMes(dados[0].comparacao.periodo.ate)}`}
         </div>
       </div>
-      <FiltroPeriodo filtro={filtro} aoTrocar={setFiltro} />
+      <BarraFiltros filtro={filtro} aoTrocar={setFiltro} />
     </>
   );
 
@@ -149,8 +149,6 @@ export function VisaoGeral({ filtro, setFiltro }) {
    * Contexto das fórmulas.
    *
    * Cada ação de conversão vira `acao_<nome>` a partir do dado real da API.
-   * `visualizacoes_pagina` soma ações cujo nome é visualização de página —
-   * base do Connect rate (visualizações ÷ cliques).
    */
   const idDaAcao = (nome) =>
     'acao_' +
@@ -161,24 +159,35 @@ export function VisaoGeral({ filtro, setFiltro }) {
       .replace(/[^a-z0-9]+/g, '_')
       .replace(/^_+|_+$/g, '');
 
-  const ehVisualizacaoPagina = (nome) => {
-    const n = (nome || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase();
-    return (
-      (n.includes('visualizacao') && n.includes('pagina')) ||
-      n.includes('page_view') ||
-      n.includes('page view')
-    );
-  };
+  /*
+   * `visualizacoes_pagina` sai da categoria + origem da ação, não do nome dela.
+   *
+   * Antes esta soma procurava "visualização de página" / "page view" no nome.
+   * Na conta da IDE as ações com esse nome foram removidas há tempo, então nada
+   * casava, a soma dava 0, e o Connect rate exibia "0%" — que se lê como
+   * "medimos e deu zero", não como "não achei nada para medir".
+   *
+   * Categoria e origem vêm do Google e são estáveis: renomear a ação não muda
+   * nenhuma das duas. A origem importa porque PAGE_VIEW sozinho ainda pega
+   * "Local actions - Menu views", que é visualização no Perfil da Empresa, não
+   * na landing — e Connect rate é clique que chegou na página.
+   */
+  const ehVisualizacaoPagina = (i) => i.categoria === 'PAGE_VIEW' && i.origem === 'WEBSITE';
 
   const porAcao = {};
-  let visualizacoesPagina = 0;
+  const acoesDePagina = [];
   for (const i of acoes.itens || []) {
     porAcao[idDaAcao(i.acao)] = i.resultados;
-    if (ehVisualizacaoPagina(i.acao)) visualizacoesPagina += i.resultados;
+    if (ehVisualizacaoPagina(i)) acoesDePagina.push(i);
   }
+
+  /*
+   * Sem nenhuma ação de página no período, o valor é `null`, não 0: o card
+   * mostra o motivo em vez de um zero que parece medição. Ver formula.js.
+   */
+  const visualizacoesPagina = acoesDePagina.length
+    ? acoesDePagina.reduce((s, i) => s + i.resultados, 0)
+    : null;
 
   const ctxMetricas = {
     investimento: t.investimento,
@@ -193,7 +202,16 @@ export function VisaoGeral({ filtro, setFiltro }) {
   };
 
   const basesComAcoes = [
-    ...(metricas.bases || []),
+    ...(metricas.bases || []).map((b) =>
+      b.id === 'visualizacoes_pagina'
+        ? {
+            ...b,
+            ajuda: acoesDePagina.length
+              ? `Soma das ações de página do site: ${acoesDePagina.map((i) => i.acao).join(', ')}`
+              : 'Nenhuma ação de visualização de página do site registrou resultado no período',
+          }
+        : b,
+    ),
     ...(acoes.itens || []).map((i) => ({
       id: idDaAcao(i.acao),
       rotulo: i.acao,

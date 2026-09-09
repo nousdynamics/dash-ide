@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import * as identidade from './identidade';
 
 /**
  * Schemas de corpo dos webhooks do Rubeus e da Evolution API.
@@ -62,30 +63,41 @@ const aliases = (dado: unknown, nomes: string[]): unknown => {
 };
 
 /** Normaliza o corpo antes da validação, mapeando os apelidos conhecidos. */
-/**
- * E-mail em minúsculas — é a chave que casa com o RD Station, e "Joao@" e
- * "joao@" são a mesma pessoa em todo servidor de e-mail que importa.
+/*
+ * A normalização de identidade NÃO mora mais aqui.
+ *
+ * Ela existia em duplicata — uma cópia neste arquivo, usada quando o webhook
+ * grava o lead, e outra em `cliques.ts`, usada quando o script do site grava a
+ * captura do clique. As duas precisam produzir exatamente a mesma string,
+ * porque é por igualdade dela que o clique encontra o lead depois. Duas cópias
+ * ficam iguais só até alguém corrigir uma; o sintoma seria o cruzamento parar
+ * de casar, sem erro em lugar nenhum. Agora as duas pontas importam a mesma
+ * função — ver `src/lib/identidade.ts`.
+ *
+ * As versões daqui devolviam `undefined` e as de lá `null`; os wrappers
+ * mantêm o contrato que o Zod espera neste arquivo.
  */
-const normalizarEmail = (v: unknown): string | undefined => {
-  if (typeof v !== 'string') return undefined;
-  const e = v.trim().toLowerCase();
-  return e.includes('@') && e.length > 3 ? e : undefined;
-};
+const normalizarEmail = (v: unknown): string | undefined =>
+  identidade.normalizarEmail(v) ?? undefined;
+
+const normalizarTelefone = (v: unknown): string | undefined =>
+  identidade.normalizarTelefone(v) ?? undefined;
 
 /**
- * Telefone só com dígitos, com DDI.
+ * "1.250,00", "1250.00", "R$ 1.250" → 1250.
  *
- * O Rubeus manda "+5581999820742"; a Evolution manda
- * "5581999820742@s.whatsapp.net". Sem normalizar, nenhuma conversa casaria com
- * o lead que a originou. Número sem DDI ganha o 55: é uma faculdade de Recife,
- * e um celular brasileiro tem 10 ou 11 dígitos com DDD.
+ * O Rubeus manda texto, com a formatação que quem cadastrou digitou. O ponto só
+ * é tratado como separador de milhar quando vem seguido de exatamente três
+ * dígitos: sem essa checagem, "1250.00" viraria 125000 e a conversão subiria
+ * com cem vezes o valor da matrícula.
  */
-const normalizarTelefone = (v: unknown): string | undefined => {
-  if (typeof v !== 'string' && typeof v !== 'number') return undefined;
-  let d = String(v).split('@')[0]!.replace(/\D/g, '');
-  if (d.length === 10 || d.length === 11) d = `55${d}`;
-  return d.length >= 12 && d.length <= 15 ? d : undefined;
-};
+function valorMonetario(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const bruto = String(v).replace(/[^\d.,-]/g, '');
+  if (!bruto) return null;
+  const n = Number(bruto.replace(/\.(?=\d{3}\b)/g, '').replace(',', '.'));
+  return Number.isFinite(n) && n > 0 && n < 1_000_000 ? n : null;
+}
 
 export const normalizarEtapa = (bruto: unknown): unknown => {
   /*
@@ -154,6 +166,36 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
   );
   if (telefone) o.telefone = telefone;
   else delete o.telefone;
+  /*
+   * Endereço: a terceira via de atribuição do Google.
+   *
+   * Nome + sobrenome + país + CEP formam um identificador próprio, que alcança
+   * justamente o lead sem gclid e sem e-mail. A Ficha de Inscrição do Rubeus
+   * manda `cep`, `cidade` e `estado` no corpo — conferido nos payloads reais
+   * guardados em `eventos_recebidos`. Só faltava alguém ler.
+   */
+  const cep = identidade.normalizarCep(aliases(bruto, ['cep', 'codigo_postal', 'postal_code', 'endereco.cep']));
+  if (cep) o.cep = cep; else delete o.cep;
+  preencher('cidade', ['cidade', 'municipio', 'endereco.cidade', 'city']);
+  preencher('estado', ['estado', 'uf', 'endereco.estado', 'endereco.uf']);
+
+  /*
+   * O valor do curso, que o painel jurava não existir.
+   *
+   * O README afirmava que o Rubeus não tem preço em lugar nenhum — verdade para
+   * a API (`valorCurso` nulo em toda oportunidade, `valor` nulo nas 689
+   * ofertas), falso para o webhook, que manda `valor_do_curso` no corpo. Sem
+   * ler isto, toda conversão sobe com o valor fixo digitado na tela e o Smart
+   * Bidding otimiza para um preço que não é o da matrícula que aconteceu.
+   */
+  const valor = valorMonetario(aliases(bruto, [
+    'valor_do_curso', 'valorCurso', 'valor_curso', 'valor', 'preco', 'valorTotal',
+  ]));
+  if (valor !== null) o.valor_curso = valor; else delete o.valor_curso;
+
+  /* Onde a pessoa entrou — diz em qual página vale colar a tag de captura. */
+  preencher('url_origem', ['url_origem.0', 'url_origem', 'urlOrigem', 'origem_url', 'landing_page', 'pagina']);
+
   preencher('registrado_em', ['data', 'data_hora', 'dataHora', 'criacao', 'timestamp', 'ocorrido_em', 'registradoEm']);
   preencher('processo_nome', ['processo.nome', 'processoNome', 'funil', 'processo']);
   preencher('processo_id', ['processo.id', 'processoId', 'id_processo']);
@@ -192,6 +234,18 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
     'cursos.0.nomeOferta', 'curso.nomeOferta', 'nomeOferta', 'oferta.nome',
     'nome_da_oferta', 'nome_oferta', 'ofertaNome', 'oferta',
   ]);
+  /*
+   * Identificador de clique, quando o Rubeus mandar.
+   *
+   * Hoje não manda: o campo personalizado de gclid ainda não existe no CRM, e
+   * era exatamente isso que fazia o fluxo do n8n cair sempre no ramo "sem click
+   * ID". Os aliases cobrem as grafias plausíveis para que, no minuto em que o
+   * campo for criado e marcado nos parâmetros do webhook, a atribuição por
+   * clique passe a valer sem deploy — igual ao que já se fez com `oferta_nome`.
+   */
+  preencher('gclid', ['gclid', 'GCLID', 'google_click_id', 'googleClickId', 'camposPersonalizados.gclid']);
+  preencher('gbraid', ['gbraid', 'GBRAID', 'camposPersonalizados.gbraid']);
+  preencher('wbraid', ['wbraid', 'WBRAID', 'camposPersonalizados.wbraid']);
   preencher('modalidade', ['modalidade.nome', 'modalidade']);
   preencher('responsavel_comercial', ['responsavel.nome', 'responsavel', 'consultor']);
   // O `id` do topo só é o registro de processo quando o contato veio aninhado.
@@ -256,6 +310,21 @@ export const etapaSchema = z.object({
   responsavel_comercial: z.string().nullish(),
   email: z.string().nullish(),
   telefone: z.string().nullish(),
+  /* Endereço — completa o identificador de endereço do Google. */
+  cep: z.string().nullish(),
+  cidade: z.string().nullish(),
+  estado: z.string().nullish(),
+  /* Valor real da matrícula, quando o webhook o traz. Vence o valor da tela. */
+  valor_curso: z.coerce.number().positive().max(1_000_000).nullish(),
+  url_origem: z.string().max(500).nullish(),
+  /*
+   * Só UM destes tem valor por clique — o Google nunca manda dois. Ficam como
+   * campos independentes, e não como um par tipo/valor, porque é assim que a
+   * origem os entrega: cada um é um campo próprio no formulário.
+   */
+  gclid: z.string().nullish(),
+  gbraid: z.string().nullish(),
+  wbraid: z.string().nullish(),
 });
 
 /**
@@ -309,11 +378,16 @@ const periodoCampos = {
 };
 
 export const funilQuerySchema = z.object({
+  /** Um id ou vários separados por vírgula (`1,3`). */
   funil_id: z.string().min(1).optional(),
   ...periodoCampos,
   curso_codigo: z.string().min(1).optional(),
+  /** Oferta Rubeus (turma/campus); CSV para multi-seleção. */
+  oferta_codigo: z.string().min(1).optional(),
   categoria: z.string().min(1).optional(),
   modalidade: z.string().min(1).optional(),
+  unidade: z.string().min(1).optional(),
+  origem: z.string().min(1).optional(),
   processo_id: z.string().min(1).optional(),
 });
 
@@ -330,8 +404,13 @@ export const pessoasDaEtapaQuerySchema = z.object({
   /* Desempata as linhas não classificadas, que são agrupadas por funil. */
   funil_nome: z.string().optional(),
   curso_codigo: z.string().min(1).optional(),
+  oferta_codigo: z.string().min(1).optional(),
   categoria: z.string().min(1).optional(),
   modalidade: z.string().min(1).optional(),
+  unidade: z.string().min(1).optional(),
+  origem: z.string().min(1).optional(),
+  funil_id: z.string().min(1).optional(),
+  processo_id: z.string().min(1).optional(),
   pagina: z.coerce.number().int().min(1).default(1),
   por_pagina: z.coerce.number().int().min(1).max(200).default(50),
 });
@@ -339,10 +418,43 @@ export const pessoasDaEtapaQuerySchema = z.object({
 export const macroQuerySchema = z.object({
   ...periodoCampos,
   curso_codigo: z.string().min(1).optional(),
+  oferta_codigo: z.string().min(1).optional(),
   categoria: z.string().min(1).optional(),
   modalidade: z.string().min(1).optional(),
+  unidade: z.string().min(1).optional(),
+  origem: z.string().min(1).optional(),
+  funil_id: z.string().min(1).optional(),
+  processo_id: z.string().min(1).optional(),
   comparar: z
     .union([z.literal('1'), z.literal('0'), z.literal('true'), z.literal('false')])
     .optional()
     .transform((v) => v === undefined || v === '1' || v === 'true'),
+});
+
+const MACRO_ETAPAS_EDIT = z.enum([
+  'qualificados',
+  'oportunidade',
+  'inscricao',
+  'matricula',
+  'lead',
+  'ignorar',
+]);
+
+export const patchEtapaSchema = z.object({
+  processo_id: z.string().min(1),
+  etapa_nome: z.string().min(1),
+  macro_etapa: z.union([MACRO_ETAPAS_EDIT, z.null()]).optional(),
+  ordem: z.number().int().min(0).max(10_000).optional(),
+  visivel: z.boolean().optional(),
+});
+
+export const reordenarEtapasSchema = z.object({
+  processo_id: z.string().min(1),
+  itens: z
+    .array(z.object({
+      etapa_nome: z.string().min(1),
+      ordem: z.number().int().min(0).max(10_000),
+    }))
+    .min(1)
+    .max(200),
 });

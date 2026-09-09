@@ -1,3 +1,5 @@
+import { inferirOrdemEtapa } from './etapas';
+
 /**
  * Cliente da API CRM Rubeus.
  *
@@ -127,6 +129,18 @@ export type OportunidadeRubeus = {
   unidadeNome?: string;
   nivelEnsinoNome?: string;
   momento?: string;
+  /*
+   * O valor real do curso, quando existir.
+   *
+   * `valorCurso` é campo nativo da oportunidade e `VALOR DO CURSO` é um campo
+   * personalizado do cadastro de Curso. Os dois vieram vazios em todas as 689
+   * ofertas do catálogo e nas 55 oportunidades conferidas — por isso o painel
+   * mantém a própria tabela de valores. Ficam mapeados aqui para que, no dia em
+   * que a faculdade preencher, o valor de verdade vença o cadastrado à mão sem
+   * precisar de código novo.
+   */
+  valorCurso?: string | number | null;
+  camposPersonalizados?: Record<string, unknown>;
 };
 
 /** GET /api/Curso/listarCursos */
@@ -191,11 +205,24 @@ export async function dadosRegistro(
 export function inferirMacroEtapa(nome: string): string | null {
   const n = nome.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().trim();
   if (!n || n.startsWith('(etapa')) return 'ignorar';
+  /*
+   * Intenção / início de ficha: a Ata e a 0019/0027 pedem decisão humana.
+   * Classificar sozinho (por conter "inscri") recolocava "iniciou o processo"
+   * e "pré-inscrição" no funil sem querer.
+   */
+  if (
+    n.includes('iniciou') ||
+    n.includes('parcial') ||
+    n.includes('pre-inscri') ||
+    n.includes('pre_inscri')
+  ) {
+    return null;
+  }
   if (n.includes('matricula')) return 'matricula';
   if (n.includes('apto')) return 'matricula';
   if (n.includes('inscrito') || n.includes('inscri')) return 'inscricao';
   if (n.includes('oportunidade')) return 'oportunidade';
-  if (n.includes('qualific')) return 'qualificado';
+  if (n.includes('qualific')) return 'qualificados';
   if (n.includes('novo lead') || n.includes('conex') || n.includes('lead')) return 'lead';
   return null;
 }
@@ -462,6 +489,7 @@ export async function sincronizarEtapasDeOportunidades(
         const chave = `${processoId}::${nome}`;
         if (vistos.has(chave)) continue;
         vistos.add(chave);
+        const macro = inferirMacroEtapa(nome);
         stmts.push(
           db.prepare(
             `INSERT INTO processo_etapas (processo_id, etapa_id, etapa_nome, ordem, macro_etapa, atualizado_em)
@@ -474,8 +502,8 @@ export async function sincronizarEtapasDeOportunidades(
             processoId,
             o.etapa != null ? String(o.etapa) : null,
             nome,
-            100,
-            inferirMacroEtapa(nome),
+            inferirOrdemEtapa(nome, macro),
+            macro,
           ),
         );
       }
@@ -502,6 +530,7 @@ export async function aprenderEtapaDoEvento(
   const pid = processoId != null ? String(processoId) : '';
   const nome = (etapaNome || '').trim();
   if (!pid || !nome) return;
+  const macro = inferirMacroEtapa(nome);
   await db.prepare(
     `INSERT INTO processo_etapas (processo_id, etapa_id, etapa_nome, ordem, macro_etapa, atualizado_em)
      VALUES (?, ?, ?, ?, ?, datetime('now'))
@@ -509,6 +538,78 @@ export async function aprenderEtapaDoEvento(
        etapa_id = COALESCE(excluded.etapa_id, processo_etapas.etapa_id),
        atualizado_em = excluded.atualizado_em`,
   )
-    .bind(pid, etapaId ?? null, nome, 100, inferirMacroEtapa(nome))
+    .bind(pid, etapaId ?? null, nome, inferirOrdemEtapa(nome, macro), macro)
     .run();
+}
+
+// ------------------------------------------------- campos personalizados
+
+export type CampoPersonalizado = {
+  id?: string;
+  nome?: string;
+  coluna?: string;
+  tipoNome?: string;
+  tipoLocalNome?: string;   // 'Contato' | 'Registro de processo' | 'Curso'
+};
+
+/** GET /api/Instituicao/campoPersonalizado — catálogo dos campos da conta. */
+export async function listarCamposPersonalizados(env: Env): Promise<CampoPersonalizado[]> {
+  const resp = await getJson(env, '/api/Instituicao/campoPersonalizado');
+  return listaDe<CampoPersonalizado>(resp);
+}
+
+const semAcento = (s: unknown): string =>
+  String(s ?? '').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+/**
+ * Acha, pelo NOME, a coluna do campo que guarda o identificador de clique.
+ *
+ * Descoberta em vez de configuração fixa. A coluna do Rubeus
+ * (`campopersonalizado_24_compl_cont`) é um número de slot: recriar o campo
+ * gera outro número, e um valor fixo no código passaria a escrever no campo
+ * errado — em cima de "Profissão", por exemplo — sem nenhum erro visível.
+ * Procurar pelo nome que a pessoa deu ao campo é o que sobrevive a isso.
+ *
+ * Só campos de Contato. O mesmo nome pode existir no Registro de processo, e
+ * escrever no lugar errado é o modo de falha mais caro aqui.
+ */
+export async function acharColunaClickId(
+  env: Env,
+): Promise<{ gclid?: string; gbraid?: string; wbraid?: string }> {
+  const campos = await listarCamposPersonalizados(env);
+  const doContato = campos.filter((c) => semAcento(c.tipoLocalNome) === 'contato');
+
+  const achar = (alvo: string): string | undefined =>
+    doContato.find((c) => semAcento(c.nome).includes(alvo) || semAcento(c.coluna).includes(alvo))?.coluna;
+
+  return { gclid: achar('gclid'), gbraid: achar('gbraid'), wbraid: achar('wbraid') };
+}
+
+/**
+ * Escreve um campo personalizado no contato.
+ *
+ * `/api/Contato/cadastro` é o mesmo endpoint de criação — não existe um
+ * "atualizar só este campo". Por isso o corpo leva o mínimo possível: o `id` do
+ * contato para dizer QUEM, o e-mail principal porque a API exige um
+ * identificador de contato, e o campo a gravar. Qualquer coisa a mais seria
+ * reescrever cadastro que alguém preencheu à mão no CRM.
+ *
+ * Quem chama precisa ter conferido o interruptor `escrever_no_rubeus` antes:
+ * esta função não pergunta, ela escreve.
+ */
+export async function gravarCampoDoContato(
+  env: Env,
+  contatoId: string,
+  emailPrincipal: string | null,
+  coluna: string,
+  valor: string,
+): Promise<void> {
+  await postJson(env, '/api/Contato/cadastro', {
+    id: Number(contatoId) || contatoId,
+    ...(emailPrincipal ? { emailPrincipal } : {}),
+    camposPersonalizados: { [coluna]: valor },
+  });
+  console.log(JSON.stringify({
+    evento: 'rubeus_campo_gravado', contato_id: contatoId, coluna,
+  }));
 }

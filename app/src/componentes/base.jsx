@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { fmtDec } from '../lib/formato';
 
 export function Cartao({ children, className = '' }) {
@@ -37,14 +38,26 @@ export function Switch({ ligado, aoTrocar, children }) {
   );
 }
 
-export function Select({ valor, aoTrocar, opcoes, rotulo }) {
+/**
+ * Sem largura na base — o `<select>` se ajusta ao conteúdo.
+ *
+ * Tinha `w-full`, e isso quebrava toda barra de filtros: dentro de um
+ * `flex-wrap`, largura 100% obriga cada controle a ocupar a linha sozinho. Era
+ * o que fazia o seletor de mês atravessar a tela inteira em Campanhas e os três
+ * filtros empilharem um embaixo do outro.
+ *
+ * Quem precisa preencher a célula — grade de filtros, campo de formulário —
+ * pede `className="w-full"`. É a exceção declarada no lugar de a regra
+ * imposta a todo mundo.
+ */
+export function Select({ valor, aoTrocar, opcoes, rotulo, className = '' }) {
   return (
     <select
       aria-label={rotulo}
       value={valor}
       onChange={(e) => aoTrocar(e.target.value)}
-      className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                 px-2 py-[5px] text-xs font-sans cursor-pointer hover:bg-superficie-hover"
+      className={`min-w-0 bg-superficie text-primario border border-borda-forte rounded-[8px]
+                 px-2 py-[5px] text-xs font-sans cursor-pointer hover:bg-superficie-hover ${className}`}
     >
       {opcoes.map(([v, r]) => (
         <option key={v} value={v}>
@@ -52,6 +65,128 @@ export function Select({ valor, aoTrocar, opcoes, rotulo }) {
         </option>
       ))}
     </select>
+  );
+}
+
+/**
+ * Multi-seleção com checkboxes — um filtro pode somar várias opções (ex.: Pós + Qualificação).
+ * `valores` é string[]; vazio = “todas”.
+ */
+export function MultiSelect({
+  valores = [],
+  aoTrocar,
+  opcoes,
+  rotulo,
+  rotuloVazio = 'Todas',
+  className = '',
+}) {
+  const [aberto, setAberto] = useState(false);
+  const raiz = useRef(null);
+
+  useEffect(() => {
+    if (!aberto) return undefined;
+    const fechar = (e) => {
+      if (raiz.current && !raiz.current.contains(e.target)) setAberto(false);
+    };
+    const esc = (e) => {
+      if (e.key === 'Escape') setAberto(false);
+    };
+    document.addEventListener('mousedown', fechar);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', fechar);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [aberto]);
+
+  const selecionados = new Set((valores ?? []).map(String).filter(Boolean));
+  const rotulosSel = opcoes
+    .filter(([v]) => v !== '' && selecionados.has(String(v)))
+    .map(([, r]) => r);
+
+  let texto = rotuloVazio;
+  if (rotulosSel.length === 1) texto = rotulosSel[0];
+  else if (rotulosSel.length === 2) texto = rotulosSel.join(', ');
+  else if (rotulosSel.length > 2) texto = `${rotulosSel.length} selecionados`;
+
+  const alternar = (v) => {
+    const id = String(v);
+    if (!id) {
+      aoTrocar([]);
+      return;
+    }
+    const prox = new Set(selecionados);
+    if (prox.has(id)) prox.delete(id);
+    else prox.add(id);
+    aoTrocar([...prox]);
+  };
+
+  return (
+    <div ref={raiz} className={`relative min-w-0 ${className}`}>
+      <button
+        type="button"
+        aria-label={rotulo}
+        aria-expanded={aberto}
+        aria-haspopup="listbox"
+        onClick={() => setAberto((a) => !a)}
+        className="w-full min-w-0 flex items-center justify-between gap-1 bg-superficie text-primario
+                   border border-borda-forte rounded-[8px] px-2 py-[5px] text-xs font-sans
+                   cursor-pointer hover:bg-superficie-hover text-left"
+      >
+        <span className="truncate">{texto}</span>
+        <span className="text-tenue shrink-0 text-[10px]" aria-hidden="true">
+          {aberto ? '▴' : '▾'}
+        </span>
+      </button>
+      {aberto && (
+        <div
+          role="listbox"
+          aria-multiselectable="true"
+          aria-label={rotulo}
+          className="absolute z-40 left-0 right-0 mt-1 max-h-56 overflow-auto rounded-[8px]
+                     border border-borda-forte bg-elevado shadow-lg py-1"
+        >
+          <button
+            type="button"
+            role="option"
+            aria-selected={selecionados.size === 0}
+            onClick={() => {
+              aoTrocar([]);
+              setAberto(false);
+            }}
+            className={`w-full text-left px-2.5 py-1.5 text-xs border-0 cursor-pointer
+              ${selecionados.size === 0 ? 'bg-azul-600/15 text-azul-700' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
+          >
+            {rotuloVazio}
+          </button>
+          {opcoes
+            .filter(([v]) => v !== '')
+            .map(([v, r]) => {
+              const on = selecionados.has(String(v));
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  role="option"
+                  aria-selected={on}
+                  onClick={() => alternar(v)}
+                  className={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 text-xs border-0 cursor-pointer
+                    ${on ? 'bg-azul-600/15 text-primario' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`shrink-0 w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center text-[9px]
+                      ${on ? 'bg-azul-600 border-azul-600 text-white' : 'border-borda-forte bg-superficie'}`}
+                  >
+                    {on ? '✓' : ''}
+                  </span>
+                  <span className="truncate">{r}</span>
+                </button>
+              );
+            })}
+        </div>
+      )}
+    </div>
   );
 }
 

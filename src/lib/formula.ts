@@ -110,6 +110,9 @@ function analisar(tokens: Token[], ctx: Contexto): number {
        */
       if (!Object.hasOwn(ctx, t.v)) throw new FormulaInvalida(`métrica desconhecida: "${t.v}"`);
       const v = ctx[t.v];
+      // `null` é ausência declarada, não zero. Ver o mesmo trecho em
+      // app/src/lib/formula.js — os dois avaliadores andam juntos.
+      if (v === null) throw new FormulaInvalida(`sem dado no período para "${t.v}"`);
       if (typeof v !== 'number') throw new FormulaInvalida(`métrica sem valor numérico: "${t.v}"`);
       return v;
     }

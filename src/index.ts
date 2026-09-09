@@ -1,9 +1,12 @@
 import { Hono } from 'hono';
 import { exigirAcesso } from './lib/access';
+import { rodadaDiaria, rodadaLeve } from './lib/conversoes';
 import { reconciliarRubeus } from './lib/sync';
 import type { AppEnv } from './lib/tipos';
 import ads from './routes/ads';
 import api from './routes/api';
+import coleta from './routes/coleta';
+import conversoesRotas from './routes/conversoes';
 import funisRotas from './routes/funis';
 import metricasRotas from './routes/metricas';
 import oauth from './routes/oauth';
@@ -38,6 +41,15 @@ app.use('*', async (c, next) => {
 app.route('/webhook', webhooks);
 
 /**
+ * POST /coleta/* — chamado pelo NAVEGADOR de quem visita o site da faculdade.
+ *
+ * Fora do Access pelo mesmo motivo que `/webhook`: quem chama é um visitante
+ * anônimo, sem sessão. A porta aceita só entrada — nenhuma rota aqui devolve
+ * dado guardado — e confere o `Origin` contra a lista de sites permitidos.
+ */
+app.route('/coleta', coleta);
+
+/**
  * GET /api/* — consumidos pelo painel, atrás do Cloudflare Access.
  *
  * O middleware confere o JWT assinado do Access, não o header de e-mail: header
@@ -53,6 +65,7 @@ app.route('/oauth', oauth);
 app.route('/api/funis', funisRotas);
 app.route('/api/metricas', metricasRotas);
 app.route('/api/ads', ads);
+app.route('/api/conversoes', conversoesRotas);
 app.route('/api', api);
 
 /** Sonda de saúde — útil pra confirmar deploy e binding do D1 sem tocar em dado. */
@@ -85,7 +98,33 @@ app.onError((err, c) => {
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(reconciliarRubeus(env));
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    /*
+     * Dois cron para dois relógios diferentes.
+     *
+     * O diário é o pesado: reconcilia o catálogo do Rubeus e sobe a planilha.
+     * O de meia em meia hora existe por causa do relógio do Google — a Data
+     * Manager API só devolve o resultado do processamento 30 minutos depois da
+     * ingestão, e com apenas a passada diária todo veredito chegaria com um dia
+     * de atraso, com a tela dizendo "enviada" para conversão recusada nesse
+     * meio-tempo.
+     */
+    if (event.cron !== '0 9 * * *') {
+      ctx.waitUntil(rodadaLeve(env));
+      return;
+    }
+
+    /*
+     * Nesta ordem, e não em paralelo.
+     *
+     * A reconciliação do Rubeus é o que descobre o curso — e portanto o nível
+     * de ensino — de quem chegou sem ele. A rodada de conversões escolhe a ação
+     * do Google pelo nível. Invertendo, a fila do dia inteiro cairia na ação
+     * curinga por falta de um dado que estava a um passo de existir.
+     */
+    ctx.waitUntil((async () => {
+      await reconciliarRubeus(env);
+      await rodadaDiaria(env);
+    })());
   },
 };

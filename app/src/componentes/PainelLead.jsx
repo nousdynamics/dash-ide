@@ -131,7 +131,7 @@ export function PainelLead({ contatoId, aoFechar }) {
                   ['Funis', funis.map((f) => f.funil).join(', ')],
                   ['Origem', dados.origem],
                   ['Unidade', dados.unidade],
-                  ['Curso', dados.curso_codigo],
+                  ['Oferta', dados.oferta_nome || dados.oferta_codigo || dados.curso_codigo],
                   ['Responsável', dados.responsavel_comercial],
                   ['Primeiro evento', dados.primeiro_em && fmtDataHora(dados.primeiro_em)],
                   ['Último evento', dados.ultimo_em && fmtDataHora(dados.ultimo_em)],

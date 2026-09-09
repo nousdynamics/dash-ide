@@ -13,8 +13,10 @@ import {
   funilQuerySchema,
   macroQuerySchema,
   paginacaoQuerySchema,
+  patchEtapaSchema,
   periodoQuerySchema,
   pessoasDaEtapaQuerySchema,
+  reordenarEtapasSchema,
 } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 
@@ -73,28 +75,121 @@ const CATEGORIA_ROTULOS: Record<string, string> = {
 
 type FonteEtapa = 'rd_marketing' | 'rubeus' | 'planilha' | 'misto' | 'indisponivel';
 
+/** Aceita valor único ou lista CSV (`a,b,c`) — multi-seleção dos filtros do funil. */
+function listaCsv(v?: string | null): string[] {
+  if (!v) return [];
+  return [...new Set(v.split(',').map((s) => s.trim()).filter(Boolean))];
+}
+
+function inSql(expr: string, n: number): string {
+  return `${expr} IN (${Array.from({ length: n }, () => '?').join(',')})`;
+}
+
 /**
- * Filtros compartilhados de curso/categoria/modalidade sobre `leads_etapa`.
- * Categoria resolve por código cadastrado ou padrão LIKE no nome do curso.
+ * Filtros CRM sobre `leads_etapa` (curso, categoria, modalidade, unidade, origem, funil/processo).
+ * Cada campo aceita um ou vários valores (CSV). Categoria resolve via view `curso_categoria`.
  */
 function clausulasFiltroCurso(opts: {
-  curso_codigo?: string;
-  categoria?: string;
-  modalidade?: string;
+  curso_codigo?: string | string[];
+  oferta_codigo?: string | string[];
+  categoria?: string | string[];
+  modalidade?: string | string[];
+  unidade?: string | string[];
+  origem?: string | string[];
+  funil_id?: number | number[] | null;
+  processo_id?: string | string[] | null;
   alias?: string;
 }): { sql: string; binds: unknown[] } {
   const a = opts.alias ? `${opts.alias}.` : '';
   const binds: unknown[] = [];
   const partes: string[] = [];
+  const asList = (v?: string | string[] | null): string[] =>
+    Array.isArray(v) ? v.filter(Boolean) : listaCsv(v ?? undefined);
 
-  if (opts.curso_codigo) {
+  /*
+   * Oferta do Rubeus (turma/campus/semestre), não o curso-pai.
+   * Aceita código da oferta ou id interno da tabela curso_ofertas.
+   */
+  const ofertas = asList(opts.oferta_codigo);
+  if (ofertas.length === 1) {
+    const v = ofertas[0];
+    partes.push(`(
+      ${a}oferta_codigo = ?
+      OR ${a}curso_id = ?
+      OR ${a}curso_id IN (SELECT id FROM curso_ofertas WHERE oferta_codigo = ?)
+      OR ${a}oferta_codigo IN (SELECT oferta_codigo FROM curso_ofertas WHERE id = ?)
+    )`);
+    binds.push(v, v, v, v);
+  } else if (ofertas.length > 1) {
+    const ph = ofertas.map(() => '?').join(',');
+    partes.push(`(
+      ${inSql(`${a}oferta_codigo`, ofertas.length)}
+      OR ${inSql(`${a}curso_id`, ofertas.length)}
+      OR ${a}curso_id IN (SELECT id FROM curso_ofertas WHERE oferta_codigo IN (${ph}) OR id IN (${ph}))
+      OR ${a}oferta_codigo IN (SELECT oferta_codigo FROM curso_ofertas WHERE id IN (${ph}))
+    )`);
+    binds.push(...ofertas, ...ofertas, ...ofertas, ...ofertas, ...ofertas);
+  }
+
+  const cursos = asList(opts.curso_codigo);
+  if (cursos.length === 1) {
     partes.push(`(${a}curso_codigo = ? OR ${a}curso_id = ?)`);
-    binds.push(opts.curso_codigo, opts.curso_codigo);
+    binds.push(cursos[0], cursos[0]);
+  } else if (cursos.length > 1) {
+    partes.push(`(${inSql(`${a}curso_codigo`, cursos.length)} OR ${inSql(`${a}curso_id`, cursos.length)})`);
+    binds.push(...cursos, ...cursos);
   }
-  if (opts.modalidade) {
+
+  const modalidades = asList(opts.modalidade);
+  if (modalidades.length === 1) {
     partes.push(`lower(${a}modalidade) = lower(?)`);
-    binds.push(opts.modalidade);
+    binds.push(modalidades[0]);
+  } else if (modalidades.length > 1) {
+    partes.push(`(${modalidades.map(() => `lower(${a}modalidade) = lower(?)`).join(' OR ')})`);
+    binds.push(...modalidades);
   }
+
+  const unidades = asList(opts.unidade);
+  if (unidades.length === 1) {
+    partes.push(`lower(${a}unidade) = lower(?)`);
+    binds.push(unidades[0]);
+  } else if (unidades.length > 1) {
+    partes.push(`(${unidades.map(() => `lower(${a}unidade) = lower(?)`).join(' OR ')})`);
+    binds.push(...unidades);
+  }
+
+  const origens = asList(opts.origem);
+  if (origens.length === 1) {
+    partes.push(`lower(${a}origem) = lower(?)`);
+    binds.push(origens[0]);
+  } else if (origens.length > 1) {
+    partes.push(`(${origens.map(() => `lower(${a}origem) = lower(?)`).join(' OR ')})`);
+    binds.push(...origens);
+  }
+
+  const funilIds = (Array.isArray(opts.funil_id)
+    ? opts.funil_id
+    : opts.funil_id != null
+      ? [opts.funil_id]
+      : []
+  ).filter((n) => n != null && !Number.isNaN(n));
+  if (funilIds.length === 1) {
+    partes.push(`${a}funil_id = ?`);
+    binds.push(funilIds[0]);
+  } else if (funilIds.length > 1) {
+    partes.push(inSql(`${a}funil_id`, funilIds.length));
+    binds.push(...funilIds);
+  }
+
+  const processos = asList(opts.processo_id);
+  if (processos.length === 1) {
+    partes.push(`${a}processo_id = ?`);
+    binds.push(processos[0]);
+  } else if (processos.length > 1) {
+    partes.push(inSql(`${a}processo_id`, processos.length));
+    binds.push(...processos);
+  }
+
   /*
    * Categoria vem da view `curso_categoria`, que já resolveu nível, nome e
    * desempate. Antes o critério estava escrito aqui também, e em outra versão:
@@ -102,17 +197,52 @@ function clausulasFiltroCurso(opts: {
    * a graduação inteira, que só existe por semestre. Filtrar por "Graduação
    * Psicologia" não devolvia nada mesmo havendo inscrição.
    */
-  if (opts.categoria) {
+  const categorias = asList(opts.categoria);
+  if (categorias.length === 1) {
     partes.push(`EXISTS (
       SELECT 1 FROM curso_categoria cc
       WHERE cc.categoria = ?
         AND ((${a}curso_codigo IS NOT NULL AND cc.curso_codigo = ${a}curso_codigo)
           OR (${a}curso_id     IS NOT NULL AND cc.curso_id     = ${a}curso_id))
     )`);
-    binds.push(opts.categoria);
+    binds.push(categorias[0]);
+  } else if (categorias.length > 1) {
+    partes.push(`EXISTS (
+      SELECT 1 FROM curso_categoria cc
+      WHERE ${inSql('cc.categoria', categorias.length)}
+        AND ((${a}curso_codigo IS NOT NULL AND cc.curso_codigo = ${a}curso_codigo)
+          OR (${a}curso_id     IS NOT NULL AND cc.curso_id     = ${a}curso_id))
+    )`);
+    binds.push(...categorias);
   }
 
   return { sql: partes.length ? ` AND ${partes.join(' AND ')}` : '', binds };
+}
+
+function filtrosDaQuery(q: {
+  curso_codigo?: string;
+  oferta_codigo?: string;
+  categoria?: string;
+  modalidade?: string;
+  unidade?: string;
+  origem?: string;
+  funil_id?: string;
+  processo_id?: string;
+}, alias?: string) {
+  const funilIds = listaCsv(q.funil_id)
+    .map(Number)
+    .filter((n) => !Number.isNaN(n));
+  return clausulasFiltroCurso({
+    curso_codigo: listaCsv(q.curso_codigo),
+    oferta_codigo: listaCsv(q.oferta_codigo),
+    categoria: listaCsv(q.categoria),
+    modalidade: listaCsv(q.modalidade),
+    unidade: listaCsv(q.unidade),
+    origem: listaCsv(q.origem),
+    funil_id: funilIds.length ? funilIds : null,
+    processo_id: listaCsv(q.processo_id),
+    alias,
+  });
 }
 
 api.get('/me', (c) => c.json({
@@ -132,11 +262,11 @@ api.get('/overview', async (c) => {
   const [leads, leadsAnterior, conversas, conversasRecentes, serieLeads, origens, porHora] =
     await Promise.all([
     c.env.DB.prepare(
-      `SELECT COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total FROM leads_etapa WHERE registrado_em >= ?`,
+      `SELECT COUNT(DISTINCT pessoa_id) AS total FROM leads_etapa WHERE registrado_em >= ?`,
     ).bind(j.inicio).first(),
 
     c.env.DB.prepare(
-      `SELECT COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
+      `SELECT COUNT(DISTINCT pessoa_id) AS total
        FROM leads_etapa WHERE registrado_em >= ? AND registrado_em < ?`,
     ).bind(j.inicioAnterior, j.inicio).first(),
 
@@ -154,7 +284,7 @@ api.get('/overview', async (c) => {
 
     c.env.DB.prepare(
       `SELECT dia, COUNT(*) AS leads FROM (
-         SELECT COALESCE(email, telefone, contato_id) AS quem, MIN(${DIA_BR}) AS dia
+         SELECT pessoa_id AS quem, MIN(${DIA_BR}) AS dia
          FROM leads_etapa WHERE registrado_em >= ?
          GROUP BY quem
        ) GROUP BY dia ORDER BY dia`,
@@ -162,14 +292,14 @@ api.get('/overview', async (c) => {
 
     c.env.DB.prepare(
       `SELECT COALESCE(origem, '(sem origem)') AS origem,
-              COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
+              COUNT(DISTINCT pessoa_id) AS total
        FROM leads_etapa WHERE registrado_em >= ?
        GROUP BY origem ORDER BY total DESC LIMIT 8`,
     ).bind(j.inicio).all(),
 
     c.env.DB.prepare(
       `SELECT CAST(strftime('%H', registrado_em, '-3 hours') AS INTEGER) AS hora,
-              COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
+              COUNT(DISTINCT pessoa_id) AS total
        FROM leads_etapa WHERE registrado_em >= ?
        GROUP BY hora ORDER BY hora`,
     ).bind(j.inicio).all(),
@@ -208,10 +338,10 @@ api.get('/overview', async (c) => {
  */
 const CTE_ORIGEM_DA_PESSOA = `
   pessoa_curso AS (
-    SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+    SELECT l.pessoa_id AS pessoa,
            l.curso_codigo, l.curso_id, l.oferta_codigo, l.oferta_nome,
            ROW_NUMBER() OVER (
-             PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
+             PARTITION BY l.pessoa_id
              ORDER BY l.registrado_em DESC
            ) AS recencia
       FROM leads_etapa l
@@ -225,10 +355,10 @@ const CTE_ORIGEM_DA_PESSOA = `
       FROM pessoa_curso WHERE recencia = 1
   ),
   pessoa_funil AS (
-    SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+    SELECT l.pessoa_id AS pessoa,
            l.funil_id,
            ROW_NUMBER() OVER (
-             PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
+             PARTITION BY l.pessoa_id
              ORDER BY l.registrado_em DESC
            ) AS recencia
       FROM leads_etapa l
@@ -277,11 +407,8 @@ api.get('/funil/macro', async (c) => {
   });
   if ('erro' in iv) return c.json({ erro: iv.erro }, 400);
 
-  const filtros = clausulasFiltroCurso({
-    curso_codigo: q.data.curso_codigo,
-    categoria: q.data.categoria,
-    modalidade: q.data.modalidade,
-  });
+  const filtros = filtrosDaQuery(q.data);
+  const filtrosL = filtrosDaQuery(q.data, 'l');
 
   const rd = await funilMarketing(c.env, c.env.DB, iv.de, iv.ate);
   const rdAnt = q.data.comparar
@@ -292,13 +419,6 @@ api.get('/funil/macro', async (c) => {
         iv.fimAnteriorIso.slice(0, 10),
       )
     : null;
-
-  const filtrosL = clausulasFiltroCurso({
-    curso_codigo: q.data.curso_codigo,
-    categoria: q.data.categoria,
-    modalidade: q.data.modalidade,
-    alias: 'l',
-  });
 
   /*
    * Um funil conta acumulado: quem se matriculou também é inscrito, também é
@@ -318,7 +438,7 @@ api.get('/funil/macro', async (c) => {
       VALUES ('qualificados', 1), ('oportunidade', 2), ('inscricao', 3), ('matricula', 4)
     ),
     topo AS (
-      SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+      SELECT l.pessoa_id AS pessoa,
              MAX(rank_macro.nivel) AS nivel
         FROM leads_etapa l
         JOIN processo_etapas pe
@@ -403,7 +523,8 @@ api.get('/funil/macro', async (c) => {
    * sem curso por trás. Pedir "Pós EAD em junho" não pode devolver o total de
    * junho inteiro rotulado como Pós EAD.
    */
-  const semFiltroDeCurso = !q.data.categoria && !q.data.curso_codigo && !q.data.modalidade;
+  const semFiltroDeCurso = !q.data.categoria && !q.data.curso_codigo
+    && !q.data.oferta_codigo && !q.data.modalidade;
   const hist = semFiltroDeCurso ? await somaHistorico(iv.de, iv.ate) : vazio;
   const histAnt = semFiltroDeCurso && q.data.comparar
     ? await somaHistorico(iv.inicioAnteriorIso.slice(0, 10), iv.fimAnteriorIso.slice(0, 10))
@@ -459,6 +580,29 @@ api.get('/funil/macro', async (c) => {
   const fonteTopo: FonteEtapa = rdIncoerente ? 'planilha' : rd.ok ? 'rd_marketing' : 'indisponivel';
   const visitantesAnt = rdAnt?.ok ? num(rdAnt.dados.visitors) : null;
   const leadsRdAnt = rdAnt?.ok ? num(rdAnt.dados.leads) : null;
+
+  /*
+   * Pico artificial de leads no RD (importação de base antiga).
+   * Complementa rdIncoerente (RD com POUCOS leads): aqui o risco é EXCESSO.
+   */
+  let rdAlertaPico: {
+    motivo: string;
+    leads_rd: number;
+    media_historica: number;
+  } | null = null;
+  if (rd.ok && !rdIncoerente && leadsRd != null) {
+    const histLeads = await c.env.DB.prepare(
+      `SELECT AVG(valor) AS media FROM funil_historico WHERE etapa = 'leads'`,
+    ).first();
+    const media = num(histLeads?.media);
+    if (media > 0 && leadsRd > media * 2) {
+      rdAlertaPico = {
+        motivo: 'Leads do RD Marketing estão muito acima da média histórica da planilha — possível importação de base antiga.',
+        leads_rd: leadsRd,
+        media_historica: Number(media.toFixed(1)),
+      };
+    }
+  }
 
   type Passo = {
     chave: (typeof MACRO_ORDEM)[number];
@@ -533,12 +677,7 @@ api.get('/funil/macro', async (c) => {
    * isso que a tela mostra o total sem categoria em vez de escondê-lo.
    */
   const porCategoria = await (async () => {
-    const fCat = clausulasFiltroCurso({
-      curso_codigo: q.data.curso_codigo,
-      modalidade: q.data.modalidade,
-      categoria: q.data.categoria,
-      alias: 'l',
-    });
+    const fCat = filtrosDaQuery(q.data, 'l');
 
     const linhas = await c.env.DB.prepare(
       `WITH ${CTE_ORIGEM_DA_PESSOA},
@@ -553,7 +692,7 @@ api.get('/funil/macro', async (c) => {
         * o tipo de divergência que faz alguém parar de confiar no painel.
         */
        marcos AS (
-         SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+         SELECT l.pessoa_id AS pessoa,
                 MAX(CASE pe.macro_etapa
                       WHEN 'qualificados' THEN 1 WHEN 'oportunidade' THEN 2
                       WHEN 'inscricao'    THEN 3 WHEN 'matricula'    THEN 4
@@ -680,7 +819,7 @@ api.get('/funil/macro', async (c) => {
      ),
      topo AS (
        SELECT strftime('%Y-%m', l.registrado_em, '-3 hours') AS mes,
-              COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+              l.pessoa_id AS pessoa,
               MAX(rank_macro.nivel) AS nivel
          FROM leads_etapa l
          JOIN processo_etapas pe
@@ -713,11 +852,16 @@ api.get('/funil/macro', async (c) => {
       curso_codigo: q.data.curso_codigo ?? null,
       categoria: q.data.categoria ?? null,
       modalidade: q.data.modalidade ?? null,
+      unidade: q.data.unidade ?? null,
+      origem: q.data.origem ?? null,
+      funil_id: q.data.funil_id ?? null,
+      processo_id: q.data.processo_id ?? null,
     },
     etapas,
     por_categoria: porCategoria.lista,
     por_categoria_nao_classificados: porCategoria.nao_classificados,
     evolucao: evolucao.results,
+    rd_alerta_pico: rdAlertaPico,
     rd: rd.ok
       ? {
           ok: true as const,
@@ -765,12 +909,7 @@ api.get('/funil/macro/pessoas', async (c) => {
 
   const nivelMinimo = { qualificados: 1, oportunidade: 2, inscricao: 3, matricula: 4 }[q.data.etapa];
 
-  const filtros = clausulasFiltroCurso({
-    curso_codigo: q.data.curso_codigo,
-    categoria: q.data.categoria,
-    modalidade: q.data.modalidade,
-    alias: 'l',
-  });
+  const filtros = filtrosDaQuery(q.data, 'l');
 
   /*
    * `categoria_pessoa` ausente = não filtra. Presente e vazia = só quem ficou
@@ -786,7 +925,7 @@ api.get('/funil/macro/pessoas', async (c) => {
     ),
     ${CTE_ORIGEM_DA_PESSOA},
     topo AS (
-      SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+      SELECT l.pessoa_id AS pessoa,
              MAX(rank_macro.nivel) AS nivel
         FROM leads_etapa l
         JOIN processo_etapas pe
@@ -801,10 +940,10 @@ api.get('/funil/macro/pessoas', async (c) => {
     -- O evento mais recente DENTRO do período dá o nome, a etapa e a data que
     -- a lista mostra. Fora do período seria outra pergunta.
     ultimo AS (
-      SELECT COALESCE(l.email, l.telefone, l.contato_id) AS pessoa,
+      SELECT l.pessoa_id AS pessoa,
              l.contato_id, l.contato_nome, l.email, l.telefone, l.etapa, l.registrado_em,
              ROW_NUMBER() OVER (
-               PARTITION BY COALESCE(l.email, l.telefone, l.contato_id)
+               PARTITION BY l.pessoa_id
                ORDER BY l.registrado_em DESC
              ) AS recencia
         FROM leads_etapa l
@@ -866,7 +1005,13 @@ api.get('/funil/macro/pessoas', async (c) => {
 
 /**
  * GET /api/funil — detalhe por processo Rubeus (secundário).
- * Aceita de/ate ou dias; ordena por processo_etapas.ordem quando houver.
+ *
+ * Conta quem tem ficha no CRM (`registro_processo_id` em algum evento do
+ * contato), na etapa mais avançada do período. Eventos avançados muitas vezes
+ * chegam sem o id da ficha; a etapa final ainda é lida, mas a unidade é a
+ * ficha — alinhada ao kanban do Rubeus, sem inflar com sync sem registro.
+ *
+ * A esteira sempre lista as etapas visíveis do catálogo, mesmo zeradas.
  */
 api.get('/funil', async (c) => {
   const q = funilQuerySchema.safeParse(c.req.query());
@@ -881,77 +1026,210 @@ api.get('/funil', async (c) => {
   });
   if ('erro' in iv) return c.json({ erro: iv.erro }, 400);
 
-  const fid = q.data.funil_id ? Number(q.data.funil_id) : null;
-  const processoId = q.data.processo_id ?? null;
-  const filtros = clausulasFiltroCurso({
-    curso_codigo: q.data.curso_codigo,
-    categoria: q.data.categoria,
-    modalidade: q.data.modalidade,
+  const funilIds = listaCsv(q.data.funil_id)
+    .map(Number)
+    .filter((n) => !Number.isNaN(n));
+  let processoIds = listaCsv(q.data.processo_id);
+  if (!processoIds.length && funilIds.length) {
+    const ph = funilIds.map(() => '?').join(',');
+    const { results } = await c.env.DB.prepare(
+      `SELECT DISTINCT processo_id FROM funis
+        WHERE id IN (${ph}) AND ativo = 1 AND processo_id IS NOT NULL`,
+    ).bind(...funilIds).all();
+    processoIds = (results as Array<{ processo_id: string }>)
+      .map((r) => String(r.processo_id))
+      .filter(Boolean);
+  }
+  const processoId = processoIds.length === 1 ? processoIds[0] : null;
+  const filtros = filtrosDaQuery({
+    ...q.data,
+    funil_id: undefined,
+    processo_id: undefined,
   });
+
+  const escopoPartes: string[] = [];
+  const escopoBinds: unknown[] = [];
+  if (funilIds.length === 1) {
+    escopoPartes.push('funil_id = ?');
+    escopoBinds.push(funilIds[0]);
+  } else if (funilIds.length > 1) {
+    escopoPartes.push(inSql('funil_id', funilIds.length));
+    escopoBinds.push(...funilIds);
+  }
+  if (processoIds.length === 1) {
+    escopoPartes.push('processo_id = ?');
+    escopoBinds.push(processoIds[0]);
+  } else if (processoIds.length > 1) {
+    escopoPartes.push(inSql('processo_id', processoIds.length));
+    escopoBinds.push(...processoIds);
+  }
 
   const baseWhere = `
     registrado_em >= ? AND registrado_em <= ?
-    AND (? IS NULL OR funil_id = ?)
-    AND (? IS NULL OR processo_id = ?)
+    ${escopoPartes.length ? `AND ${escopoPartes.join(' AND ')}` : ''}
     ${filtros.sql}`;
   const baseBinds = [
-    iv.inicioIso, iv.fimIso, fid, fid, processoId, processoId, ...filtros.binds,
+    iv.inicioIso, iv.fimIso, ...escopoBinds, ...filtros.binds,
   ];
   const antBinds = [
-    iv.inicioAnteriorIso, iv.fimAnteriorIso, fid, fid, processoId, processoId, ...filtros.binds,
+    iv.inicioAnteriorIso, iv.fimAnteriorIso, ...escopoBinds, ...filtros.binds,
   ];
 
-  const [contagens, anteriores, funis, ordens] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT etapa, COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
-       FROM leads_etapa
+  /*
+   * 1) Descobre contatos que têm ficha no período.
+   * 2) Junta todos os eventos desses contatos (e de quem compartilha o e-mail).
+   * 3) Identidade = ficha quando existir; senão e-mail/telefone do contato.
+   */
+  const sqlLinhas = `
+    WITH bruto AS (
+      SELECT contato_id, email, telefone, etapa, registrado_em, registro_processo_id
+        FROM leads_etapa
        WHERE ${baseWhere}
-       GROUP BY etapa`,
-    ).bind(...baseBinds).all(),
+    ),
+    email_do_contato AS (
+      SELECT contato_id, MAX(email) AS email
+        FROM bruto WHERE email IS NOT NULL AND email != '' GROUP BY contato_id
+    ),
+    tel_do_contato AS (
+      SELECT contato_id, MAX(telefone) AS telefone
+        FROM bruto WHERE telefone IS NOT NULL AND telefone != '' GROUP BY contato_id
+    ),
+    ficha_do_contato AS (
+      SELECT contato_id, MAX(registro_processo_id) AS ficha
+        FROM bruto
+       WHERE registro_processo_id IS NOT NULL AND registro_processo_id != ''
+       GROUP BY contato_id
+    ),
+    emails_com_ficha AS (
+      SELECT DISTINCT COALESCE(NULLIF(b.email, ''), NULLIF(ec.email, '')) AS email
+        FROM bruto b
+        LEFT JOIN email_do_contato ec ON ec.contato_id = b.contato_id
+        JOIN ficha_do_contato fc ON fc.contato_id = b.contato_id
+       WHERE COALESCE(NULLIF(b.email, ''), NULLIF(ec.email, '')) IS NOT NULL
+    )
+    SELECT b.etapa, b.registrado_em,
+           COALESCE(
+             NULLIF(b.registro_processo_id, ''),
+             NULLIF(fc.ficha, ''),
+             NULLIF(b.email, ''),
+             NULLIF(ec.email, ''),
+             NULLIF(b.telefone, ''),
+             NULLIF(tc.telefone, ''),
+             b.contato_id
+           ) AS pessoa
+      FROM bruto b
+      LEFT JOIN email_do_contato ec ON ec.contato_id = b.contato_id
+      LEFT JOIN tel_do_contato tc ON tc.contato_id = b.contato_id
+      LEFT JOIN ficha_do_contato fc ON fc.contato_id = b.contato_id
+     WHERE fc.ficha IS NOT NULL
+        OR COALESCE(NULLIF(b.email, ''), NULLIF(ec.email, '')) IN (SELECT email FROM emails_com_ficha)`;
+
+  const [atuais, anteriores, funis, ordens] = await Promise.all([
+    c.env.DB.prepare(sqlLinhas).bind(...baseBinds).all(),
+    c.env.DB.prepare(sqlLinhas).bind(...antBinds).all(),
 
     c.env.DB.prepare(
-      `SELECT etapa, COUNT(DISTINCT COALESCE(email, telefone, contato_id)) AS total
-       FROM leads_etapa
-       WHERE ${baseWhere}
-       GROUP BY etapa`,
-    ).bind(...antBinds).all(),
+      `WITH bruto AS (
+         SELECT contato_id, email, telefone, funil_id, registro_processo_id
+           FROM leads_etapa
+          WHERE registrado_em >= ? AND registrado_em <= ?
+       ),
+       email_do_contato AS (
+         SELECT contato_id, MAX(email) AS email
+           FROM bruto WHERE email IS NOT NULL AND email != '' GROUP BY contato_id
+       ),
+       ficha_do_contato AS (
+         SELECT contato_id, MAX(registro_processo_id) AS ficha
+           FROM bruto
+          WHERE registro_processo_id IS NOT NULL AND registro_processo_id != ''
+          GROUP BY contato_id
+       ),
+       pessoas AS (
+         SELECT DISTINCT f.id AS funil_id,
+                COALESCE(NULLIF(b.registro_processo_id, ''), NULLIF(fc.ficha, ''),
+                         NULLIF(b.email, ''), NULLIF(ec.email, ''), b.contato_id) AS quem
+           FROM funis f
+           JOIN bruto b ON b.funil_id = f.id
+           LEFT JOIN email_do_contato ec ON ec.contato_id = b.contato_id
+           LEFT JOIN ficha_do_contato fc ON fc.contato_id = b.contato_id
+          WHERE f.ativo = 1 AND fc.ficha IS NOT NULL
+       )
+       SELECT f.id, f.nome, f.processo_id,
+              (SELECT COUNT(*) FROM pessoas p WHERE p.funil_id = f.id) AS leads
+         FROM funis f WHERE f.ativo = 1
+         ORDER BY leads DESC, f.id`,
+    ).bind(iv.inicioIso, iv.fimIso).all(),
 
-    c.env.DB.prepare(
-      `SELECT f.id, f.nome, f.processo_id,
-              (SELECT COUNT(DISTINCT COALESCE(l.email, l.telefone, l.contato_id))
-               FROM leads_etapa l WHERE l.funil_id = f.id) AS leads
-       FROM funis f WHERE f.ativo = 1 ORDER BY leads DESC, f.id`,
-    ).all(),
-
-    c.env.DB.prepare(
-      `SELECT etapa_nome, MIN(ordem) AS ordem, macro_etapa
-       FROM processo_etapas
-       GROUP BY etapa_nome`,
-    ).all(),
+    processoIds.length
+      ? c.env.DB.prepare(
+          `SELECT etapa_nome, MIN(ordem) AS ordem, macro_etapa,
+                  MAX(visivel) AS visivel
+             FROM processo_etapas
+            WHERE processo_id IN (${processoIds.map(() => '?').join(',')})
+            GROUP BY etapa_nome`,
+        ).bind(...processoIds).all()
+      : c.env.DB.prepare(
+          `SELECT etapa_nome, MIN(ordem) AS ordem, macro_etapa,
+                  MAX(visivel) AS visivel
+             FROM processo_etapas
+            GROUP BY etapa_nome`,
+        ).all(),
   ]);
 
-  const ordemPorNome = new Map<string, { ordem: number; macro: string | null }>(
-    (ordens.results as Array<{ etapa_nome: string; ordem: number; macro_etapa: string | null }>)
-      .map((r) => [r.etapa_nome, { ordem: num(r.ordem), macro: r.macro_etapa }]),
+  const ordemPorNome = new Map<string, { ordem: number; macro: string | null; visivel: number }>(
+    (ordens.results as Array<{ etapa_nome: string; ordem: number; macro_etapa: string | null; visivel: number }>)
+      .map((r) => [r.etapa_nome, { ordem: num(r.ordem), macro: r.macro_etapa, visivel: num(r.visivel) }]),
   );
 
-  const antesPorEtapa = new Map<string, number>(
-    (anteriores.results as Array<{ etapa: string; total: number }>).map((l) => [l.etapa, num(l.total)]),
-  );
+  type LinhaEtapa = { etapa: string; pessoa: string; registrado_em: string };
+  const agregarPorTopo = (linhas: LinhaEtapa[]) => {
+    const topoPorPessoa = new Map<string, { etapa: string; ordem: number; em: string }>();
+    for (const l of linhas) {
+      const meta = ordemPorNome.get(l.etapa);
+      if ((meta?.visivel ?? 1) === 0) continue;
+      const ordem = meta?.ordem ?? 7500;
+      const atual = topoPorPessoa.get(l.pessoa);
+      if (!atual || ordem > atual.ordem || (ordem === atual.ordem && l.registrado_em > atual.em)) {
+        topoPorPessoa.set(l.pessoa, { etapa: l.etapa, ordem, em: l.registrado_em });
+      }
+    }
+    const porEtapa = new Map<string, number>();
+    for (const topo of topoPorPessoa.values()) {
+      porEtapa.set(topo.etapa, (porEtapa.get(topo.etapa) ?? 0) + 1);
+    }
+    return { porEtapa, total: topoPorPessoa.size };
+  };
 
-  const etapas = (contagens.results as Array<{ etapa: string; total: number }>)
-    .map((l) => ({
-      etapa: l.etapa,
-      total: num(l.total),
-      ordem: ordemPorNome.get(l.etapa)?.ordem ?? 10_000 - num(l.total),
-      macro_etapa: ordemPorNome.get(l.etapa)?.macro ?? null,
+  const atuaisAgg = agregarPorTopo(atuais.results as LinhaEtapa[]);
+  const antesAgg = agregarPorTopo(anteriores.results as LinhaEtapa[]);
+  const atuaisPorEtapa = atuaisAgg.porEtapa;
+  const antesPorEtapa = antesAgg.porEtapa;
+
+  /*
+   * Catálogo primeiro: a esteira tem de existir mesmo zerada. Etapas que
+   * apareceram só no evento (ainda sem linha no catálogo) entram no fim.
+   */
+  const nomesCatalogo = [...ordemPorNome.entries()]
+    .filter(([nome, m]) => m.visivel !== 0 && (m.macro != null || atuaisPorEtapa.has(nome)))
+    .map(([nome]) => nome);
+  const nomesExtras = [...atuaisPorEtapa.keys()].filter((n) => !ordemPorNome.has(n));
+  const nomesEsteira = [...nomesCatalogo, ...nomesExtras];
+
+  const etapas = nomesEsteira
+    .map((etapa) => ({
+      etapa,
+      total: atuaisPorEtapa.get(etapa) ?? 0,
+      ordem: ordemPorNome.get(etapa)?.ordem ?? 7500,
+      macro_etapa: ordemPorNome.get(etapa)?.macro ?? null,
+      visivel: ordemPorNome.get(etapa)?.visivel ?? 1,
     }))
-    .sort((a, b) => a.ordem - b.ordem || b.total - a.total);
+    .filter((l) => l.visivel !== 0)
+    .sort((a, b) => a.ordem - b.ordem || b.total - a.total || a.etapa.localeCompare(b.etapa, 'pt-BR'));
 
   const passos = etapas.map((atual, i) => {
     const anterior = i === 0 ? null : etapas[i - 1];
     const taxa =
-      anterior && anterior.total > 0
+      anterior && anterior.total > 0 && atual.total > 0
         ? Number(((atual.total / anterior.total) * 100).toFixed(1))
         : null;
     const antes = antesPorEtapa.get(atual.etapa) ?? 0;
@@ -977,9 +1255,13 @@ api.get('/funil', async (c) => {
   }
 
   return c.json({
-    funil_id: fid,
+    funil_id: funilIds.length === 1 ? funilIds[0] : null,
+    funil_ids: funilIds,
     processo_id: processoId,
+    processo_ids: processoIds,
     periodo: { dias: iv.dias, de: iv.de, ate: iv.ate },
+    unidade: 'ficha',
+    total_registros: atuaisAgg.total,
     etapas: passos,
     etapa_maior_queda: maiorQueda,
     funis_disponiveis: funis.results,
@@ -999,13 +1281,21 @@ api.get('/funil/serie', async (c) => {
   });
   if ('erro' in iv) return c.json({ erro: iv.erro }, 400);
 
-  const fid = q.data.funil_id ? Number(q.data.funil_id) : null;
+  const funilIds = listaCsv(q.data.funil_id)
+    .map(Number)
+    .filter((n) => !Number.isNaN(n));
   const etapa = c.req.query('etapa') || null;
-  const filtros = clausulasFiltroCurso({
-    curso_codigo: q.data.curso_codigo,
-    categoria: q.data.categoria,
-    modalidade: q.data.modalidade,
+  const filtros = filtrosDaQuery({
+    ...q.data,
+    funil_id: undefined,
   });
+
+  const escopoFunil = funilIds.length === 0
+    ? ''
+    : funilIds.length === 1
+      ? 'AND funil_id = ?'
+      : `AND ${inSql('funil_id', funilIds.length)}`;
+  const escopoBinds = funilIds;
 
   const DIA = 86_400_000;
   const BRASILIA = -3 * 3_600_000;
@@ -1015,23 +1305,100 @@ api.get('/funil/serie', async (c) => {
   const dias = iv.dias;
   const inicioAnterior = inicioAtual - dias * DIA;
 
-  const { results } = await c.env.DB.prepare(
-    `SELECT dia, COUNT(*) AS total FROM (
-       SELECT COALESCE(email, telefone, contato_id) AS quem,
-              date(MIN(registrado_em), '-3 hours') AS dia
-       FROM leads_etapa
-       WHERE registrado_em >= ?
-         AND (? IS NULL OR funil_id = ?)
-         AND (? IS NULL OR etapa = ?)
-         ${filtros.sql}
-       GROUP BY quem
-     ) GROUP BY dia`,
-  )
-    .bind(new Date(inicioAnterior).toISOString(), fid, fid, etapa, etapa, ...filtros.binds)
-    .all();
+  const ordens = await c.env.DB.prepare(
+    `SELECT etapa_nome, MIN(ordem) AS ordem, MAX(visivel) AS visivel
+       FROM processo_etapas
+      GROUP BY etapa_nome`,
+  ).all();
+  const ordemPorNome = new Map<string, { ordem: number; visivel: number }>(
+    (ordens.results as Array<{ etapa_nome: string; ordem: number; visivel: number }>)
+      .map((r) => [r.etapa_nome, { ordem: num(r.ordem), visivel: num(r.visivel) }]),
+  );
 
-  const porDia = new Map<string, number>(
-    (results as Array<{ dia: string; total: number }>).map((l) => [l.dia, num(l.total)]),
+  type LinhaSerie = { etapa: string; pessoa: string; registrado_em: string };
+  const contarPorDiaDoTopo = async (inicioIso: string, fimIso: string) => {
+    const { results } = await c.env.DB.prepare(
+      `WITH bruto AS (
+         SELECT contato_id, email, telefone, etapa, registrado_em, registro_processo_id
+           FROM leads_etapa
+          WHERE registrado_em >= ? AND registrado_em <= ?
+            ${escopoFunil}
+            ${filtros.sql}
+       ),
+       email_do_contato AS (
+         SELECT contato_id, MAX(email) AS email
+           FROM bruto WHERE email IS NOT NULL AND email != '' GROUP BY contato_id
+       ),
+       tel_do_contato AS (
+         SELECT contato_id, MAX(telefone) AS telefone
+           FROM bruto WHERE telefone IS NOT NULL AND telefone != '' GROUP BY contato_id
+       ),
+       ficha_do_contato AS (
+         SELECT contato_id, MAX(registro_processo_id) AS ficha
+           FROM bruto
+          WHERE registro_processo_id IS NOT NULL AND registro_processo_id != ''
+          GROUP BY contato_id
+       ),
+       emails_com_ficha AS (
+         SELECT DISTINCT COALESCE(NULLIF(b.email, ''), NULLIF(ec.email, '')) AS email
+           FROM bruto b
+           LEFT JOIN email_do_contato ec ON ec.contato_id = b.contato_id
+           JOIN ficha_do_contato fc ON fc.contato_id = b.contato_id
+          WHERE COALESCE(NULLIF(b.email, ''), NULLIF(ec.email, '')) IS NOT NULL
+       )
+       SELECT b.etapa, b.registrado_em,
+              COALESCE(
+                NULLIF(b.registro_processo_id, ''), NULLIF(fc.ficha, ''),
+                NULLIF(b.email, ''), NULLIF(ec.email, ''),
+                NULLIF(b.telefone, ''), NULLIF(tc.telefone, ''), b.contato_id
+              ) AS pessoa
+         FROM bruto b
+         LEFT JOIN email_do_contato ec ON ec.contato_id = b.contato_id
+         LEFT JOIN tel_do_contato tc ON tc.contato_id = b.contato_id
+         LEFT JOIN ficha_do_contato fc ON fc.contato_id = b.contato_id
+        WHERE fc.ficha IS NOT NULL
+           OR COALESCE(NULLIF(b.email, ''), NULLIF(ec.email, '')) IN (SELECT email FROM emails_com_ficha)`,
+    )
+      .bind(inicioIso, fimIso, ...escopoBinds, ...filtros.binds)
+      .all();
+
+    const topoPorPessoa = new Map<string, { etapa: string; ordem: number; em: string; primeiroNaEtapa: string }>();
+    for (const l of results as LinhaSerie[]) {
+      const meta = ordemPorNome.get(l.etapa);
+      if ((meta?.visivel ?? 1) === 0) continue;
+      const ordem = meta?.ordem ?? 7500;
+      const atual = topoPorPessoa.get(l.pessoa);
+      if (!atual || ordem > atual.ordem || (ordem === atual.ordem && l.registrado_em > atual.em)) {
+        const primeiroNaEtapa =
+          atual && atual.etapa === l.etapa && atual.primeiroNaEtapa < l.registrado_em
+            ? atual.primeiroNaEtapa
+            : l.registrado_em;
+        topoPorPessoa.set(l.pessoa, {
+          etapa: l.etapa,
+          ordem,
+          em: l.registrado_em,
+          primeiroNaEtapa,
+        });
+        continue;
+      }
+      if (atual.etapa === l.etapa && l.registrado_em < atual.primeiroNaEtapa) {
+        atual.primeiroNaEtapa = l.registrado_em;
+      }
+    }
+
+    const porDia = new Map<string, number>();
+    for (const topo of topoPorPessoa.values()) {
+      if (etapa && topo.etapa !== etapa) continue;
+      const dia = String(topo.primeiroNaEtapa).slice(0, 10);
+      porDia.set(dia, (porDia.get(dia) ?? 0) + 1);
+    }
+    return porDia;
+  };
+
+  const porDiaAtual = await contarPorDiaDoTopo(iv.inicioIso, iv.fimIso);
+  const porDiaAnterior = await contarPorDiaDoTopo(
+    new Date(inicioAnterior).toISOString(),
+    new Date(inicioAtual - 1).toISOString(),
   );
 
   const serie = [];
@@ -1040,19 +1407,20 @@ api.get('/funil/serie', async (c) => {
   for (let i = 0; i < dias; i++) {
     const dAtual = diaDe(inicioAtual + i * DIA);
     const dAnterior = diaDe(inicioAnterior + i * DIA);
-    acAtual += porDia.get(dAtual) ?? 0;
-    acAnterior += porDia.get(dAnterior) ?? 0;
+    acAtual += porDiaAtual.get(dAtual) ?? 0;
+    acAnterior += porDiaAnterior.get(dAnterior) ?? 0;
     serie.push({
       data: dAtual,
       data_anterior: dAnterior,
-      novos: porDia.get(dAtual) ?? 0,
+      novos: porDiaAtual.get(dAtual) ?? 0,
       atual: acAtual,
       anterior: acAnterior,
     });
   }
 
   return c.json({
-    funil_id: fid,
+    funil_id: funilIds.length === 1 ? funilIds[0] : null,
+    funil_ids: funilIds,
     etapa,
     dias,
     serie,
@@ -1063,7 +1431,9 @@ api.get('/funil/serie', async (c) => {
 });
 
 api.get('/funil/leads', async (c) => {
-  const fid = c.req.query('funil_id') ? Number(c.req.query('funil_id')) : null;
+  const funilIds = listaCsv(c.req.query('funil_id'))
+    .map(Number)
+    .filter((n) => !Number.isNaN(n));
   const porPagina = Math.min(Math.max(Number(c.req.query('por_pagina') ?? 24) || 24, 6), 100);
   const pagina = Math.max(Number(c.req.query('pagina') ?? 1) || 1, 1);
   const offset = (pagina - 1) * porPagina;
@@ -1088,10 +1458,13 @@ api.get('/funil/leads', async (c) => {
   /*
    * Um card por PESSOA, não por contato_id.
    *
-   * O Rubeus emite id de contato diferente conforme o gatilho: RAFAEL DE PAULA
-   * DA SILVA chegou como 1670626, 44176, 1670628 e 1670629 — a lista mostrava
-   * quatro cards da mesma pessoa. A identidade é o e-mail (depois telefone,
-   * depois o id), a mesma que o funil usa para contar.
+   * O Rubeus emite id de contato diferente conforme o gatilho e, pior, o mesmo
+   * contato chega ora com e-mail, ora sem: MARIA CÉLIA (337676) gerava dois
+   * cards — um em `maria.lima.med@gmail.com` e outro em `337676` — porque
+   * `pessoa_id` caía no id quando o webhook vinha
+   * sem contato. Antes de agrupar, o e-mail/telefone conhecidos do MESMO
+   * contato_id (e o e-mail de qualquer outro id que já compartilhe esse e-mail)
+   * viram a chave canônica.
    *
    * Processo repetido NÃO é duplicata: a mesma pessoa pode se inscrever em dois
    * cursos, e isso é jornada legítima. Por isso o card conta os registros de
@@ -1100,9 +1473,49 @@ api.get('/funil/leads', async (c) => {
    * O filtro de busca entra no `base`, antes do agrupamento: basta UM evento da
    * pessoa casar para ela aparecer inteira, com todos os processos.
    */
-  const cte = `WITH base AS (
-       SELECT COALESCE(email, telefone, contato_id) AS quem, *
-       FROM leads_etapa WHERE (? IS NULL OR funil_id = ?)${filtroBusca}
+  const escopoFunil = funilIds.length === 0
+    ? ''
+    : funilIds.length === 1
+      ? 'WHERE funil_id = ?'
+      : `WHERE ${inSql('funil_id', funilIds.length)}`;
+  const escopoBinds = funilIds;
+  // filtroBusca assumes AND after WHERE — adjust when no funil filter
+  const filtroBuscaSql = busca
+    ? (escopoFunil
+      ? filtroBusca
+      : ` WHERE (lower(COALESCE(contato_nome,'')) LIKE ?
+            OR lower(COALESCE(email,'')) LIKE ?
+            OR lower(COALESCE(curso_codigo,'')) LIKE ?
+            OR contato_id LIKE ?)`)
+    : '';
+
+  const cte = `WITH bruto AS (
+       SELECT * FROM leads_etapa ${escopoFunil}${filtroBuscaSql}
+     ),
+     email_do_contato AS (
+       SELECT contato_id, MAX(email) AS email
+         FROM bruto
+        WHERE email IS NOT NULL AND email != ''
+        GROUP BY contato_id
+     ),
+     tel_do_contato AS (
+       SELECT contato_id, MAX(telefone) AS telefone
+         FROM bruto
+        WHERE telefone IS NOT NULL AND telefone != ''
+        GROUP BY contato_id
+     ),
+     base AS (
+       SELECT COALESCE(
+                NULLIF(b.email, ''),
+                NULLIF(ec.email, ''),
+                NULLIF(b.telefone, ''),
+                NULLIF(tc.telefone, ''),
+                b.contato_id
+              ) AS quem,
+              b.*
+         FROM bruto b
+         LEFT JOIN email_do_contato ec ON ec.contato_id = b.contato_id
+         LEFT JOIN tel_do_contato tc ON tc.contato_id = b.contato_id
      ),
      agg AS (
        SELECT quem,
@@ -1124,25 +1537,32 @@ api.get('/funil/leads', async (c) => {
        )
        SELECT a.quem, a.eventos, a.ids_no_crm, a.processos, a.cursos,
               a.ult AS registrado_em,
-              u.etapa, u.curso_codigo, u.processo_nome, u.origem,
-              u.contato_id, u.email, u.telefone,
+              u.etapa, u.curso_codigo, u.oferta_codigo, u.oferta_nome, u.processo_nome, u.origem,
+              u.contato_id,
+              COALESCE(NULLIF(u.email, ''),
+                       (SELECT MAX(b2.email) FROM base b2
+                         WHERE b2.quem = a.quem AND b2.email IS NOT NULL AND b2.email != '')) AS email,
+              COALESCE(NULLIF(u.telefone, ''),
+                       (SELECT MAX(b2.telefone) FROM base b2
+                         WHERE b2.quem = a.quem AND b2.telefone IS NOT NULL AND b2.telefone != '')) AS telefone,
               COALESCE(u.contato_nome,
                        (SELECT MAX(b2.contato_nome) FROM base b2 WHERE b2.quem = a.quem)) AS contato_nome
        FROM agg a JOIN ultimo u ON u.quem = a.quem
        ORDER BY a.ult DESC LIMIT ? OFFSET ?`,
     )
-      .bind(fid, fid, ...bindsBusca, porPagina, offset)
+      .bind(...escopoBinds, ...bindsBusca, porPagina, offset)
       .all(),
 
     // Total de PESSOAS que casam com o filtro — é o que pagina, não linhas.
     c.env.DB.prepare(`${cte} SELECT COUNT(*) AS total FROM agg`)
-      .bind(fid, fid, ...bindsBusca)
+      .bind(...escopoBinds, ...bindsBusca)
       .first<{ total: number }>(),
   ]);
 
   const total = num(totalRes?.total);
   return c.json({
-    funil_id: fid,
+    funil_id: funilIds.length === 1 ? funilIds[0] : null,
+    funil_ids: funilIds,
     total,
     pagina,
     por_pagina: porPagina,
@@ -1160,36 +1580,52 @@ api.get('/funil/lead/:contato_id', async (c) => {
    * O id da URL é uma porta de entrada, não a chave.
    *
    * A lista já mostra uma pessoa por card, mas essa pessoa pode ter vários
-   * contato_id no Rubeus. Abrir por um só mostraria um pedaço da jornada e
-   * esconderia justamente as outras inscrições — que é o que a operação precisa
-   * ver quando alguém se candidata a dois cursos.
+   * contato_id no Rubeus e eventos sem e-mail. Abrir por um só mostraria um
+   * pedaço da jornada. Resolve a identidade pelo e-mail/telefone conhecidos do
+   * contato; a jornada junta tudo que compartilha essa chave ou o mesmo
+   * contato_id.
    */
   const identidade = await c.env.DB.prepare(
-    `SELECT COALESCE(email, telefone, contato_id) AS quem FROM leads_etapa
-      WHERE contato_id = ? ORDER BY registrado_em DESC LIMIT 1`,
-  ).bind(id).first<{ quem: string }>();
+    `SELECT COALESCE(
+              (SELECT NULLIF(email, '') FROM leads_etapa
+                WHERE contato_id = ? AND email IS NOT NULL AND email != ''
+                ORDER BY registrado_em DESC LIMIT 1),
+              (SELECT NULLIF(telefone, '') FROM leads_etapa
+                WHERE contato_id = ? AND telefone IS NOT NULL AND telefone != ''
+                ORDER BY registrado_em DESC LIMIT 1),
+              ?
+            ) AS quem`,
+  ).bind(id, id, id).first<{ quem: string }>();
   const quem = identidade?.quem ?? id;
 
   const [etapas, payloads] = await Promise.all([
     c.env.DB.prepare(
       `SELECT l.etapa, l.registrado_em, l.origem, l.processo_nome, l.status, l.unidade,
-              l.curso_codigo, l.responsavel_comercial, l.contato_nome, l.contato_id,
+              l.curso_codigo, l.oferta_codigo, l.oferta_nome, l.responsavel_comercial,
+              l.contato_nome, l.contato_id,
               l.registro_processo_id, l.email, l.telefone,
               l.funil_id, COALESCE(f.nome, l.processo_nome, 'Sem funil') AS funil_nome
        FROM leads_etapa l LEFT JOIN funis f ON f.id = l.funil_id
-       WHERE COALESCE(l.email, l.telefone, l.contato_id) = ?
+       WHERE l.contato_id IN (
+               SELECT DISTINCT contato_id FROM leads_etapa
+                WHERE contato_id = ?
+                   OR (email IS NOT NULL AND email != '' AND email = ?)
+                   OR (telefone IS NOT NULL AND telefone != '' AND telefone = ?)
+             )
        ORDER BY l.registrado_em ASC, l.id ASC`,
-    ).bind(quem).all(),
+    ).bind(id, quem, quem).all(),
 
     c.env.DB.prepare(
       `SELECT etapa, canal, status, detalhe, corpo, recebido_em
        FROM eventos_recebidos
        WHERE contato_id IN (
          SELECT DISTINCT contato_id FROM leads_etapa
-          WHERE COALESCE(email, telefone, contato_id) = ?
+          WHERE contato_id = ?
+             OR (email IS NOT NULL AND email != '' AND email = ?)
+             OR (telefone IS NOT NULL AND telefone != '' AND telefone = ?)
        )
        ORDER BY recebido_em ASC, id ASC`,
-    ).bind(quem).all(),
+    ).bind(id, quem, quem).all(),
   ]);
 
   const linhas = etapas.results as Array<Record<string, any>>;
@@ -1218,6 +1654,8 @@ api.get('/funil/lead/:contato_id', async (c) => {
     processo_nome: ultimo.processo_nome ?? primeiro.processo_nome ?? null,
     unidade: ultimo.unidade ?? null,
     curso_codigo: ultimo.curso_codigo ?? null,
+    oferta_codigo: ultimo.oferta_codigo ?? null,
+    oferta_nome: ultimo.oferta_nome ?? null,
     responsavel_comercial: ultimo.responsavel_comercial ?? null,
     etapa_atual: ultimo.etapa ?? null,
     primeiro_em: primeiro.registrado_em ?? null,
@@ -1228,28 +1666,151 @@ api.get('/funil/lead/:contato_id', async (c) => {
 });
 
 api.get('/catalogo/cursos', async (c) => {
+  /*
+   * Lista OFERTAS do Rubeus (turma/campus/semestre), não o curso-pai.
+   * É o que aparece no kanban e no filtro do Funil.
+   */
   const { results } = await c.env.DB.prepare(
-    `SELECT c.id, c.codigo, c.nome, c.nivel_ensino, c.modalidade,
+    `SELECT o.id,
+            o.oferta_codigo,
+            o.curso_codigo,
+            o.nome,
+            o.nivel_ensino,
+            o.modalidade,
             (SELECT cc.categoria FROM curso_categorias cc
-             WHERE cc.curso_codigo = c.codigo LIMIT 1) AS categoria
-     FROM cursos c
-     ORDER BY c.nome COLLATE NOCASE
-     LIMIT 500`,
+              WHERE (cc.oferta_codigo IS NOT NULL AND cc.oferta_codigo = o.oferta_codigo)
+                 OR (cc.curso_codigo IS NOT NULL AND cc.curso_codigo = o.curso_codigo)
+              LIMIT 1) AS categoria
+       FROM curso_ofertas o
+      WHERE COALESCE(o.oferta_codigo, o.id, '') != ''
+      ORDER BY o.nome COLLATE NOCASE
+      LIMIT 800`,
   ).all();
 
   const categorias = Object.entries(CATEGORIA_ROTULOS).map(([id, rotulo]) => ({ id, rotulo }));
-  return c.json({ itens: results, categorias });
+  return c.json({
+    itens: (results as Array<Record<string, unknown>>).map((r) => ({
+      ...r,
+      /* Alias estável para o filtro: código da oferta, senão id interno. */
+      codigo: r.oferta_codigo || r.id,
+    })),
+    categorias,
+  });
 });
 
 api.get('/catalogo/etapas', async (c) => {
   const processoId = c.req.query('processo_id') || null;
   const { results } = await c.env.DB.prepare(
-    `SELECT processo_id, etapa_id, etapa_nome, ordem, macro_etapa
-     FROM processo_etapas
-     WHERE (? IS NULL OR processo_id = ?)
-     ORDER BY ordem ASC, etapa_nome ASC`,
+    `SELECT pe.processo_id, pe.etapa_id, pe.etapa_nome, pe.ordem, pe.macro_etapa,
+            pe.visivel,
+            COALESCE(
+              (SELECT f.nome FROM funis f
+                WHERE f.processo_id = pe.processo_id AND f.ativo = 1
+                ORDER BY f.id LIMIT 1),
+              (SELECT l.processo_nome FROM leads_etapa l
+                WHERE l.processo_id = pe.processo_id
+                  AND l.processo_nome IS NOT NULL AND l.processo_nome != ''
+                ORDER BY l.registrado_em DESC LIMIT 1),
+              pe.processo_id
+            ) AS processo_nome
+     FROM processo_etapas pe
+     WHERE (? IS NULL OR pe.processo_id = ?)
+     ORDER BY processo_nome COLLATE NOCASE, pe.ordem ASC, pe.etapa_nome ASC`,
   ).bind(processoId, processoId).all();
-  return c.json({ processo_id: processoId, itens: results });
+  return c.json({
+    processo_id: processoId,
+    itens: (results as Array<Record<string, unknown>>).map((r) => ({
+      ...r,
+      visivel: Number(r.visivel ?? 1) !== 0,
+    })),
+    pode_editar: ehAdmin(c.env, c.get('usuarioEmail')),
+  });
+});
+
+/** Valores distintos para popular selects do Funil. */
+api.get('/catalogo/filtros', async (c) => {
+  const [modalidades, unidades, origens, funis] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT DISTINCT modalidade AS v FROM leads_etapa
+       WHERE modalidade IS NOT NULL AND modalidade != ''
+       ORDER BY modalidade COLLATE NOCASE LIMIT 100`,
+    ).all(),
+    c.env.DB.prepare(
+      `SELECT DISTINCT unidade AS v FROM leads_etapa
+       WHERE unidade IS NOT NULL AND unidade != ''
+       ORDER BY unidade COLLATE NOCASE LIMIT 100`,
+    ).all(),
+    c.env.DB.prepare(
+      `SELECT DISTINCT origem AS v FROM leads_etapa
+       WHERE origem IS NOT NULL AND origem != ''
+       ORDER BY origem COLLATE NOCASE LIMIT 100`,
+    ).all(),
+    c.env.DB.prepare(
+      `SELECT f.id, f.nome, f.processo_id,
+              (SELECT COUNT(DISTINCT l.pessoa_id)
+               FROM leads_etapa l WHERE l.funil_id = f.id) AS leads
+       FROM funis f WHERE f.ativo = 1 ORDER BY leads DESC, f.id`,
+    ).all(),
+  ]);
+  const vals = (rows: { results: unknown[] }) =>
+    (rows.results as Array<{ v: string }>).map((r) => r.v);
+  return c.json({
+    modalidades: vals(modalidades),
+    unidades: vals(unidades),
+    origens: vals(origens),
+    funis: funis.results,
+  });
+});
+
+api.patch('/catalogo/etapas', exigirAdmin, async (c) => {
+  const corpo = await c.req.json().catch(() => null);
+  const r = patchEtapaSchema.safeParse(corpo);
+  if (!r.success) return c.json({ erro: 'parametros_invalidos', detalhe: r.error.issues }, 400);
+
+  const { processo_id, etapa_nome, macro_etapa, ordem, visivel } = r.data;
+  if (macro_etapa === undefined && ordem === undefined && visivel === undefined) {
+    return c.json({ erro: 'nada_a_atualizar' }, 400);
+  }
+
+  const sets: string[] = ["atualizado_em = datetime('now')"];
+  const binds: unknown[] = [];
+  if (macro_etapa !== undefined) {
+    sets.push('macro_etapa = ?');
+    binds.push(macro_etapa);
+  }
+  if (ordem !== undefined) {
+    sets.push('ordem = ?');
+    binds.push(ordem);
+  }
+  if (visivel !== undefined) {
+    sets.push('visivel = ?');
+    binds.push(visivel ? 1 : 0);
+  }
+  binds.push(processo_id, etapa_nome);
+
+  const { meta } = await c.env.DB.prepare(
+    `UPDATE processo_etapas SET ${sets.join(', ')}
+     WHERE processo_id = ? AND etapa_nome = ?`,
+  ).bind(...binds).run();
+
+  if (!meta.changes) return c.json({ erro: 'etapa_nao_encontrada' }, 404);
+  return c.json({ ok: true });
+});
+
+api.put('/catalogo/etapas/ordem', exigirAdmin, async (c) => {
+  const corpo = await c.req.json().catch(() => null);
+  const r = reordenarEtapasSchema.safeParse(corpo);
+  if (!r.success) return c.json({ erro: 'parametros_invalidos', detalhe: r.error.issues }, 400);
+
+  const stmts = r.data.itens.map((item) =>
+    c.env.DB.prepare(
+      `UPDATE processo_etapas
+          SET ordem = ?, atualizado_em = datetime('now')
+        WHERE processo_id = ? AND etapa_nome = ?`,
+    ).bind(item.ordem, r.data.processo_id, item.etapa_nome),
+  );
+  await c.env.DB.batch(stmts);
+  return c.json({ ok: true, atualizados: stmts.length });
 });
 
 /** Sync manual Rubeus — admin. */

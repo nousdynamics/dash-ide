@@ -74,10 +74,20 @@
     }
   ],
 
-  // Reconciliação diária: catálogo de cursos + etapas reais do Rubeus.
-  // Webhooks continuam sendo a fonte em tempo real.
+  /*
+   * Dois relógios, propósitos diferentes (src/index.ts decide qual rodou).
+   *
+   *   0 9 * * *   — reconciliação diária: catálogo de cursos + etapas reais do
+   *                 Rubeus, e a planilha de backup. Webhooks continuam sendo a
+   *                 fonte em tempo real.
+   *   0,30 * * * * — passada curta da conversão offline. Existe por causa do
+   *                 relógio do Google: a Data Manager API só devolve o
+   *                 resultado do processamento 30 min depois da ingestão. Sem
+   *                 ela, todo veredito chegaria com um dia de atraso e a tela
+   *                 mostraria "enviada" para conversão que o Google recusou.
+   */
   "triggers": {
-    "crons": ["0 9 * * *"]
+    "crons": ["0 9 * * *", "0,30 * * * *"]
   }
 
   // Secrets (NÃO declarar aqui — usar `npx wrangler secret put <NOME>`):

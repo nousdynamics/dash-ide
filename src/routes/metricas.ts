@@ -31,7 +31,7 @@ export const BASES: Array<{ id: string; rotulo: string; ajuda: string }> = [
   {
     id: 'visualizacoes_pagina',
     rotulo: 'Visualizações de página',
-    ajuda: 'Soma das ações de conversão cujo nome é visualização de página (Google Ads)',
+    ajuda: 'Ações de conversão de visualização de página do site (categoria PAGE_VIEW, origem WEBSITE)',
   },
 ];
 
@@ -42,6 +42,10 @@ export const BASES: Array<{ id: string; rotulo: string; ajuda: string }> = [
  * a última não existia: os nomes que o gerenciador mostra por campanha não são
  * os que a API devolve. Lista fixa de ação vira mentira no dia em que alguém
  * renomeia uma conversão no Google — a tela oferece as que existem de verdade.
+ *
+ * Pelo mesmo motivo `visualizacoes_pagina` soma por categoria + origem da ação
+ * e não por nome: casar nome custou meses de Connect rate em 0% depois que as
+ * ações chamadas "Visualização de página" foram removidas da conta.
  */
 const ACAO = /^acao_[a-z0-9_]+$/;
 

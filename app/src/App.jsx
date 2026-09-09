@@ -14,6 +14,8 @@ const Campanhas = lazy(() => import('./paginas/Campanhas').then((m) => ({ defaul
 const Funil = lazy(() => import('./paginas/Funil').then((m) => ({ default: m.Funil })));
 const Conversas = lazy(() => import('./paginas/Conversas').then((m) => ({ default: m.Conversas })));
 const Webhooks = lazy(() => import('./paginas/Webhooks').then((m) => ({ default: m.Webhooks })));
+const Conversoes = lazy(() => import('./paginas/Conversoes').then((m) => ({ default: m.Conversoes })));
+const Etapas = lazy(() => import('./paginas/Etapas').then((m) => ({ default: m.Etapas })));
 
 const icone = (d) => (
   <svg
@@ -48,6 +50,22 @@ const ICONES = {
       <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />
     </>
   ),
+  conversoes: icone(
+    <>
+      <path d="M4 12a8 8 0 0 1 8-8 8 8 0 0 1 7 4" />
+      <path d="M19 4v4h-4" />
+      <path d="M20 12a8 8 0 0 1-8 8 8 8 0 0 1-7-4" />
+      <path d="M5 20v-4h4" />
+    </>
+  ),
+  etapas: icone(
+    <>
+      <path d="M4 6h16" />
+      <path d="M4 12h16" />
+      <path d="M4 18h10" />
+      <circle cx="18" cy="18" r="2" />
+    </>
+  ),
 };
 
 const PAGINAS = [
@@ -59,6 +77,12 @@ const PAGINAS = [
   // item é conveniência — quem digitar #/webhooks na mão continua batendo no
   // 403 do servidor, que é onde a permissão de verdade mora.
   { id: 'webhooks', nome: 'Funis e webhooks', curto: 'Funis', admin: true },
+  // Decide o que o Google Ads recebe, e o que ele recebe muda o lance das
+  // campanhas. Mesmo segundo nível de acesso dos webhooks, pelo mesmo motivo:
+  // ver o resultado não é a mesma autorização que mexer no que o gera.
+  { id: 'conversoes', nome: 'Conversão offline', curto: 'Conv.', admin: true },
+  // Mapa macro + ordem + ocultar etapas ruidosas — alimenta Macro e Detalhe.
+  { id: 'etapas', nome: 'Etapas do processo', curto: 'Etapas', admin: true },
 ];
 
 const CHAVE_RETRAIDA = 'painel-ide:sidebar-retraida';
@@ -133,7 +157,7 @@ export default function App() {
               IDE
             </div>
           ) : (
-            <img src="/logo-IDE-faculdade-dark.svg" alt="Faculdade IDE" className="h-[26px] w-auto" />
+            <img src="/logo-IDE-faculdade.svg" alt="Faculdade IDE" className="h-[26px] w-auto" />
           )}
           <button
             type="button"
@@ -196,6 +220,8 @@ export default function App() {
           {rota === 'campanhas' && <Campanhas {...props} />}
           {rota === 'conversas' && <Conversas />}
           {rota === 'webhooks' && <Webhooks />}
+          {rota === 'conversoes' && <Conversoes />}
+          {rota === 'etapas' && <Etapas />}
         </Suspense>
       </main>
 
