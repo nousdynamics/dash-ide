@@ -901,8 +901,16 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, metas, atual, disponiveis, ao
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-sucesso shrink-0" aria-hidden="true">✓</span>
               <span className="min-w-0">
+                {/*
+                  * O nome guardado pode estar vazio — regras criadas antes de a
+                  * lista da conta terminar de carregar gravaram `null`. A conta
+                  * é a fonte da verdade e já está em mãos aqui, então vale mais
+                  * do que a cópia velha do banco.
+                  */}
                 <span className="block text-xs truncate">
-                  {atual.conversion_action_nome || 'ação sem nome'}
+                  {disponiveis.find((d) => d.id === atual.conversion_action_id)?.nome
+                    || atual.conversion_action_nome
+                    || 'ação sem nome na conta'}
                 </span>
                 <span className="block text-[10px] text-tenue font-mono">
                   {atual.conversion_action_id}
