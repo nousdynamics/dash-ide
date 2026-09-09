@@ -1057,6 +1057,17 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
   const [valor, setValor] = useState('');
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState('');
+  /*
+   * Criar contador novo é o caminho ESPERADO aqui, não a exceção.
+   *
+   * Uma meta específica existe para separar o curso do resto do nível — e ela
+   * só separa alguma coisa se tiver ação própria no Google Ads. Apontar a
+   * exceção para a mesma ação da regra de nível cria uma linha no painel que
+   * não muda nada lá.
+   */
+  const [criando, setCriando] = useState(false);
+  const [nomeNovo, setNomeNovo] = useState('');
+  const [metaNova, setMetaNova] = useState(() => evento.categoria || 'DEFAULT');
 
   const ofertas = catalogo?.itens ?? [];
 
@@ -1080,13 +1091,29 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
     ? ofertas.filter((o) => o.codigo).map((o) => ({ v: String(o.codigo), r: o.nome || o.codigo }))
     : cursos.map((cu) => ({ v: String(cu.codigo), r: cu.nome || cu.codigo }));
 
+  const rotuloAlvo = opcoesAlvo.find((o) => o.v === alvo)?.r ?? alvo;
+
+  /*
+   * O nome sugerido acompanha o alvo até alguém digitar por cima.
+   *
+   * Sem isso a pessoa escolhe a oferta e o nome continua o da anterior — e o
+   * contador nasce com o rótulo errado dentro da conta de anúncios, onde
+   * renomear depois não reescreve o histórico do relatório.
+   */
+  useEffect(() => {
+    if (!criando) return;
+    setNomeNovo(`IDE | ${evento.rotulo} | ${rotuloAlvo || (escopo === 'oferta' ? 'Oferta' : 'Curso')}`);
+  }, [criando, evento, rotuloAlvo, escopo]);
+
   const limpar = () => {
     setAlvo(''); setAcaoId(''); setValor(''); setErro('');
+    setCriando(false);
   };
 
-  const salvar = async () => {
+  const salvar = async (over = {}) => {
     if (!alvo) return setErro('Escolha o curso ou a oferta.');
-    if (!acaoId) return setErro('Escolha a ação de conversão.');
+    const id = over.acaoId ?? acaoId;
+    if (!id) return setErro('Escolha a ação de conversão, ou crie uma.');
     setOcupado(true);
     setErro('');
     try {
@@ -1094,9 +1121,10 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
         evento: evento.id,
         escopo,
         alvo,
-        alvo_rotulo: opcoesAlvo.find((o) => o.v === alvo)?.r ?? alvo,
-        conversion_action_id: acaoId,
-        conversion_action_nome: disponiveis.find((d) => d.id === acaoId)?.nome ?? null,
+        alvo_rotulo: rotuloAlvo,
+        conversion_action_id: id,
+        conversion_action_nome:
+          over.nome ?? disponiveis.find((d) => d.id === id)?.nome ?? null,
         valor: Number(valor) || 0,
         ativo: true,
       });
@@ -1105,6 +1133,24 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
     } catch (e) {
       setErro(e.message || 'não deu para salvar');
     } finally {
+      setOcupado(false);
+    }
+  };
+
+  /** Cria a ação na conta do Google Ads e já a amarra a este alvo. */
+  const criarEAdicionar = async () => {
+    if (!alvo) return setErro('Escolha o curso ou a oferta antes de criar a ação.');
+    const nome = nomeNovo.trim();
+    if (nome.length < 3) return setErro('Nome com pelo menos 3 caracteres.');
+    setOcupado(true);
+    setErro('');
+    try {
+      const r = await enviar('/api/conversoes/acoes-google', {
+        nome, evento: evento.id, categoria: metaNova,
+      });
+      await salvar({ acaoId: r.id, nome });
+    } catch (e) {
+      setErro(e.message || 'Falha ao criar no Google Ads');
       setOcupado(false);
     }
   };
@@ -1211,19 +1257,57 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
               </datalist>
             </label>
 
-            <label className="flex flex-col gap-0.5 min-w-[190px]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Ação</span>
-              <Select
-                rotulo="Ação de conversão da regra"
-                valor={acaoId}
-                aoTrocar={setAcaoId}
-                opcoes={[
-                  ['', '— escolher da conta —'],
-                  ...disponiveis.map((d) => [d.id, `${d.nome} · ${d.id}`]),
-                ]}
-                className="w-full"
-              />
+            <label className="flex flex-col gap-0.5 min-w-[190px] flex-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
+                Ação de conversão
+              </span>
+              {criando ? (
+                <input
+                  type="text"
+                  value={nomeNovo}
+                  maxLength={80}
+                  onChange={(e) => setNomeNovo(e.target.value)}
+                  aria-label="Nome da nova ação no Google Ads"
+                  className="bg-superficie text-primario border border-azul-500 rounded-[8px]
+                             px-2 py-[5px] text-[11px] w-full"
+                />
+              ) : (
+                <Select
+                  rotulo="Ação de conversão da regra"
+                  valor={acaoId}
+                  aoTrocar={setAcaoId}
+                  opcoes={[
+                    ['', '— escolher da conta —'],
+                    ...disponiveis.map((d) => [d.id, `${d.nome} · ${d.id}`]),
+                  ]}
+                  className="w-full"
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => { setCriando((v) => !v); setErro(''); }}
+                className="text-[10px] text-azul-600 bg-transparent border-0 p-0 cursor-pointer self-start mt-0.5"
+              >
+                {criando ? 'escolher uma que já existe' : '+ criar uma ação nova para este alvo'}
+              </button>
             </label>
+
+            {/* A meta só é escolhida ao criar — ação existente já tem a sua. */}
+            {criando && (
+              <label className="flex flex-col gap-0.5 min-w-[150px]">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Meta</span>
+                <Select
+                  rotulo="Meta da nova ação no Google Ads"
+                  valor={metaNova}
+                  aoTrocar={setMetaNova}
+                  opcoes={(metas?.length
+                    ? metas
+                    : [{ id: evento.categoria || 'DEFAULT', rotulo: evento.categoria || 'padrão' }]
+                  ).map((m) => [m.id, m.rotulo])}
+                  className="w-full"
+                />
+              </label>
+            )}
 
             <label className="flex flex-col gap-0.5 w-[92px]">
               <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Valor</span>
@@ -1242,12 +1326,14 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
             <button
               type="button"
               disabled={ocupado}
-              onClick={salvar}
+              onClick={() => (criando ? criarEAdicionar() : salvar())}
               className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500
                          bg-azul-600 text-white hover:bg-azul-500 cursor-pointer
-                         disabled:opacity-50 disabled:cursor-not-allowed"
+                         disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
             >
-              {ocupado ? 'Salvando…' : 'Adicionar'}
+              {ocupado
+                ? (criando ? 'Criando…' : 'Salvando…')
+                : (criando ? 'Criar e adicionar' : 'Adicionar')}
             </button>
           </div>
 
@@ -1257,6 +1343,9 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
             A ordem de resolução é <strong className="text-secundario">oferta → curso → nível → geral</strong>:
             a primeira regra que casar vence. O valor daqui só entra quando o webhook não trouxer
             o preço real da matrícula.
+            {' '}Uma meta específica só separa alguma coisa no Google Ads se tiver{' '}
+            <strong className="text-secundario">ação própria</strong> — apontar para a mesma ação da
+            regra de nível cria uma linha aqui que não muda nada lá.
           </div>
         </div>
       )}
