@@ -281,6 +281,15 @@ mágica de outra ferramenta é o tipo de detalhe que muda sem avisar e falha lon
 de onde foi escrita: o painel procura um gatilho de `pageview` no workspace e
 cria um quando não houver.
 
+**A lista de contêineres vem ordenada, e isso importa.** A conta Google desta
+operação é de agência: enxerga 14 contêineres, e 12 são de outros clientes. Em
+ordem aleatória, um clique errado publica a tag da Faculdade IDE no site de
+terceiro — erro invisível deste lado, que só aparece quando o outro cliente
+pergunta o que é aquilo no contêiner dele. Os que casam com
+`origens_permitidas` sobem e vêm marcados com ★; os outros continuam na lista,
+porque a lista de origens pode estar incompleta e esconder não é o mesmo que
+ordenar.
+
 Exige dois escopos novos — `tagmanager.readonly` e `tagmanager.edit.containers`
 —, o que significa **refazer o consentimento local e republicar o secret**. Sem
 eles a rota responde 403 com a causa dita por extenso, em vez do "insufficient

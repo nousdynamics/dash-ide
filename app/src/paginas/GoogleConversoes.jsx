@@ -162,13 +162,27 @@ function InstalarNoGtm() {
 
       {containers.length > 0 && (
         <>
+          {containers.some((ct) => !ct.provavel) && (
+            <div className="text-[10px] text-atencao leading-relaxed">
+              A conta Google enxerga contêineres de outras operações. Os marcados com ★ casam com os
+              sites autorizados a mandar captura — confira antes de instalar.
+            </div>
+          )}
           <Select
             rotulo="Contêiner do Tag Manager"
             valor={container}
             aoTrocar={setContainer}
             opcoes={[
               ['', '— escolher contêiner —'],
-              ...containers.map((ct) => [ct.path, `${ct.publicId} · ${ct.nome} (${ct.conta})`]),
+              /*
+                * A marca nos prováveis não é enfeite: esta conta Google enxerga
+                * contêineres de outros clientes, e instalar a tag no lugar
+                * errado publica código nosso no site de terceiro.
+                */
+              ...containers.map((ct) => [
+                ct.path,
+                `${ct.provavel ? '★ ' : ''}${ct.publicId} · ${ct.nome} (${ct.conta})`,
+              ]),
             ]}
             className="w-full"
           />

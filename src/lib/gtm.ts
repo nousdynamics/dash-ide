@@ -68,6 +68,11 @@ export type ContainerGtm = {
   conta: string;
   /** `GTM-XXXX`, que é como a pessoa reconhece o contêiner. */
   publicId: string;
+  /**
+   * O nome do contêiner ou da conta casa com um site autorizado a mandar
+   * captura? Ver a ordenação em `listarContainers`.
+   */
+  provavel: boolean;
 };
 
 /**
@@ -77,7 +82,29 @@ export type ContainerGtm = {
  * `Promise.all` evita que dez contas virem dez idas em série numa tela que a
  * pessoa está olhando.
  */
-export async function listarContainers(env: Env): Promise<ContainerGtm[]> {
+/**
+ * Os contêineres que a conta conectada enxerga — os prováveis primeiro.
+ *
+ * A conta Google desta operação é de agência: enxerga 14 contêineres, e 12 são
+ * de outros clientes. Uma lista em ordem aleatória transforma um clique errado
+ * em tag da Faculdade IDE publicada no site de terceiro — erro que ninguém
+ * percebe do lado de cá e que só aparece quando o outro cliente pergunta o que
+ * é aquilo no contêiner dele.
+ *
+ * `origensPermitidas` é a lista de sites que o painel já aceita receber captura,
+ * então é a melhor definição disponível de "nossos sites". Os contêineres que
+ * casam com ela sobem e vêm marcados; os outros continuam na lista, porque a
+ * lista de origens pode estar incompleta e esconder não é o mesmo que ordenar.
+ */
+export async function listarContainers(env: Env, origensPermitidas = ''): Promise<ContainerGtm[]> {
+  const hosts = origensPermitidas
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean)
+    /* O domínio sem o TLD basta para casar "faculdadeide.edu.br - Web". */
+    .map((h) => h.split('.')[0]!)
+    .filter((h) => h.length > 3);
+
   const { account = [] } = await chamar<{ account?: Array<{ path: string; name: string }> }>(
     env, '/accounts',
   );
@@ -95,10 +122,22 @@ export async function listarContainers(env: Env): Promise<ContainerGtm[]> {
        * de formulário HTML. Melhor não oferecer do que oferecer e falhar depois.
        */
       .filter((ct) => !ct.usageContext?.length || ct.usageContext.includes('web'))
-      .map((ct) => ({ path: ct.path, nome: ct.name, conta: c.name, publicId: ct.publicId }));
+      .map((ct) => {
+        const agulha = `${ct.name} ${c.name}`.toLowerCase();
+        return {
+          path: ct.path,
+          nome: ct.name,
+          conta: c.name,
+          publicId: ct.publicId,
+          provavel: hosts.some((h) => agulha.includes(h)),
+        };
+      });
   }));
 
-  return porConta.flat();
+  return porConta.flat().sort((a, b) => {
+    if (a.provavel !== b.provavel) return a.provavel ? -1 : 1;
+    return `${a.conta} ${a.nome}`.localeCompare(`${b.conta} ${b.nome}`, 'pt-BR');
+  });
 }
 
 /**

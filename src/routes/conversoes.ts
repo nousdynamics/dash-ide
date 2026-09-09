@@ -797,7 +797,8 @@ conversoes.get('/planilha', async (c) => {
  */
 conversoes.get('/gtm', async (c) => {
   try {
-    return c.json({ itens: await listarContainers(c.env) });
+    const cfg = await lerConfig(c.env.DB);
+    return c.json({ itens: await listarContainers(c.env, cfg.origensPermitidas) });
   } catch (e) {
     const erro = e instanceof ErroGtm ? e : null;
     return c.json(
