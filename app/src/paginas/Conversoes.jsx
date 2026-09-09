@@ -1257,9 +1257,32 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
               </datalist>
             </label>
 
-            <label className="flex flex-col gap-0.5 min-w-[190px] flex-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
-                Ação de conversão
+            {/*
+              * `div` e não `label`: o alternador é um <button>, e conteúdo
+              * interativo dentro de <label> é inválido — o clique no botão
+              * escaparia para o controle rotulado e o focaria junto. Os dois
+              * campos abaixo têm `aria-label` próprio, então nada se perde.
+              */}
+            <div className="flex flex-col gap-0.5 min-w-[190px] flex-1">
+              {/*
+                * O alternador fica NA LINHA DO RÓTULO, acima do campo.
+                *
+                * Embaixo ele lia como legenda do que já estava preenchido — e é
+                * o contrário: é a escolha entre dois caminhos, que precisa ser
+                * vista antes de mexer no campo, não depois.
+                */}
+              <span className="flex items-baseline justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
+                  Ação de conversão
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { setCriando((v) => !v); setErro(''); }}
+                  className="text-[10px] text-azul-600 bg-transparent border-0 p-0 cursor-pointer
+                             whitespace-nowrap hover:underline"
+                >
+                  {criando ? 'escolher uma que já existe' : '+ criar uma nova'}
+                </button>
               </span>
               {criando ? (
                 <input
@@ -1283,14 +1306,7 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
                   className="w-full"
                 />
               )}
-              <button
-                type="button"
-                onClick={() => { setCriando((v) => !v); setErro(''); }}
-                className="text-[10px] text-azul-600 bg-transparent border-0 p-0 cursor-pointer self-start mt-0.5"
-              >
-                {criando ? 'escolher uma que já existe' : '+ criar uma ação nova para este alvo'}
-              </button>
-            </label>
+            </div>
 
             {/* A meta só é escolhida ao criar — ação existente já tem a sua. */}
             {criando && (
