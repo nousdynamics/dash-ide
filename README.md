@@ -382,6 +382,33 @@ Marcar "concedido" é uma declaração em nome da faculdade sobre um consentimen
 que só quem administra a captação pode confirmar — por isso mora na tela, com o
 padrão no lado que não afirma nada, em vez de cravado no código.
 
+### O mapa mostra o que chega, não o que o nome do processo sugere
+
+A lista de níveis de cada gatilho vinha da **família inferida do nome do
+processo**: "Pós-Graduação" mostrava só níveis de pós. Isso escondia o que de
+fato chega — medido em 09/09/2026, na etapa de Oportunidade entram também
+Graduação (Presencial e EAD) e Extensão (EAD), além de 75 leads sem nível
+identificado.
+
+Nível escondido não é mapeado, e conversão sem regra fica presa em `sem_acao`
+sem ninguém perceber. Foi exatamente o que aconteceu com as duas primeiras
+conversões reais da conta.
+
+Agora a lista é a união de dois conjuntos: os níveis que **realmente chegaram**
+naquele evento nos últimos 60 dias, e os do catálogo que combinam com o processo
+— estes para dar para mapear antes do primeiro lead. Ordenadas por volume, com
+o curinga sempre no topo.
+
+**A cobertura é medida em leads, não em linhas.** "1 de 4 níveis mapeados"
+tratava um nível de 3 leads e outro de 194 como se pesassem o mesmo. O
+cabeçalho de cada gatilho passa a dizer "cobre X% dos leads" e quantos ficam
+sem destino, e o checklist do topo só fica verde quando esse número é zero. Um
+checklist que aprova o estado incompleto é pior do que não existir: ele afirma
+que está pronto.
+
+Estado no dia da mudança: 604 leads em 60 dias, **410 sem destino** com o mapa
+de então — 261 em Inscrição concluída, 149 em Pagamento realizado.
+
 ### Meta por oferta, não só por nível de ensino
 
 A tabela de ações mirava um alvo só: nível de ensino, com `nivel_ensino = '*'`

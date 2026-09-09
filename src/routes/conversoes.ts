@@ -48,7 +48,7 @@ const ehEvento = (v: unknown): v is Evento => EVENTOS.includes(v as Evento);
 conversoes.get('/', async (c) => {
   const cfg = await lerConfig(c.env.DB);
 
-  const [gatilhos, acoes, resumo, niveis, etapas, captura] = await Promise.all([
+  const [gatilhos, acoes, resumo, niveis, etapas, cobertura, captura] = await Promise.all([
     c.env.DB.prepare(
       `SELECT g.id, g.processo_id, g.etapa_nome, g.evento, g.ativo,
               (SELECT nome FROM funis f WHERE f.processo_id = g.processo_id LIMIT 1) AS processo_nome
@@ -87,6 +87,35 @@ conversoes.get('/', async (c) => {
               ) AS processo_nome
          FROM processo_etapas pe
         ORDER BY processo_nome COLLATE NOCASE, pe.ordem ASC, pe.etapa_nome ASC`,
+    ).all(),
+    /*
+     * Quantos leads REAIS cada nível traz, por evento, nos últimos 60 dias.
+     *
+     * É o que transforma o mapa de ctId de adivinhação em decisão. A tela
+     * listava os níveis inferidos do NOME do processo — "Pós-Graduação" mostrava
+     * só níveis de pós —, e isso escondia o que de fato chega: na etapa de
+     * Oportunidade entram também Graduação e Extensão, e 75 leads sem nível
+     * identificado. Nível escondido não é mapeado, e conversão sem regra fica
+     * presa em `sem_acao` sem ninguém perceber.
+     *
+     * O nível é resolvido como no envio: catálogo de cursos primeiro, ofertas
+     * depois. Vazio quer dizer "cai no curinga".
+     */
+    c.env.DB.prepare(
+      `SELECT g.evento,
+              COALESCE(
+                (SELECT nivel_ensino FROM cursos c WHERE c.id = l.curso_id),
+                (SELECT nivel_ensino FROM curso_ofertas o WHERE o.oferta_codigo = l.oferta_codigo),
+                ''
+              ) AS nivel,
+              COUNT(*) AS leads
+         FROM leads_etapa l
+         JOIN conversao_gatilhos g
+           ON g.ativo = 1 AND g.etapa_nome = l.etapa
+          AND (g.processo_id IS NULL OR g.processo_id = l.processo_id)
+        WHERE l.registrado_em >= datetime('now', '-60 days')
+        GROUP BY g.evento, nivel
+        ORDER BY leads DESC`,
     ).all(),
     c.env.DB.prepare(
       `SELECT COUNT(*) AS total,
@@ -140,6 +169,8 @@ conversoes.get('/', async (c) => {
     acoes: acoes.results,
     resumo: resumo.results,
     niveis: niveis.results,
+    /** Volume real por evento × nível (60 d) — alimenta o mapa de ctId. */
+    cobertura: cobertura.results,
     pipelines: [...porProcesso.values()],
     captura,
     // A URL que vai na tag do site — montada a partir do host real do painel.

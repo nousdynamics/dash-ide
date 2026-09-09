@@ -140,7 +140,7 @@ export function Conversoes() {
   if (carregando || !dados) return <>{cabecalho}<Esqueleto linhas={8} /></>;
 
   const {
-    config, eventos, gatilhos, acoes, resumo, niveis,
+    config, eventos, gatilhos, acoes, resumo, niveis, cobertura,
     nivel_padrao, google, metas_google,
   } = dados;
 
@@ -150,6 +150,33 @@ export function Conversoes() {
     await enviar('/api/conversoes/config', mudanca, 'PUT');
     recarregar();
   };
+
+  /*
+   * Quanto do volume real ficaria sem destino com o mapa de hoje.
+   *
+   * Mesma regra do envio: a ação do nível exato, senão a curinga do evento. É o
+   * número que separa "configurado" de "configurado e cobrindo o que chega".
+   */
+  const { volumeTotal, descobertoTotal } = useMemo(() => {
+    let total = 0;
+    let descoberto = 0;
+    const curingaDe = new Map(
+      (acoes ?? [])
+        .filter((a) => a.ativo && a.escopo === 'geral' && a.conversion_action_id)
+        .map((a) => [a.evento, true]),
+    );
+    for (const c of cobertura ?? []) {
+      const n = Number(c.leads) || 0;
+      total += n;
+      if (curingaDe.has(c.evento)) continue;
+      const temRegra = (acoes ?? []).some(
+        (a) => a.ativo && a.conversion_action_id && a.evento === c.evento
+          && a.escopo === 'nivel' && a.alvo === c.nivel,
+      );
+      if (!temRegra) descoberto += n;
+    }
+    return { volumeTotal: total, descobertoTotal: descoberto };
+  }, [cobertura, acoes]);
 
   const checklist = [
     {
@@ -167,9 +194,23 @@ export function Conversoes() {
       falta: 'Ligar gatilho na seção 1',
     },
     {
-      ok: (acoes ?? []).some((a) => a.ativo && a.conversion_action_id),
-      rotulo: 'ctId / ação de conversão mapeada',
-      falta: 'Colar ou criar ctId na seção 2',
+      /*
+       * Verde só quando TODO o volume tem destino.
+       *
+       * Antes bastava existir uma regra qualquer, e o checklist ficava verde com
+       * 14% dos leads caindo em `sem_acao`. Um checklist que aprova o estado
+       * incompleto é pior do que não existir: ele afirma que está pronto.
+       *
+       * A conta é em leads dos últimos 60 dias, por evento. O curinga cobre tudo
+       * do evento dele — é para isso que ele existe.
+       */
+      ok: descobertoTotal === 0 && (acoes ?? []).some((a) => a.ativo && a.conversion_action_id),
+      rotulo: descobertoTotal === 0 && volumeTotal > 0
+        ? `ctId mapeado para 100% dos leads (${fmtInt(volumeTotal)} em 60 d)`
+        : 'ctId / ação de conversão mapeada',
+      falta: descobertoTotal > 0
+        ? `${fmtInt(descobertoTotal)} lead(s) sem ação — mapeie o nível “qualquer” na seção 2`
+        : 'Colar ou criar ctId na seção 2',
     },
     {
       /*
@@ -505,6 +546,7 @@ export function Conversoes() {
           processoId={processoAtivo}
           processoNome={pipeline?.processo_nome}
           nivelPadrao={nivel_padrao}
+          cobertura={cobertura ?? []}
           aoSalvar={recarregar}
         />
       </Cartao>
@@ -637,7 +679,7 @@ function familiaNivel(nivel) {
  * à mão continua possível, atrás de um clique.
  */
 function TabelaAcoes({
-  eventos, metas, niveis, acoes, gatilhos, processoId, processoNome, aoSalvar, nivelPadrao,
+  eventos, metas, niveis, acoes, gatilhos, processoId, processoNome, aoSalvar, nivelPadrao, cobertura,
 }) {
   const { dados: doGoogle, erro } = useApi('/api/conversoes/acoes-google', 'acoes-google');
   const { dados: catalogo } = useApi('/api/catalogo/cursos', 'catalogo-cursos');
@@ -653,21 +695,62 @@ function TabelaAcoes({
   }, [gatilhos, processoId]);
 
   const familia = familiaDoProcesso(processoNome);
-  const niveisDoProcesso = useMemo(() => {
-    const filtrados = niveis.filter((nivel) => {
-      if (nivel === '*') return true;
-      const f = familiaNivel(nivel).id;
+
+  /**
+   * Quantos leads cada nível trouxe, por evento, nos últimos 60 dias.
+   *
+   * `''` é o nível não identificado, que no envio cai no curinga — por isso ele
+   * vira a contagem da linha `qualquer`.
+   */
+  const volumePorEvento = useMemo(() => {
+    const m = new Map();
+    for (const c of cobertura ?? []) {
+      if (!m.has(c.evento)) m.set(c.evento, new Map());
+      m.get(c.evento).set(c.nivel || nivelPadrao, Number(c.leads) || 0);
+    }
+    return m;
+  }, [cobertura, nivelPadrao]);
+
+  /**
+   * Quais linhas mostrar para um evento.
+   *
+   * Antes a lista vinha do NOME do processo: "Pós-Graduação" mostrava só níveis
+   * de pós. Isso escondia o que de fato chega — na etapa de Oportunidade entram
+   * também Graduação e Extensão —, e nível escondido não é mapeado. A conversão
+   * então fica presa em `sem_acao` sem ninguém perceber, que foi exatamente o
+   * que aconteceu com as duas primeiras conversões reais desta conta.
+   *
+   * Agora a lista é a união de dois conjuntos:
+   *
+   *   1. os níveis que REALMENTE chegaram nesse evento — a verdade medida;
+   *   2. os do catálogo que combinam com o processo — para dar para mapear
+   *      antes de o primeiro lead chegar.
+   *
+   * Ordenadas por volume: quem manda mais lead aparece antes, e o curinga
+   * sempre no topo, porque é a rede que segura todo o resto.
+   */
+  const linhasDoEvento = useMemo(() => (eventoId) => {
+    const volumes = volumePorEvento.get(eventoId) ?? new Map();
+
+    const doCatalogo = niveis.filter((nivel) => {
+      if (nivel === nivelPadrao) return true;
       if (!familia) return true;
-      if (familia === 'geral') return f === 'geral' || nivel === '*';
-      return f === familia || nivel === '*';
+      const f = familiaNivel(nivel).id;
+      if (familia === 'geral') return f === 'geral';
+      return f === familia;
     });
-    // * primeiro, depois o resto
-    return filtrados.sort((a, b) => {
-      if (a === '*') return -1;
-      if (b === '*') return 1;
-      return String(a).localeCompare(String(b), 'pt-BR');
-    });
-  }, [niveis, familia]);
+
+    const todos = new Set([nivelPadrao, ...volumes.keys(), ...doCatalogo]);
+
+    return [...todos]
+      .map((nivel) => ({ nivel, leads: volumes.get(nivel) ?? 0 }))
+      .sort((a, b) => {
+        if (a.nivel === nivelPadrao) return -1;
+        if (b.nivel === nivelPadrao) return 1;
+        if (a.leads !== b.leads) return b.leads - a.leads;
+        return String(a.nivel).localeCompare(String(b.nivel), 'pt-BR');
+      });
+  }, [volumePorEvento, niveis, familia, nivelPadrao]);
 
   if (!processoId) return <Estado mensagem="Selecione um processo na etapa 1." />;
 
@@ -701,13 +784,29 @@ function TabelaAcoes({
          * Regras por curso ou oferta não entram aqui — são exceções, e listá-las
          * junto faria a contagem "x de y níveis" mentir.
          */
-        const doEvento = niveisDoProcesso.map((nivel) => ({
+        const doEvento = linhasDoEvento(ev.id).map(({ nivel, leads }) => ({
           nivel,
+          leads,
           atual: acoes.find((a) => a.evento === ev.id && (
             nivel === nivelPadrao ? a.escopo === 'geral' : (a.escopo === 'nivel' && a.alvo === nivel)
           )),
         }));
-        const mapeados = doEvento.filter((l) => l.atual?.conversion_action_id).length;
+
+        /*
+         * Cobertura em LEADS, não em linhas.
+         *
+         * "1 de 4 níveis mapeados" tratava um nível com 3 leads e outro com 194
+         * como se pesassem o mesmo. O número que importa é quanto do volume real
+         * tem para onde ir — e o curinga, quando mapeado, cobre tudo, porque é
+         * ele que recebe o que nenhuma regra específica pegou.
+         */
+        const curinga = doEvento.find((l) => l.nivel === nivelPadrao)?.atual?.conversion_action_id;
+        const totalLeads = doEvento.reduce((n, l) => n + l.leads, 0);
+        const leadsCobertos = curinga
+          ? totalLeads
+          : doEvento.reduce((n, l) => n + (l.atual?.conversion_action_id ? l.leads : 0), 0);
+        const pctCoberto = totalLeads ? Math.round((leadsCobertos / totalLeads) * 100) : null;
+        const descobertos = totalLeads - leadsCobertos;
 
         const especificas = acoes.filter(
           (a) => a.evento === ev.id && (a.escopo === 'oferta' || a.escopo === 'curso'),
@@ -725,12 +824,17 @@ function TabelaAcoes({
                 <span className="text-tenue" aria-hidden="true">→</span>
                 <Pill tom="neutro">{ev.rotulo}</Pill>
               </div>
-              <span
-                className={`text-[11px] tnum shrink-0 ${
-                  mapeados === doEvento.length ? 'text-sucesso' : 'text-atencao'
-                }`}
-              >
-                {mapeados} de {doEvento.length} {doEvento.length === 1 ? 'nível mapeado' : 'níveis mapeados'}
+              <span className="text-[11px] tnum shrink-0 text-right">
+                {pctCoberto === null ? (
+                  <span className="text-tenue">sem lead nesta etapa em 60 d</span>
+                ) : (
+                  <span className={pctCoberto === 100 ? 'text-sucesso' : 'text-atencao'}>
+                    cobre {pctCoberto}% dos leads
+                    {descobertos > 0 && (
+                      <span className="text-perigo"> · {fmtInt(descobertos)} sem destino</span>
+                    )}
+                  </span>
+                )}
               </span>
             </div>
 
@@ -747,7 +851,7 @@ function TabelaAcoes({
             </div>
 
             <div className="flex flex-col">
-              {doEvento.map(({ nivel, atual }) => (
+              {doEvento.map(({ nivel, leads, atual }) => (
                 <LinhaAcao
                   key={nivel}
                   evento={ev}
@@ -756,6 +860,7 @@ function TabelaAcoes({
                   rotulo={nivel === nivelPadrao
                     ? <em className="text-tenue font-normal">qualquer / não identificado</em>
                     : nivel}
+                  leads={leads}
                   metas={metas}
                   atual={atual}
                   disponiveis={disponiveis}
@@ -809,7 +914,7 @@ function nomeSugerido(evento, alvo) {
  * porque um número digitado errado é aceito pela tela e só falha no envio, dias
  * depois — enquanto escolher da conta não tem como errar.
  */
-function LinhaAcao({ evento, escopo, alvo, rotulo, metas, atual, disponiveis, aoSalvar }) {
+function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, atual, disponiveis, aoSalvar }) {
   const [valor, setValor] = useState(atual?.valor ?? 0);
   const [modo, setModo] = useState(null); // 'colar' | 'criar' | null
   const [ctIdManual, setCtIdManual] = useState('');
@@ -893,7 +998,16 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, metas, atual, disponiveis, ao
         className="grid gap-2 md:gap-3 items-center px-3 py-2
                    grid-cols-1 md:grid-cols-[minmax(150px,0.9fr)_minmax(0,1.6fr)_96px_auto]"
       >
-        <div className="text-xs font-semibold min-w-0 truncate">{rotulo}</div>
+        <div className="min-w-0">
+          <div className="text-xs font-semibold truncate">{rotulo}</div>
+          {/*
+            * O volume ao lado do nome: é o que separa a linha que precisa ser
+            * mapeada hoje da que só existe no catálogo.
+            */}
+          <div className={`text-[10px] ${leads > 0 && !atual?.conversion_action_id ? 'text-atencao' : 'text-tenue'}`}>
+            {leads > 0 ? `${fmtInt(leads)} lead(s) / 60d` : 'sem lead em 60 d'}
+          </div>
+        </div>
 
         {/* Coluna da ação: o valor mapeado, ou os caminhos para mapear. */}
         <div className="min-w-0">
