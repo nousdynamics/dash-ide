@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { exigirAdmin } from '../lib/access';
 import { colunasDoClickId } from '../lib/cliques';
+import { listarCamposPersonalizados } from '../lib/rubeus';
 import {
   CATEGORIA_EVENTO,
   METAS_GOOGLE,
@@ -855,9 +856,25 @@ conversoes.post('/gtm', async (c) => {
 conversoes.get('/campo-rubeus', async (c) => {
   try {
     const colunas = await colunasDoClickId(c.env, c.req.query('forcar') === '1');
+
+    /*
+     * Devolve TAMBÉM os campos que existem no contato.
+     *
+     * "Criei o campo e o painel não acha" não tem como ser respondido só com
+     * um `encontrado: false` — a causa costuma ser o nome (criado em
+     * "Oportunidade" e não em "Contato", ou chamado "ID do clique"). Com a
+     * lista na tela, quem criou vê na hora o que de fato ficou lá.
+     */
+    const campos = await listarCamposPersonalizados(c.env);
+    const doContato = campos
+      .filter((f) => (f.tipoLocalNome ?? '').toLowerCase().includes('contato'))
+      .map((f) => ({ nome: f.nome, coluna: f.coluna }));
+
     return c.json({
       colunas,
       encontrado: Object.values(colunas).some(Boolean),
+      campos_do_contato: doContato,
+      total_campos: campos.length,
     });
   } catch (e) {
     return c.json({ erro: String(e) }, 502);

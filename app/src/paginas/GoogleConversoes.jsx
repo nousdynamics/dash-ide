@@ -81,6 +81,82 @@ function Acao({ children, aoClicar, tom = 'neutro', titulo }) {
 }
 
 /**
+ * O campo de click id no Rubeus: existe? E, se não, o que existe?
+ *
+ * Um "não encontrado" seco não resolve o caso mais comum — a pessoa criou o
+ * campo e o painel não achou. As causas são sempre de cadastro: criado em
+ * Oportunidade em vez de Contato, ou com um nome que não contém "gclid"
+ * ("ID do clique", "Google Click"). Listar o que de fato está lá responde as
+ * duas de uma vez, sem precisar abrir o Rubeus para conferir.
+ */
+function CampoNoRubeus() {
+  const [r, setR] = useState(null);
+  const [estado, setEstado] = useState('pronto');
+  const [verLista, setVerLista] = useState(false);
+
+  const procurar = async () => {
+    setEstado('rodando');
+    try {
+      const d = await fetch('/api/conversoes/campo-rubeus?forcar=1').then((x) => x.json());
+      setR(d);
+      setEstado(d.erro ? 'erro' : 'ok');
+    } catch (e) {
+      setR({ erro: e.message });
+      setEstado('erro');
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 items-start lg:items-end">
+      <button
+        type="button"
+        onClick={procurar}
+        disabled={estado === 'rodando'}
+        className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie
+                   text-secundario hover:bg-superficie-hover hover:text-primario cursor-pointer
+                   disabled:opacity-50"
+      >
+        {estado === 'rodando' ? 'Consultando…' : 'Procurar campo de click id no Rubeus'}
+      </button>
+
+      {r?.erro && <span className="text-[10px] text-perigo max-w-[300px]">{r.erro}</span>}
+
+      {r && !r.erro && (
+        <div className="text-[10px] leading-relaxed lg:text-right max-w-[320px]">
+          {r.encontrado ? (
+            <span className="text-sucesso">
+              Encontrado:{' '}
+              {Object.entries(r.colunas).filter(([, v]) => v).map(([k, v]) => `${k} → ${v}`).join(', ')}
+            </span>
+          ) : (
+            <span className="text-tenue">
+              Nenhum campo de click id entre os {r.campos_do_contato?.length ?? 0} campos do Contato.
+              O painel funciona sem ele — só não devolve o clique ao CRM.
+            </span>
+          )}
+          {r.campos_do_contato?.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setVerLista((v) => !v)}
+              className="block ml-auto mt-1 text-azul-600 bg-transparent border-0 p-0 cursor-pointer text-[10px]"
+            >
+              {verLista ? 'esconder' : 'ver os campos que existem'}
+            </button>
+          )}
+          {verLista && (
+            <ul className="mt-1 text-tenue lg:text-left border-t border-borda pt-1 max-h-40 overflow-auto">
+              {r.campos_do_contato.map((f) => (
+                <li key={f.coluna} className="truncate">{f.nome}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Instala a tag no GTM sem sair do painel.
  *
  * Faz os cinco passos manuais — criar a tag de HTML personalizado, apontar o
@@ -446,17 +522,7 @@ export function GoogleConversoes() {
             {fmtInt(captura?.casados ?? 0)} cruzado(s) com lead
           </Pill>
           <span className="ml-auto">
-            <Acao
-              titulo="Reconsulta os campos personalizados do Rubeus"
-              aoClicar={async () => {
-                const r = await fetch('/api/conversoes/campo-rubeus?forcar=1').then((x) => x.json());
-                return r.encontrado
-                  ? `Campo: ${Object.entries(r.colunas).filter(([, v]) => v).map(([k, v]) => `${k} → ${v}`).join(', ')}`
-                  : 'Nenhum campo gclid no Rubeus ainda.';
-              }}
-            >
-              Procurar campo gclid no Rubeus
-            </Acao>
+            <CampoNoRubeus />
           </span>
         </div>
       </Cartao>
