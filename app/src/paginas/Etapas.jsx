@@ -296,8 +296,29 @@ export function Etapas() {
                           {e.macro_etapa == null && (
                             <span>fora do consolidado</span>
                           )}
-                          {e.etapa_id && (
+                          {e.etapa_id ? (
                             <span className="font-mono">id {e.etapa_id}</span>
+                          ) : (
+                            /*
+                             * Sem id: a etapa nunca foi confirmada pela API.
+                             *
+                             * O id só entra quando a etapa aparece em
+                             * listarOportunidades. Sem ele, ou é etapa real que
+                             * ninguém percorreu ultimamente ("Pré- Matriculado"),
+                             * ou é nome que o webhook pôs no campo errado — foi
+                             * assim que "Não contactado", que é o resumo da
+                             * oportunidade, virou etapa em cinco processos.
+                             *
+                             * A tela promete "o nome à esquerda é o do Rubeus";
+                             * estas são as linhas em que ela não pode garantir.
+                             * Marca sem acusar: quem opera o CRM sabe qual é qual.
+                             */
+                            <span
+                              className="text-atencao"
+                              title="A API do Rubeus nunca confirmou esta etapa. Pode ser etapa real que ninguém percorreu ultimamente, ou nome que o webhook mandou em outro campo (resumo, situação). Confira antes de classificar."
+                            >
+                              sem id do Rubeus
+                            </span>
                           )}
                         </div>
                       </div>

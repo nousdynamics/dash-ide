@@ -15,6 +15,7 @@ const Funil = lazy(() => import('./paginas/Funil').then((m) => ({ default: m.Fun
 const Conversas = lazy(() => import('./paginas/Conversas').then((m) => ({ default: m.Conversas })));
 const Webhooks = lazy(() => import('./paginas/Webhooks').then((m) => ({ default: m.Webhooks })));
 const Conversoes = lazy(() => import('./paginas/Conversoes').then((m) => ({ default: m.Conversoes })));
+const GoogleConversoes = lazy(() => import('./paginas/GoogleConversoes').then((m) => ({ default: m.GoogleConversoes })));
 const Etapas = lazy(() => import('./paginas/Etapas').then((m) => ({ default: m.Etapas })));
 
 const icone = (d) => (
@@ -58,6 +59,13 @@ const ICONES = {
       <path d="M5 20v-4h4" />
     </>
   ),
+  'conversoes-google': icone(
+    <>
+      <path d="M12 3v12" />
+      <path d="m8 11 4 4 4-4" />
+      <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+    </>
+  ),
   etapas: icone(
     <>
       <path d="M4 6h16" />
@@ -80,7 +88,15 @@ const PAGINAS = [
   // Decide o que o Google Ads recebe, e o que ele recebe muda o lance das
   // campanhas. Mesmo segundo nível de acesso dos webhooks, pelo mesmo motivo:
   // ver o resultado não é a mesma autorização que mexer no que o gera.
-  { id: 'conversoes', nome: 'Conversão offline', curto: 'Conv.', admin: true },
+  { id: 'conversoes', nome: 'Conversões Ads', curto: 'Conv.', admin: true },
+  /*
+   * Subpágina de Conversões Ads: o resultado, não a configuração.
+   *
+   * `pai` só muda o desenho do menu — o item aparece recuado sob o de cima. A
+   * rota é de primeiro nível como as outras, porque hash aninhado obrigaria o
+   * roteador a entender caminho, e ele existe justamente para não precisar.
+   */
+  { id: 'conversoes-google', nome: 'Google Conversões', curto: 'Envios', admin: true, pai: 'conversoes' },
   // Mapa macro + ordem + ocultar etapas ruidosas — alimenta Macro e Detalhe.
   { id: 'etapas', nome: 'Etapas do processo', curto: 'Etapas', admin: true },
 ];
@@ -185,7 +201,7 @@ export default function App() {
                   location.hash = `#/${p.id}`;
                 }}
                 className={`flex items-center rounded-[8px] py-[7px] text-[13px] font-medium cursor-pointer border-0 w-full text-left
-                  ${retraida ? 'justify-center px-0' : 'px-3'}
+                  ${retraida ? 'justify-center px-0' : p.pai ? 'pl-8 pr-3' : 'px-3'}
                   ${ativo ? 'bg-azul-600 text-white' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
               >
                 <span className={`flex items-center ${retraida ? 'gap-0' : 'gap-[10px]'} min-w-0`}>
@@ -221,6 +237,7 @@ export default function App() {
           {rota === 'conversas' && <Conversas />}
           {rota === 'webhooks' && <Webhooks />}
           {rota === 'conversoes' && <Conversoes />}
+          {rota === 'conversoes-google' && <GoogleConversoes />}
           {rota === 'etapas' && <Etapas />}
         </Suspense>
       </main>

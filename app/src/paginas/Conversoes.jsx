@@ -2,14 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BotaoIcone, Cartao, Estado, Esqueleto, Modal, Pill, Select, Switch } from '../componentes/base';
 import { useApi } from '../lib/api';
 import { ROTULO_STATUS, TOM_STATUS } from '../lib/conversao';
-import { MonitorConversoes } from './MonitorConversoes';
 import { fmtInt } from '../lib/formato';
 
 /**
  * Conversão offline — o fluxo que saiu do n8n.
  *
- * Organização: (0) Google pronto → (1) gatilhos por processo → (2) ctId / ação
- * por evento × nível → (3) captura do clique → (4) planilha → registro.
+ * Só a INSTALAÇÃO: (0) Google pronto → (1) gatilhos por processo → (2) ctId /
+ * ação por evento × nível. O resultado — registro, veredito do Google, captura
+ * do clique e planilha — mora em "Google Conversões", porque é pergunta de todo
+ * dia e esta tela é decisão que se toma uma vez.
  */
 
 async function enviar(rota, corpo, metodo = 'POST') {
@@ -105,7 +106,7 @@ export function Conversoes() {
 
   const cabecalho = (
     <div>
-      <div className="text-[19px] font-semibold tracking-tight">Conversão offline</div>
+      <div className="text-[19px] font-semibold tracking-tight">Conversões Ads</div>
       <div className="text-tenue text-xs mt-[2px] max-w-[720px] leading-relaxed">
         Mapeia etapa do Rubeus → evento → ação do Google Ads (ctId). Quando o lead muda de etapa,
         o painel envia a conversão com o identificador do clique (ou e-mail/telefone em hash).
@@ -139,8 +140,8 @@ export function Conversoes() {
   if (carregando || !dados) return <>{cabecalho}<Esqueleto linhas={8} /></>;
 
   const {
-    config, eventos, gatilhos, acoes, resumo, niveis, captura,
-    nivel_padrao, script_url, google, metas_google,
+    config, eventos, gatilhos, acoes, resumo, niveis,
+    nivel_padrao, google, metas_google,
   } = dados;
 
   const pipeline = pipelinesOrd.find((p) => p.processo_id === processoAtivo) ?? null;
@@ -507,96 +508,33 @@ export function Conversoes() {
         />
       </Cartao>
 
-      {/* 3. Captura */}
+      {/*
+        * Captura do clique, planilha e monitor saíram daqui.
+        *
+        * Foram para "Google Conversões". O que sobra nesta tela é decisão de
+        * instalação — qual etapa vira evento, e para qual ação do Google cada
+        * nível manda —, mexida raramente. Misturada com o resultado, obrigava
+        * quem só queria conferir o envio de ontem a rolar por escolhas que não
+        * ia tomar naquele momento.
+        */}
       <Cartao>
-        <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="min-w-0">
-            <div className="text-[13px] font-semibold">3. Identificador do clique (gclid)</div>
-            <div className="text-[11px] text-tenue mt-1 max-w-[640px] leading-relaxed">
-              Sem gclid o envio usa e-mail/telefone em hash (conversão aprimorada). Com gclid a
-              atribuição fica exata.
+            <div className="text-[13px] font-semibold">Conferir o que foi enviado</div>
+            <div className="text-[11px] text-tenue mt-1 max-w-[620px] leading-relaxed">
+              O registro das conversões, o veredito do Google, a captura do gclid no site e a
+              cópia na planilha ficam em Google Conversões.
             </div>
           </div>
-          <div className="flex flex-col gap-2 items-end shrink-0">
-            <Switch ligado={config.capturaLigada} aoTrocar={(v) => trocarConfig({ captura_ligada: v })}>
-              {config.capturaLigada ? 'Captura no site ligada' : 'Captura no site desligada'}
-            </Switch>
-            <Switch ligado={config.escreverNoRubeus} aoTrocar={(v) => trocarConfig({ escrever_no_rubeus: v })}>
-              {config.escreverNoRubeus ? 'Gravando no Rubeus' : 'Não grava no Rubeus'}
-            </Switch>
-          </div>
-        </div>
-
-        <div className="mt-3 pt-3 border-t border-borda">
-          <div className="text-[12px] font-semibold mb-1">Tag do site</div>
-          <code className="block text-[11px] font-mono bg-elevado border border-borda rounded-[8px]
-                           px-2 py-[6px] break-all select-all">
-            {`<script src="${script_url}" async></script>`}
-          </code>
-          <div className="text-[11px] text-tenue mt-2">
-            Origens: <span className="font-mono">{config.origensPermitidas ?? '—'}</span>
-          </div>
-        </div>
-
-        <div className="mt-3 pt-3 border-t border-borda flex items-center gap-3 flex-wrap">
-          <Pill tom={captura?.total > 0 ? 'sucesso' : 'neutro'}>
-            {fmtInt(captura?.total ?? 0)} clique(s) / 30d
-          </Pill>
-          <Pill tom={captura?.casados > 0 ? 'sucesso' : 'neutro'}>
-            {fmtInt(captura?.casados ?? 0)} cruzado(s)
-          </Pill>
-          <span className="ml-auto">
-            <Acao
-              titulo="Reconsulta campos personalizados do Rubeus"
-              aoClicar={async () => {
-                const r = await fetch('/api/conversoes/campo-rubeus?forcar=1').then((x) => x.json());
-                return r.encontrado
-                  ? `Campo: ${Object.entries(r.colunas).filter(([, v]) => v).map(([k, v]) => `${k} → ${v}`).join(', ')}`
-                  : 'Nenhum campo gclid no Rubeus ainda.';
-              }}
-            >
-              Procurar campo gclid no Rubeus
-            </Acao>
-          </span>
+          <a
+            href="#/conversoes-google"
+            className="text-[11px] px-3 py-[6px] rounded-[8px] border border-borda-forte bg-superficie
+                       text-secundario no-underline shrink-0 hover:bg-superficie-hover hover:text-primario"
+          >
+            Abrir Google Conversões →
+          </a>
         </div>
       </Cartao>
-
-      {/* 4. Planilha */}
-      <Cartao>
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="min-w-0">
-            <div className="text-[13px] font-semibold">4. Planilha de backup</div>
-            <div className="text-[11px] text-tenue mt-1 max-w-[640px] leading-relaxed">
-              Uma linha por conversão, inclusive as que não foram enviadas (com motivo).
-            </div>
-            {config.planilhaUrl && (
-              <a
-                href={config.planilhaUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[11px] text-azul-600 mt-2 inline-block break-all"
-              >
-                Abrir a planilha
-              </a>
-            )}
-          </div>
-          {!config.planilhaId && (
-            <Acao
-              tom="primario"
-              titulo="Cria a planilha no Drive"
-              aoClicar={async () => {
-                const r = await enviar('/api/conversoes/planilha');
-                recarregar();
-                return r.url;
-              }}
-            >
-              Criar a planilha
-            </Acao>
-          )}
-        </div>
-      </Cartao>
-
-      <MonitorConversoes />
     </>
   );
 }

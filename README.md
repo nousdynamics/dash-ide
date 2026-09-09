@@ -134,7 +134,18 @@ falham. Não remover achando que é resíduo da arquitetura antiga.
 
 ## Conversão offline
 
-Saiu do n8n e virou tela do painel (`#/conversoes`, só para quem administra).
+Saiu do n8n e virou **duas** telas do painel, ambas só para quem administra:
+
+- **Conversões Ads** (`#/conversoes`) — a instalação: qual etapa do Rubeus vira
+  qual evento, e para qual ação do Google Ads cada nível de ensino manda. Decisão
+  que se toma uma vez.
+- **Google Conversões** (`#/conversoes-google`) — o resultado: o registro do que
+  foi enviado, o veredito do Google, a captura do gclid no site e a cópia na
+  planilha. Pergunta de todo dia.
+
+Estavam na mesma tela, e a segunda ficava abaixo de quatro blocos de
+configuração: conferir o envio de ontem exigia rolar por escolhas que ninguém ia
+tomar naquele momento.
 O fluxo antigo — "Fluxo Faculdade IDE - Teste Webhook + API Rubeus" — fazia o
 mesmo percurso por fora, com uma segunda cópia das credenciais do Google e do
 Rubeus, e **nunca enviou nada**: ele procurava um campo personalizado `gclid` no
