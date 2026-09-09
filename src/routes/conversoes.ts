@@ -641,11 +641,39 @@ conversoes.post('/acoes', async (c) => {
     d.valor, d.moeda.toUpperCase(), d.ativo ? 1 : 0, c.get('usuarioEmail') ?? null,
   ).run();
 
+  /*
+   * Revive o que estava esperando exatamente esta ação.
+   *
+   * `sem_acao` é o único status de falha cuja causa é configuração, não
+   * intermitência — e o teto de cinco tentativas existe para o caso oposto
+   * ("erro que persiste não é intermitência"). Sem isto, uma conversão que
+   * chegou antes do mapeamento gastava as cinco tentativas no cron, batia no
+   * teto e sumia da fila para sempre; cadastrar a ação depois não a trazia de
+   * volta, e a matrícula ficava sem conversão sem ninguém perceber.
+   *
+   * Aconteceu em produção em 09/09/2026: duas conversões reais paradas em
+   * `sem_acao`, uma delas já com tentativas = 5.
+   */
+  /*
+   * Por EVENTO, não por evento × nível.
+   *
+   * Casar o nível exato erraria nos dois sentidos: a ação curinga (`*`) atende
+   * qualquer nível, e a linha parada pode ter ganhado nível no sync do Rubeus
+   * depois de falhar. O reprocessamento resolve a ação de novo e devolve ao
+   * mesmo `sem_acao` o que continuar sem cobertura — custa uma tentativa e não
+   * deixa ninguém para trás.
+   */
+  const { meta } = await c.env.DB.prepare(
+    `UPDATE conversoes_offline
+        SET status = 'pendente', tentativas = 0, erro_detalhe = NULL
+      WHERE status = 'sem_acao' AND evento = ?`,
+  ).bind(d.evento).run();
+
   console.log(JSON.stringify({
     evento: 'acao_conversao_salva', gatilho: d.evento, nivel: d.nivel_ensino,
-    valor: d.valor, por: c.get('usuarioEmail') ?? '?',
+    valor: d.valor, revividas: meta.changes, por: c.get('usuarioEmail') ?? '?',
   }));
-  return c.json({ ok: true }, 201);
+  return c.json({ ok: true, revividas: meta.changes }, 201);
 });
 
 conversoes.delete('/acoes/:id', async (c) => {

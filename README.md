@@ -180,14 +180,30 @@ Google recomenda.
 O gclid só existe no navegador de quem clicou no anúncio; o CRM não o vê
 sozinho. A ponte tem três tempos, e o painel faz todos:
 
-1. **captura** — `/coleta/ide-clique.js` vai nas páginas do site (via GTM ou
-   direto). Guarda o click id da URL do anúncio num cookie de primeira parte e,
-   quando a pessoa envia um formulário com e-mail ou telefone, manda os três
-   para `/coleta/clique`;
+1. **captura** — `/coleta/ide-clique.js` vai nas páginas do site. O caminho
+   recomendado é uma tag de HTML personalizado no **GTM**, disparando em All
+   Pages: é por onde o time já mexe no site, e passa pelo versionamento e pela
+   publicação do próprio contêiner. Guarda o click id da URL do anúncio num
+   cookie de primeira parte e, quando a pessoa envia um formulário com e-mail ou
+   telefone, manda os três para `/coleta/clique`.
+
+   O endereço do painel vem **embutido no script** pelo Worker. Antes era
+   deduzido de `document.currentScript.src`, o que funciona na tag `<script
+   src=…>` e falha em silêncio no GTM quando alguém cola o CONTEÚDO do script
+   numa tag de HTML personalizado: sem `currentScript.src`, a captura passaria a
+   postar em `https://site-da-faculdade/coleta/clique`, que não existe. E o
+   `sendBeacon` não reclama de 404;
 2. **cruzamento** — quando o webhook trouxer aquele lead, o painel acha a
    captura por e-mail/telefone (janela de 90 dias, a mais recente vence);
 3. **devolução** — grava o click id no campo personalizado do Rubeus via
    `/api/Contato/cadastro`, para que o CRM passe a ter o dado.
+
+**A captura cobre só quem chega pelo site, e isso é o desenho.** Lead que entra
+por telefone, WhatsApp, indicação ou feira nunca teve um click id para capturar.
+Esses continuam sendo atribuídos por e-mail, telefone e CEP em hash — o caminho
+que já funciona para praticamente toda a base. O click id melhora a precisão de
+uma fatia; não é pré-requisito de nada, e ler a coluna "Atribuição" como se
+fosse vira caça a um defeito que não existe.
 
 `/coleta` fica fora do Cloudflare Access de propósito — quem chama é o navegador
 de um visitante anônimo. A porta só aceita entrada, confere o `Origin` contra a

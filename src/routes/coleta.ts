@@ -138,17 +138,31 @@ coleta.post('/clique', async (c) => {
  * nenhuma biblioteca externa, e o único destino do dado é este painel.
  */
 coleta.get('/ide-clique.js', (c) =>
-  c.body(SCRIPT, 200, {
+  c.body(montarScript(new URL(c.req.url).origin), 200, {
     'Content-Type': 'application/javascript; charset=utf-8',
     // Uma hora: curto o bastante para corrigir no mesmo dia, longo o bastante
     // para não virar uma requisição por página vista.
     'Cache-Control': 'public, max-age=3600',
   }));
 
-const SCRIPT = `/* Captura de click id — Faculdade IDE. Servido por ${'/coleta/ide-clique.js'}. */
+/**
+ * O script, com o endereço do painel já embutido.
+ *
+ * Antes o endpoint era deduzido de `document.currentScript.src`. Isso funciona
+ * quando a tag é colada na página como `<script src=…>`, e falha em silêncio no
+ * caminho que esta conta de fato usa: dentro do Google Tag Manager, quem cola o
+ * CONTEÚDO do script numa tag de HTML personalizado não tem `currentScript.src`
+ * — a captura passaria a postar em `https://site-da-faculdade/coleta/clique`,
+ * que não existe, e nenhum clique chegaria aqui. Sem erro visível: o
+ * `sendBeacon` não reclama de 404.
+ *
+ * O Worker conhece o próprio endereço. Embutir na resposta remove a dedução e,
+ * com ela, o modo de falha.
+ */
+const montarScript = (origem: string) => `/* Captura de click id — Faculdade IDE. Servido por /coleta/ide-clique.js. */
 (function () {
   'use strict';
-  var ENDPOINT = new URL('/coleta/clique', document.currentScript ? document.currentScript.src : location.href).href;
+  var ENDPOINT = '${origem}/coleta/clique';
   var CHAVE = 'ide_click_id';
   var DIAS = 90;
 
