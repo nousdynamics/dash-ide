@@ -382,6 +382,30 @@ Marcar "concedido" é uma declaração em nome da faculdade sobre um consentimen
 que só quem administra a captação pode confirmar — por isso mora na tela, com o
 padrão no lado que não afirma nada, em vez de cravado no código.
 
+### O "não identificado" era fila, não ausência
+
+Medido em 09/09/2026: 89 leads das etapas de conversão sem nível de ensino. A
+leitura fácil seria "o Rubeus não tem esse dado". Conferido contra a API, com os
+contatos reais: **7 de 8 têm curso e nível lá**. O dado existe — a pergunta é que
+não tinha sido feita.
+
+`enriquecerCursoDosLeads` consulta as oportunidades do contato e resgata o
+curso, mas rodava só na passada diária, **60 contatos contra uma fila de 766**.
+Nessa vazão, um lead que vira conversão hoje esperaria semanas pelo nível, e
+nesse meio-tempo a conversão sobe pela ação curinga ou fica em `sem_acao`.
+
+Duas correções:
+
+- **A fila passou a priorizar quem vira conversão.** A ordem antiga favorecia as
+  macro-etapas de inscrição e matrícula, o que fazia sentido quando esta função
+  só alimentava a tabela por categoria. As etapas que disparam conversão
+  ("Oportunidade", "Oportunidade paga") estão na macro `oportunidade`, fora
+  daquela prioridade — quem mais precisava do curso resolvido estava no fim.
+- **O resgate entrou na passada de 30 minutos**, em lote de 10. Com 48 passadas
+  por dia mais os 60 da diária, a fila esvazia em pouco mais de um dia. O lote é
+  pequeno porque essa rodada já gasta chamadas externas com diagnóstico e envio,
+  e o Worker tem teto de subrequisições por invocação.
+
 ### O mapa mostra o que chega, não o que o nome do processo sugere
 
 A lista de níveis de cada gatilho vinha da **família inferida do nome do

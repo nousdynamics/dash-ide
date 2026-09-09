@@ -33,7 +33,7 @@ import {
 import { devolverAoRubeus, marcarCasado, procurarClique } from './cliques';
 import { normalizarEmailParaHash, normalizarTelefoneParaHash, sha256Hex } from './google';
 import { identidadeDoContato, normalizarCep, partirNome } from './identidade';
-import { dadosPessoa, listarOportunidades } from './rubeus';
+import { dadosPessoa, enriquecerCursoDosLeads, listarOportunidades } from './rubeus';
 import { acrescentarLinhas, type LinhaBackup } from './sheets';
 
 /** Os dois eventos que a conta mede. Nome interno, estável, não é rótulo de tela. */
@@ -1269,6 +1269,22 @@ export async function rodadaLeve(env: Env): Promise<void> {
   try {
     await conferirDiagnosticos(env, 10);
     await processarPendentes(env, cfg, 15);
+
+    /*
+     * Resgata o curso de quem chegou sem ele, em lote pequeno.
+     *
+     * Estava só na rodada diária, 60 contatos por dia contra uma fila de 766 —
+     * um lead que vira conversão hoje esperaria semanas pelo nível, e nesse
+     * meio-tempo a conversão sobe pela ação curinga ou fica em `sem_acao`.
+     * Conferido no Rubeus: 7 de 8 desses contatos TÊM curso e nível lá. Não é
+     * dado que falta, é pergunta que não foi feita.
+     *
+     * Dez por passada, 48 passadas por dia: a fila esvazia em pouco mais de um
+     * dia. O lote é pequeno de propósito — esta rodada já gasta chamadas
+     * externas com diagnóstico e envio, e o Worker tem teto de subrequisições
+     * por invocação.
+     */
+    await enriquecerCursoDosLeads(env, env.DB, 10);
   } catch (e) {
     console.error(JSON.stringify({ evento: 'conversoes_rodada_leve_erro', msg: String(e) }));
   }

@@ -249,15 +249,28 @@ export async function enriquecerCursoDosLeads(
   limiteContatos = 40,
 ): Promise<{ contatos: number; linhas: number }> {
   /*
-   * Quem chegou a inscrição ou matrícula vem primeiro.
+   * Quem vira conversão vem primeiro. Depois, quem está no fundo do funil.
    *
    * A fila bruta é dominada por lead de topo, que o Rubeus responde "Sem oferta
-   * de curso" porque a pessoa ainda não escolheu curso — e é justamente quem
-   * não aparece na tabela por categoria. Ordenar por quem já está no fundo do
-   * funil faz o lote diário atacar quem muda a tela.
+   * de curso" porque a pessoa ainda não escolheu curso. A ordem antiga
+   * priorizava as macro-etapas de inscrição e matrícula — o que fazia sentido
+   * quando esta função só alimentava a tabela por categoria.
+   *
+   * Deixou de fazer: as etapas que disparam conversão ("Oportunidade",
+   * "Oportunidade paga") estão na macro `oportunidade`, fora daquela
+   * prioridade. Quem mais precisa do curso resolvido — porque sem nível a
+   * conversão cai na ação curinga ou em `sem_acao` — estava no fim da fila.
+   *
+   * Medido em 09/09/2026: 766 contatos na fila, 60 por rodada diária. Nessa
+   * ordem, um lead que vira conversão hoje esperaria semanas pelo nível.
    */
   const pendentes = await db.prepare(
     `SELECT l.contato_id,
+            MAX(CASE WHEN EXISTS (
+              SELECT 1 FROM conversao_gatilhos g
+               WHERE g.ativo = 1 AND g.etapa_nome = l.etapa
+                 AND (g.processo_id IS NULL OR g.processo_id = l.processo_id)
+            ) THEN 1 ELSE 0 END) AS vira_conversao,
             MAX(CASE WHEN pe.macro_etapa IN ('inscricao', 'matricula') THEN 1 ELSE 0 END) AS fundo
        FROM leads_etapa l
        LEFT JOIN processo_etapas pe ON pe.etapa_nome = l.etapa
@@ -268,7 +281,7 @@ export async function enriquecerCursoDosLeads(
         AND l.curso_consultado_em IS NULL
         AND l.contato_id IS NOT NULL AND l.contato_id != ''
       GROUP BY l.contato_id
-      ORDER BY fundo DESC, MAX(l.registrado_em) DESC
+      ORDER BY vira_conversao DESC, fundo DESC, MAX(l.registrado_em) DESC
       LIMIT ?`,
   ).bind(limiteContatos).all();
 
