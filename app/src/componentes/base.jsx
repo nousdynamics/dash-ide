@@ -247,6 +247,40 @@ export const PillStatus = ({ status }) => (
 );
 
 /**
+ * Seta de abrir/fechar.
+ *
+ * Era o caractere "▶" — o único ícone destas telas desenhado com glifo de
+ * fonte, e o triângulo cheio pesava ao lado do texto, que é o que a pessoa está
+ * lendo. Pior: U+25B6 tem variante de emoji, então em parte dos aparelhos a
+ * lista aparecia com um triângulo colorido no começo de cada linha.
+ *
+ * Chevron em SVG, no mesmo traço dos ícones da navegação (24×24, pontas
+ * arredondadas): acompanha `currentColor`, não depende de fonte instalada e
+ * some visualmente até a hora em que é procurado.
+ *
+ * Mora aqui, e não na tela de Campanhas, porque a linha da campanha e a sanfona
+ * de dentro dela aparecem uma embaixo da outra — duas setas diferentes no mesmo
+ * quadro se leem como dois controles diferentes.
+ */
+export function SetaSanfona({ aberta, className = '' }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={`w-[13px] h-[13px] shrink-0 text-tenue transition-transform
+        motion-reduce:transition-none ${aberta ? 'rotate-90' : ''} ${className}`}
+    >
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+
+/**
  * Sanfona reutilizável.
  *
  * O cabeçalho é um <button aria-expanded> e o conteúdo só é montado quando
@@ -265,12 +299,7 @@ export function Sanfona({ titulo, resumo, aberta, aoAlternar, children, nivel = 
           hover:bg-superficie-hover focus-visible:outline-2 focus-visible:outline-azul-400 focus-visible:-outline-offset-2`}
       >
         <span className="flex items-center gap-2 min-w-0 w-full md:w-auto">
-          <span
-            aria-hidden="true"
-            className={`text-tenue text-[10px] shrink-0 transition-transform motion-reduce:transition-none ${aberta ? 'rotate-90' : ''}`}
-          >
-            ▶
-          </span>
+          <SetaSanfona aberta={aberta} />
           <span className="min-w-0 truncate">{titulo}</span>
         </span>
         {/* No mobile o resumo quebra em vez de empurrar a largura da linha. */}

@@ -115,6 +115,109 @@ export async function obterAccessToken(env: Env): Promise<string> {
 /** Invalida o cache — chamado logo depois de reconectar, para valer na hora. */
 export function esquecerToken(): void {
   tokenCache = null;
+  estadoCache = null;
+}
+
+// ------------------------------------------------------- estado da conexão
+
+const TOKENINFO_URL = 'https://oauth2.googleapis.com/tokeninfo';
+
+export type EstadoGoogle = {
+  conectado: boolean;
+  /** De onde saiu o refresh token: a tela gravou no banco, ou é secret do Worker. */
+  origem: 'banco' | 'secret' | null;
+  escopos: string[];
+  tem_datamanager: boolean;
+  escopos_necessarios: readonly string[];
+  /** Por que não deu para verificar, quando não deu. */
+  erro: string | null;
+};
+
+/**
+ * Cache curto do estado. Verificar custa duas chamadas ao Google (renovar o
+ * access token e perguntar os escopos dele), e a tela de conversão é aberta
+ * várias vezes ao dia para conferir a fila.
+ */
+let estadoCache: { valor: EstadoGoogle; expiraEm: number } | null = null;
+
+/**
+ * O que a conta Google REALMENTE autorizou — perguntando ao Google.
+ *
+ * Antes a tela lia a coluna `escopo` de `credenciais_oauth`, que é só o registro
+ * do que foi consentido na última vez que alguém usou o botão "Conectar Google".
+ * Isso tinha dois defeitos:
+ *
+ *   1. quando o refresh token mora num SECRET do Worker — que é como a conta
+ *      desta faculdade opera, para não expor o fluxo de conexão no painel — a
+ *      tabela fica vazia e a tela dizia "falta autorizar o Data Manager" para
+ *      sempre, mesmo com o envio funcionando;
+ *   2. escopo revogado depois do consentimento não aparecia. A coluna guardava o
+ *      que foi concedido um dia, não o que vale agora.
+ *
+ * `tokeninfo` responde sobre o access token vivo, então serve às duas origens e
+ * diz a verdade do momento. Verificar em vez de lembrar.
+ */
+export async function estadoDoGoogle(env: Env): Promise<EstadoGoogle> {
+  const agora = Date.now();
+  if (estadoCache && estadoCache.expiraEm > agora) return estadoCache.valor;
+
+  const guardado = await refreshTokenGuardado(env);
+  const origem: EstadoGoogle['origem'] = guardado
+    ? 'banco'
+    : env.GOOGLE_ADS_REFRESH_TOKEN ? 'secret' : null;
+
+  const base: EstadoGoogle = {
+    conectado: false,
+    origem,
+    escopos: [],
+    tem_datamanager: false,
+    escopos_necessarios: ESCOPOS_GOOGLE,
+    erro: null,
+  };
+
+  if (!origem) {
+    return guardar({ ...base, erro: 'nenhum refresh token — nem no banco, nem em secret' });
+  }
+
+  try {
+    const token = await obterAccessToken(env);
+    const resp = await fetch(`${TOKENINFO_URL}?access_token=${encodeURIComponent(token)}`);
+    const texto = await resp.text();
+
+    if (!resp.ok) {
+      /*
+       * Token que não renova é o mesmo que não ter token: acontece quando o
+       * acesso do app foi revogado na conta Google, e a tela precisa dizer isso
+       * em vez de mostrar "conectado" ao lado de um envio que falha.
+       */
+      return guardar({ ...base, erro: `o Google recusou o token (${resp.status})` });
+    }
+
+    const escopos = String((JSON.parse(texto) as { scope?: string }).scope ?? '')
+      .split(' ')
+      .filter(Boolean);
+
+    return guardar({
+      ...base,
+      conectado: true,
+      escopos,
+      tem_datamanager: escopos.some((e) => e.includes('datamanager')),
+    });
+  } catch (e) {
+    return guardar({ ...base, erro: e instanceof ErroGoogle ? e.message : String(e) });
+  }
+}
+
+function guardar(v: EstadoGoogle): EstadoGoogle {
+  /*
+   * Cinco minutos quando deu certo, trinta segundos quando não.
+   *
+   * O caso de erro é o que alguém está tentando consertar naquele instante —
+   * publicou o secret, revogou e reconectou — e um cache longo faria a tela
+   * insistir no diagnóstico velho por minutos depois de já estar resolvido.
+   */
+  estadoCache = { valor: v, expiraEm: Date.now() + (v.conectado ? 300_000 : 30_000) };
+  return v;
 }
 
 /**

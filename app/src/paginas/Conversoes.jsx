@@ -151,8 +151,12 @@ export function Conversoes() {
   const checklist = [
     {
       ok: google.conectado && google.tem_datamanager,
-      rotulo: 'Google com escopo Data Manager',
-      falta: 'Reconectar Google (escopo datamanager)',
+      rotulo: google.origem === 'secret'
+        ? 'Google com escopo Data Manager (secret do Worker)'
+        : 'Google com escopo Data Manager',
+      falta: google.conectado
+        ? 'A conta conectada não concedeu o escopo datamanager'
+        : 'Publicar GOOGLE_ADS_REFRESH_TOKEN com o escopo datamanager',
     },
     {
       ok: (gatilhos ?? []).some((g) => g.ativo),
@@ -201,23 +205,33 @@ export function Conversoes() {
 
       {!google.tem_datamanager && (
         <Cartao>
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div className="min-w-0">
-              <div className="text-[13px] font-semibold text-atencao">
-                Falta autorizar o Data Manager
-              </div>
-              <div className="text-[11px] text-tenue mt-1 max-w-[640px] leading-relaxed">
-                Integração nova de upload offline só entra pela Data Manager API
-                (<span className="font-mono"> (escopo datamanager)</span>. Sem isso, todo envio volta 403.
-              </div>
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold text-atencao">
+              {google.conectado
+                ? 'A conta Google conectada não tem o escopo Data Manager'
+                : 'Nenhuma conta Google conectada'}
             </div>
-            <a
-              href="/oauth/google/iniciar"
-              className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500 bg-azul-600
-                         text-white no-underline shrink-0 hover:bg-azul-500"
-            >
-              Conectar Google
-            </a>
+            <div className="text-[11px] text-tenue mt-1 max-w-[680px] leading-relaxed">
+              Upload offline de integração nova só entra pela Data Manager API, que exige o escopo{' '}
+              <span className="font-mono">datamanager</span>. Sem ele, todo envio volta 403.
+              {google.erro && (
+                <> O Google respondeu: <span className="text-atencao">{google.erro}</span>.</>
+              )}
+            </div>
+            {/*
+              * Sem botão "Conectar Google" aqui.
+              *
+              * Nesta conta o consentimento é feito na máquina de quem administra,
+              * contra o Worker local, e o refresh token é publicado como secret.
+              * O painel em produção não expõe o fluxo de conexão — um botão que
+              * grava credencial no banco daria um segundo caminho, com precedência
+              * sobre o secret, e a origem da credencial deixaria de ser óbvia.
+              */}
+            <div className="text-[11px] text-tenue mt-2 leading-relaxed max-w-[680px]">
+              A credencial é publicada como secret do Worker
+              (<span className="font-mono">GOOGLE_ADS_REFRESH_TOKEN</span>), a partir do
+              consentimento feito localmente. Ver a seção “Conversão offline” no README.
+            </div>
           </div>
         </Cartao>
       )}

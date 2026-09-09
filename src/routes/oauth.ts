@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { ESCOPOS_GOOGLE, esquecerToken } from '../lib/google';
 import type { AppEnv } from '../lib/tipos';
 
@@ -136,6 +136,43 @@ const COOKIE_ESTADO_GOOGLE = 'google_oauth_state';
  * refresh token — funcionando na primeira hora e quebrando depois do almoço,
  * que é o modo de falha mais difícil de diagnosticar.
  */
+/**
+ * O consentimento do Google só acontece em desenvolvimento.
+ *
+ * Decisão de operação desta conta: o consentimento é feito na máquina de quem
+ * administra, contra o Worker local, e o refresh token resultante é publicado
+ * como secret (`GOOGLE_ADS_REFRESH_TOKEN`). O painel em produção não expõe o
+ * fluxo de conexão.
+ *
+ * O bloqueio é aqui, e não só escondendo o botão na tela, porque a rota
+ * continuaria alcançável por quem digitasse a URL — e ela GRAVA credencial em
+ * `credenciais_oauth`, que tem precedência sobre o secret. Bastaria um clique
+ * para a origem da credencial deixar de ser óbvia e o painel passar a usar um
+ * token que ninguém publicou.
+ *
+ * O cliente OAuth desta conta é do tipo Computador, que só aceita redirect de
+ * loopback — então o fluxo em produção nem funcionaria. O guarda torna isso
+ * explícito em vez de deixar falhar com erro do Google.
+ */
+const somenteEmDev: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (c.env.AMBIENTE !== 'dev') {
+    console.warn(JSON.stringify({
+      evento: 'oauth_google_bloqueado_em_producao', por: c.get('usuarioEmail') ?? '?',
+    }));
+    return c.html(
+      pagina(
+        'Conexão do Google não é feita por aqui',
+        'A credencial desta conta é publicada como secret do Worker, a partir do consentimento '
+        + 'feito na máquina de quem administra. Ver a seção "Conversão offline" no README.',
+      ),
+      404,
+    );
+  }
+  await next();
+};
+
+oauth.use('/google/*', somenteEmDev);
+
 oauth.get('/google/iniciar', (c) => {
   const id = c.env.GOOGLE_ADS_CLIENT_ID;
   if (!id) return c.json({ erro: 'GOOGLE_ADS_CLIENT_ID não configurado' }, 500);

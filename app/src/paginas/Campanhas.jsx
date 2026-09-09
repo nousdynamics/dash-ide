@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Cartao, Estado, Esqueleto, PillStatus, Select, Switch } from '../componentes/base';
+import { Cartao, Estado, Esqueleto, PillStatus, Select, SetaSanfona, Switch } from '../componentes/base';
 import { BarraFiltros } from '../componentes/BarraFiltros';
 import { useApi } from '../lib/api';
 import { queryPeriodo, resolverPeriodo } from '../lib/periodo';
@@ -293,13 +293,7 @@ export function Campanhas({ filtro, setFiltro }) {
                         >
                           <td className="py-2 px-3 text-xs border-t border-borda">
                             <span className="flex items-center gap-2 min-w-0">
-                              <span
-                                aria-hidden="true"
-                                className={`text-tenue text-[9px] shrink-0 transition-transform
-                                  motion-reduce:transition-none ${expandida ? 'rotate-90' : ''}`}
-                              >
-                                ▶
-                              </span>
+                              <SetaSanfona aberta={expandida} />
                               <span className={`truncate ${expandida ? 'font-semibold' : 'font-medium'}`}>
                                 {i.nome}
                               </span>
@@ -371,13 +365,7 @@ export function Campanhas({ filtro, setFiltro }) {
                       className="w-full text-left py-3 bg-transparent border-0 cursor-pointer"
                     >
                       <div className="flex items-start gap-2">
-                        <span
-                          aria-hidden="true"
-                          className={`text-tenue text-[9px] mt-[5px] shrink-0 transition-transform
-                            motion-reduce:transition-none ${expandida ? 'rotate-90' : ''}`}
-                        >
-                          ▶
-                        </span>
+                        <SetaSanfona aberta={expandida} className="mt-[2px]" />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-start justify-between gap-2">
                             <span className="text-xs font-medium min-w-0">{i.nome}</span>

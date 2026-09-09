@@ -5,21 +5,35 @@ import { fmtBRL, fmtDec, fmtPct } from '../lib/formato';
 
 const FORMATOS = { moeda: fmtBRL, numero: fmtDec, percentual: fmtPct };
 
+/** Mensagens do avaliador que são ausência de dado, não defeito da fórmula. */
+const SEM_DADO = /^sem (dado|valor) no período/;
+
 /**
  * O que a fórmula dá agora, ou por que não dá.
  *
  * Devolver o motivo junto com o valor é o que separa "medimos e deu zero" de
  * "não há o que medir" — os dois apareciam como número na tela, e o segundo é
  * o caso do Connect rate quando nenhuma ação de página rodou no período.
+ *
+ * `tipo` separa ainda ausência de erro: período sem a base não é fórmula
+ * quebrada, e pintar os dois de vermelho manda a pessoa procurar defeito onde
+ * não tem. Vermelho fica para o que ela pode consertar editando a conta.
  */
 function calcular(formula, ctx) {
+  const semNumero = (tipo, motivo) => ({
+    valor: null,
+    tipo,
+    motivo,
+    // Card e linha têm a largura de uma coluna: o rótulo curto entra na tela e
+    // o motivo inteiro fica no title, para quem for de fato corrigir.
+    resumo: tipo === 'erro' ? 'fórmula com erro' : 'sem dado no período',
+  });
   try {
     const valor = avaliar(formula, ctx);
-    return valor === null
-      ? { valor: null, aviso: 'sem valor no período (divisão por zero?)' }
-      : { valor, aviso: null };
+    if (valor !== null) return { valor, tipo: 'ok', motivo: null, resumo: null };
+    return semNumero('sem_dado', 'sem valor no período (divisão por zero?)');
   } catch (e) {
-    return { valor: null, aviso: e.message };
+    return semNumero(SEM_DADO.test(e.message) ? 'sem_dado' : 'erro', e.message);
   }
 }
 
@@ -33,9 +47,14 @@ function calcular(formula, ctx) {
 export function CardsPersonalizados({ defs, ctx, ctxAnterior }) {
   if (!defs?.length) return null;
   return (
-    <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(158px,1fr))]">
+    /*
+     * auto-FILL, não auto-fit: com duas métricas o auto-fit esticava cada card
+     * para meia tela, e a fileira ficava fora do ritmo das seis colunas de KPI
+     * logo acima. Com auto-fill a coluna tem a mesma largura lá e aqui.
+     */
+    <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(158px,1fr))]">
       {defs.map((m) => {
-        const { valor, aviso } = calcular(m.formula, ctx);
+        const { valor, tipo, motivo, resumo } = calcular(m.formula, ctx);
         /*
          * Fórmula que depende de ação / visualizações de página não tem "antes".
          * O endpoint de ações só cobre o período aberto.
@@ -67,11 +86,9 @@ export function CardsPersonalizados({ defs, ctx, ctxAnterior }) {
               base faltando, e a métrica só existe para ser levada a sério.
             */}
             <div className="text-[21px] font-bold tnum my-[2px] mb-[6px] tracking-tight">
-              {aviso ? '—' : fmt(valor)}
+              {tipo === 'ok' ? fmt(valor) : '—'}
             </div>
-            {aviso ? (
-              <div className="text-[11px] text-tenue">{aviso}</div>
-            ) : (
+            {tipo === 'ok' ? (
               <>
                 <ChipDelta pct={delta} inverso={m.inverso} />
                 {antes !== null && (
@@ -80,6 +97,13 @@ export function CardsPersonalizados({ defs, ctx, ctxAnterior }) {
                   </span>
                 )}
               </>
+            ) : (
+              <div
+                title={motivo}
+                className={`text-[11px] ${tipo === 'erro' ? 'text-perigo' : 'text-tenue'}`}
+              >
+                {resumo}
+              </div>
             )}
             <span className="block mt-2 text-[11px] text-tenue" title={m.formula}>
               {m.descricao || m.formula}
@@ -170,7 +194,7 @@ export function EditorMetricas({ dados, ctx, aoMudar }) {
       {dados.itens.length > 0 ? (
         <div className="mt-3 border-t border-borda">
           {dados.itens.map((m, i) => {
-            const { valor, aviso } = calcular(m.formula, ctx);
+            const { valor, tipo, motivo, resumo } = calcular(m.formula, ctx);
             const fmt = FORMATOS[m.formato] ?? fmtDec;
             return (
               <div
@@ -199,12 +223,21 @@ export function EditorMetricas({ dados, ctx, aoMudar }) {
                   <div className="text-[11px] text-tenue font-mono break-all mt-px">{m.formula}</div>
                 </div>
 
-                {/* O número do card, na mesma linha da definição que o produz. */}
-                <div className="basis-[168px] shrink-0 text-right">
-                  {aviso ? (
-                    <span className="text-[11px] text-perigo">{aviso}</span>
-                  ) : (
+                {/*
+                  O número do card, na mesma linha da definição que o produz.
+                  Sem número vai o rótulo curto, com o motivo inteiro no title —
+                  a linha é de gerência, não é onde se depura a fórmula.
+                */}
+                <div className="basis-[130px] shrink-0 text-right">
+                  {tipo === 'ok' ? (
                     <strong className="text-[15px] font-bold tnum">{fmt(valor)}</strong>
+                  ) : (
+                    <span
+                      title={motivo}
+                      className={`text-[11px] ${tipo === 'erro' ? 'text-perigo' : 'text-tenue'}`}
+                    >
+                      {resumo}
+                    </span>
                   )}
                 </div>
 
@@ -274,10 +307,10 @@ export function EditorMetricas({ dados, ctx, aoMudar }) {
           <div className="text-[11px] min-h-[16px]">
             {problema ? (
               <span className="text-perigo">{problema}</span>
-            ) : previa?.aviso ? (
+            ) : previa && previa.tipo !== 'ok' ? (
               /* O motivo exato — "sem dado no período para X" separa base que
                  não existe de divisão por zero, que pedem correções diferentes. */
-              <span className="text-tenue">{previa.aviso}</span>
+              <span className={previa.tipo === 'erro' ? 'text-perigo' : 'text-tenue'}>{previa.motivo}</span>
             ) : previa ? (
               <span className="text-sucesso">
                 No período atual daria{' '}

@@ -16,7 +16,7 @@ import {
   processarPendentes,
   subirBackup,
 } from '../lib/conversoes';
-import { ESCOPOS_GOOGLE, refreshTokenGuardado } from '../lib/google';
+import { estadoDoGoogle } from '../lib/google';
 import { ErroGoogleAds, criarAcaoDeUpload, listarAcoesDeUpload } from '../lib/googleAds';
 import { conferirPlanilha, criarPlanilha } from '../lib/sheets';
 import type { AppEnv } from '../lib/tipos';
@@ -97,9 +97,13 @@ conversoes.get('/', async (c) => {
    * `uploadClickConversions` para integração nova e manda usar a Data Manager
    * API, que exige esse escopo. É o primeiro diagnóstico que a tela precisa
    * dar, senão todo envio falha com 403 e a causa fica escondida no registro.
+   *
+   * Perguntado ao Google, não lido do banco: o refresh token desta conta mora
+   * num secret do Worker, e a tabela `credenciais_oauth` fica vazia em produção
+   * de propósito — o fluxo de conexão não é exposto no painel. Ver
+   * `estadoDoGoogle`.
    */
-  const credencial = await refreshTokenGuardado(c.env);
-  const escopos = credencial?.escopo ?? '';
+  const google = await estadoDoGoogle(c.env);
 
   const linhasEtapa = etapas.results as Array<{
     processo_id: string; etapa_nome: string; ordem: number; processo_nome: string;
@@ -120,11 +124,7 @@ conversoes.get('/', async (c) => {
   }
 
   return c.json({
-    google: {
-      conectado: Boolean(credencial),
-      tem_datamanager: escopos.includes('datamanager'),
-      escopos_necessarios: ESCOPOS_GOOGLE,
-    },
+    google,
     config: cfg,
     eventos: EVENTOS.map((e) => ({ id: e, rotulo: ROTULO_EVENTO[e], categoria: CATEGORIA_EVENTO[e] })),
     metas_google: METAS_GOOGLE,

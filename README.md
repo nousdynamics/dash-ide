@@ -202,14 +202,53 @@ está fechado para ela. O envio vai para `datamanager.googleapis.com/v1/events:i
 que exige o escopo `https://www.googleapis.com/auth/datamanager`. Relatório e
 cadastro de ações de conversão continuam na Google Ads API.
 
-**O consentimento antigo não cobre esse escopo.** Por isso existe
-`/oauth/google/iniciar`: reconsente com tudo de uma vez e guarda o refresh token
-em `credenciais_oauth`, que passa a vencer o secret `GOOGLE_ADS_REFRESH_TOKEN`.
-O secret continua valendo para as telas de mídia, que só precisam de `adwords` —
-elas não param enquanto a reconexão não acontece.
+**O consentimento antigo não cobre esse escopo**, e renová-lo exige passar pela
+tela do Google — não há atalho por API.
 
-O redirect `https://painel.ide.edu.br/oauth/google/callback` precisa estar
-registrado no cliente OAuth, no Google Cloud Console. É o único passo manual.
+### Onde o consentimento acontece: na máquina, não no painel
+
+`/oauth/google/*` só responde quando `AMBIENTE=dev`. Em produção devolve 404 com
+explicação. Duas razões:
+
+1. **O cliente OAuth desta conta é do tipo Computador** (`omini-traffic`), e
+   cliente Desktop só aceita redirect de loopback — `painel.ide.edu.br` seria
+   recusado pelo próprio Google. Não há o que registrar: a tela de cliente
+   Desktop não tem campo de URI de redirecionamento.
+2. **A rota GRAVA credencial** em `credenciais_oauth`, que tem precedência sobre
+   o secret. Deixá-la alcançável em produção significaria que um clique trocaria
+   a origem da credencial sem ninguém publicar nada, e o painel passaria a usar
+   um token que não está nos secrets. Esconder o botão não bastava — quem
+   digitasse a URL chegava lá.
+
+O percurso, então:
+
+```bash
+# 1. na máquina de quem administra, com o Worker local no ar
+npm run dev
+# abrir http://127.0.0.1:8790/oauth/google/iniciar e consentir os 4 escopos
+
+# 2. ler o refresh token que o callback gravou no D1 LOCAL
+npx wrangler d1 execute dash-ide --local \
+  --command "SELECT refresh_token FROM credenciais_oauth WHERE provedor='google'"
+
+# 3. publicar como secret — o valor é colado no prompt, não vai para o histórico
+npx wrangler secret put GOOGLE_ADS_REFRESH_TOKEN
+```
+
+Em produção `credenciais_oauth` fica vazia de propósito, e o token vem do secret.
+
+### A tela verifica, não lembra
+
+O checklist da tela de conversão perguntava à coluna `credenciais_oauth.escopo`
+se o Data Manager estava autorizado. Isso quebra nos dois sentidos com o modelo
+acima: a tabela está vazia em produção (diria "falta autorizar" para sempre,
+mesmo enviando), e a coluna guarda o que foi concedido um dia — escopo revogado
+depois não apareceria.
+
+`estadoDoGoogle()` (`src/lib/google.ts`) renova o access token e pergunta os
+escopos dele ao `tokeninfo` do Google. Serve às duas origens — banco em
+desenvolvimento, secret em produção — e diz a verdade do momento. A tela também
+passa a mostrar de onde veio a credencial.
 
 ### O veredito do Google
 

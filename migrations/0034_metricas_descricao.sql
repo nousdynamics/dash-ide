@@ -11,13 +11,15 @@
 --    muda quando alguém renomeia a ação, e a origem é o que mantém fora as
 --    "Local actions", que são visualização no Perfil da Empresa, não na landing.
 --
--- O nome da métrica também saía repetido dentro da própria descrição
--- ("... (Connect rate)"), logo abaixo do título "Connect rate".
+-- Os dois textos também encurtam. A descrição mora dentro do card, que tem a
+-- largura de uma coluna de KPI; o nome da métrica saía repetido lá dentro
+-- ("... (Connect rate)") e a regra técnica cabe melhor na ajuda da base, que é
+-- onde quem escreve fórmula procura.
 
 UPDATE metricas_personalizadas
-   SET descricao = 'Cliques que geraram visualização de página no site. Soma as ações de conversão de categoria PAGE_VIEW e origem WEBSITE.'
+   SET descricao = 'Cliques que chegaram a carregar uma página do site.'
  WHERE nome = 'Connect rate';
 
 UPDATE metricas_personalizadas
-   SET descricao = 'Cliques que dispararam a ação CTWA, que é a maior fonte de conversão primária da conta.'
+   SET descricao = 'Cliques que abriram conversa no WhatsApp — a maior fonte de conversão primária da conta.'
  WHERE nome = 'Conversas por clique (CTWA)';
