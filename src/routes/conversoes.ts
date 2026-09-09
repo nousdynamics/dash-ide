@@ -102,17 +102,27 @@ conversoes.get('/', async (c) => {
      * depois. Vazio quer dizer "cai no curinga".
      */
     c.env.DB.prepare(
+      /*
+       * LEFT JOIN, não subconsulta correlacionada.
+       *
+       * A primeira versão resolvia o nível com dois `SELECT` escalares dentro do
+       * SELECT. `curso_ofertas` não tem índice em `oferta_codigo`, então o
+       * segundo virava varredura completa das 692 ofertas — uma vez por lead.
+       * Com ~9.500 leads na janela, eram ~6,6 milhões de linhas lidas a cada
+       * abertura da tela, o bastante para estourar sozinho o teto diário do D1.
+       *
+       * Com JOIN, o SQLite monta um índice automático para a junção e resolve em
+       * uma passada. A migration 0037 acrescenta o índice de verdade.
+       */
       `SELECT g.evento,
-              COALESCE(
-                (SELECT nivel_ensino FROM cursos c WHERE c.id = l.curso_id),
-                (SELECT nivel_ensino FROM curso_ofertas o WHERE o.oferta_codigo = l.oferta_codigo),
-                ''
-              ) AS nivel,
+              COALESCE(c.nivel_ensino, o.nivel_ensino, '') AS nivel,
               COUNT(*) AS leads
          FROM leads_etapa l
          JOIN conversao_gatilhos g
            ON g.ativo = 1 AND g.etapa_nome = l.etapa
           AND (g.processo_id IS NULL OR g.processo_id = l.processo_id)
+         LEFT JOIN cursos c ON c.id = l.curso_id
+         LEFT JOIN curso_ofertas o ON o.oferta_codigo = l.oferta_codigo
         WHERE l.registrado_em >= datetime('now', '-60 days')
         GROUP BY g.evento, nivel
         ORDER BY leads DESC`,

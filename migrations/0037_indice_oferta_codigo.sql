@@ -1,0 +1,16 @@
+-- O índice que faltava em `curso_ofertas.oferta_codigo`.
+--
+-- A tabela tinha índice em `curso_codigo` e nenhum em `oferta_codigo` — e é por
+-- `oferta_codigo` que o painel resolve o nível de ensino de um lead, tanto na
+-- tela de cobertura quanto no enriquecimento da conversão.
+--
+-- Sem ele, cada resolução virava varredura completa das 692 ofertas. Na consulta
+-- de cobertura, executada uma vez por lead da janela de 60 dias, isso dava ~6,6
+-- milhões de linhas lidas por abertura da tela — o bastante para estourar
+-- sozinho o teto diário do plano gratuito do D1, que foi o que aconteceu em
+-- 09/09/2026.
+--
+-- A consulta também foi reescrita com JOIN em vez de subconsulta correlacionada,
+-- o que já resolve sem o índice. Este aqui é a garantia: qualquer consulta nova
+-- que filtre por `oferta_codigo` nasce barata.
+CREATE INDEX IF NOT EXISTS idx_curso_ofertas_oferta ON curso_ofertas (oferta_codigo);
