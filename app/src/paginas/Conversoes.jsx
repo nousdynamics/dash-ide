@@ -504,6 +504,7 @@ export function Conversoes() {
           gatilhos={gatilhos}
           processoId={processoAtivo}
           processoNome={pipeline?.processo_nome}
+          nivelPadrao={nivel_padrao}
           aoSalvar={recarregar}
         />
       </Cartao>
@@ -636,9 +637,10 @@ function familiaNivel(nivel) {
  * à mão continua possível, atrás de um clique.
  */
 function TabelaAcoes({
-  eventos, metas, niveis, acoes, gatilhos, processoId, processoNome, aoSalvar,
+  eventos, metas, niveis, acoes, gatilhos, processoId, processoNome, aoSalvar, nivelPadrao,
 }) {
   const { dados: doGoogle, erro } = useApi('/api/conversoes/acoes-google', 'acoes-google');
+  const { dados: catalogo } = useApi('/api/catalogo/cursos', 'catalogo-cursos');
   const disponiveis = doGoogle?.itens ?? [];
 
   const gatilhosDoProcesso = useMemo(() => {
@@ -694,11 +696,22 @@ function TabelaAcoes({
         const ev = eventos.find((e) => e.id === g.evento);
         if (!ev) return null;
 
+        /*
+         * As linhas de base: o curinga e um por nível de ensino do processo.
+         * Regras por curso ou oferta não entram aqui — são exceções, e listá-las
+         * junto faria a contagem "x de y níveis" mentir.
+         */
         const doEvento = niveisDoProcesso.map((nivel) => ({
           nivel,
-          atual: acoes.find((a) => a.evento === ev.id && a.nivel_ensino === nivel),
+          atual: acoes.find((a) => a.evento === ev.id && (
+            nivel === nivelPadrao ? a.escopo === 'geral' : (a.escopo === 'nivel' && a.alvo === nivel)
+          )),
         }));
         const mapeados = doEvento.filter((l) => l.atual?.conversion_action_id).length;
+
+        const especificas = acoes.filter(
+          (a) => a.evento === ev.id && (a.escopo === 'oferta' || a.escopo === 'curso'),
+        );
 
         return (
           <div
@@ -738,7 +751,11 @@ function TabelaAcoes({
                 <LinhaAcao
                   key={nivel}
                   evento={ev}
-                  nivel={nivel}
+                  escopo={nivel === nivelPadrao ? 'geral' : 'nivel'}
+                  alvo={nivel === nivelPadrao ? null : nivel}
+                  rotulo={nivel === nivelPadrao
+                    ? <em className="text-tenue font-normal">qualquer / não identificado</em>
+                    : nivel}
                   metas={metas}
                   atual={atual}
                   disponiveis={disponiveis}
@@ -746,6 +763,28 @@ function TabelaAcoes({
                 />
               ))}
             </div>
+
+            {/*
+              * Exceções por curso ou oferta.
+              *
+              * A régua do nível de ensino é grossa: um MBA e um curso de curta
+              * duração de R$ 300 caem no mesmo balde e sobem com o mesmo valor,
+              * e aí o Smart Bidding persegue os dois pelo mesmo preço. Aqui se
+              * cadastra a meta do curso que merece tratamento próprio.
+              *
+              * Fica DEPOIS da tabela e visualmente separado porque é exceção: a
+              * regra de nível é o que cobre a base inteira, e ver a exceção
+              * primeiro daria a impressão de que é preciso cadastrar uma por
+              * curso — 692 ofertas depois, ninguém termina.
+              */}
+            <Especificas
+              evento={ev}
+              regras={especificas}
+              catalogo={catalogo}
+              metas={metas}
+              disponiveis={disponiveis}
+              aoSalvar={aoSalvar}
+            />
           </div>
         );
       })}
@@ -753,8 +792,8 @@ function TabelaAcoes({
   );
 }
 
-function nomeSugerido(evento, nivel) {
-  return `IDE | ${evento.rotulo} | ${nivel === '*' ? 'Geral' : nivel}`;
+function nomeSugerido(evento, alvo) {
+  return `IDE | ${evento.rotulo} | ${alvo || 'Geral'}`;
 }
 
 /**
@@ -770,11 +809,11 @@ function nomeSugerido(evento, nivel) {
  * porque um número digitado errado é aceito pela tela e só falha no envio, dias
  * depois — enquanto escolher da conta não tem como errar.
  */
-function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
+function LinhaAcao({ evento, escopo, alvo, rotulo, metas, atual, disponiveis, aoSalvar }) {
   const [valor, setValor] = useState(atual?.valor ?? 0);
   const [modo, setModo] = useState(null); // 'colar' | 'criar' | null
   const [ctIdManual, setCtIdManual] = useState('');
-  const [nomeNovo, setNomeNovo] = useState(() => nomeSugerido(evento, nivel));
+  const [nomeNovo, setNomeNovo] = useState(() => nomeSugerido(evento, alvo));
   const [metaNova, setMetaNova] = useState(() => evento.categoria || 'DEFAULT');
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState('');
@@ -783,10 +822,10 @@ function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
 
   useEffect(() => {
     if (modo !== 'criar') return;
-    setNomeNovo(nomeSugerido(evento, nivel));
+    setNomeNovo(nomeSugerido(evento, alvo));
     setMetaNova(evento.categoria || 'DEFAULT');
     setErro('');
-  }, [modo, evento, nivel]);
+  }, [modo, evento, alvo]);
 
   const mapeada = Boolean(atual?.conversion_action_id);
 
@@ -798,7 +837,8 @@ function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
     try {
       await enviar('/api/conversoes/acoes', {
         evento: evento.id,
-        nivel_ensino: nivel,
+        escopo,
+        alvo,
         conversion_action_id: id,
         conversion_action_nome:
           over.nome
@@ -847,17 +887,13 @@ function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
     }
   };
 
-  const rotuloNivel = nivel === '*'
-    ? <em className="text-tenue font-normal">qualquer / não identificado</em>
-    : nivel;
-
   return (
     <div className="border-t border-borda/60 first:border-t-0">
       <div
         className="grid gap-2 md:gap-3 items-center px-3 py-2
                    grid-cols-1 md:grid-cols-[minmax(150px,0.9fr)_minmax(0,1.6fr)_96px_auto]"
       >
-        <div className="text-xs font-semibold min-w-0 truncate">{rotuloNivel}</div>
+        <div className="text-xs font-semibold min-w-0 truncate">{rotulo}</div>
 
         {/* Coluna da ação: o valor mapeado, ou os caminhos para mapear. */}
         <div className="min-w-0">
@@ -882,7 +918,7 @@ function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
                 placeholder="ex.: 1234567890"
                 value={ctIdManual}
                 onChange={(e) => setCtIdManual(e.target.value.replace(/\D/g, ''))}
-                aria-label={`ctId de ${evento.rotulo} para ${nivel}`}
+                aria-label={`ctId de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
                 className="bg-superficie text-primario border border-borda-forte rounded-[8px]
                            px-2 py-[5px] text-[11px] font-mono min-w-0 flex-1"
               />
@@ -893,7 +929,7 @@ function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
             </span>
           ) : (
             <Select
-              rotulo={`Ação de ${evento.rotulo} para ${nivel}`}
+              rotulo={`Ação de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
               valor=""
               aoTrocar={(v) => v && salvar({ acaoId: v })}
               opcoes={[
@@ -918,7 +954,7 @@ function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
                 disabled={ocupado}
                 onChange={(e) => setValor(e.target.value)}
                 onBlur={() => Number(valor) !== Number(atual?.valor) && salvar()}
-                aria-label={`Valor de ${evento.rotulo} para ${nivel}`}
+                aria-label={`Valor de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
                 className="bg-superficie text-primario border border-borda-forte rounded-[8px]
                            px-2 py-[3px] text-[11px] w-[74px] tnum text-right"
               />
@@ -998,6 +1034,232 @@ function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
       )}
 
       {erro && <div className="px-3 pb-2 text-[10px] text-perigo">{erro}</div>}
+    </div>
+  );
+}
+
+/**
+ * Metas por curso ou oferta — as exceções da régua do nível de ensino.
+ *
+ * O nível é grosso: um MBA e um curso de curta duração de R$ 300 caem no mesmo
+ * balde e sobem com o mesmo valor, e o Smart Bidding passa a perseguir os dois
+ * pelo mesmo preço. Aqui se cadastra o curso que merece meta e valor próprios.
+ *
+ * Fica dobrado por padrão, e depois da tabela de níveis, porque é exceção. Vê-la
+ * primeiro daria a impressão de que é preciso cadastrar uma regra por curso —
+ * são 692 ofertas no catálogo, e ninguém termina.
+ */
+function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar }) {
+  const [aberto, setAberto] = useState(false);
+  const [escopo, setEscopo] = useState('oferta');
+  const [alvo, setAlvo] = useState('');
+  const [acaoId, setAcaoId] = useState('');
+  const [valor, setValor] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState('');
+
+  const ofertas = catalogo?.itens ?? [];
+
+  /*
+   * A lista de cursos sai das ofertas, agrupada por código.
+   *
+   * Uma linha por curso-pai, e não por turma: escolher "MBA em Gestão" no escopo
+   * de curso deve valer para todas as ofertas dele — semestres, campi e turnos —
+   * senão a regra teria de ser recadastrada a cada semestre novo.
+   */
+  const cursos = useMemo(() => {
+    const m = new Map();
+    for (const o of ofertas) {
+      if (!o.curso_codigo || m.has(o.curso_codigo)) continue;
+      m.set(o.curso_codigo, { codigo: o.curso_codigo, nome: o.nome, nivel: o.nivel_ensino });
+    }
+    return [...m.values()].sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+  }, [ofertas]);
+
+  const opcoesAlvo = escopo === 'oferta'
+    ? ofertas.filter((o) => o.codigo).map((o) => ({ v: String(o.codigo), r: o.nome || o.codigo }))
+    : cursos.map((cu) => ({ v: String(cu.codigo), r: cu.nome || cu.codigo }));
+
+  const limpar = () => {
+    setAlvo(''); setAcaoId(''); setValor(''); setErro('');
+  };
+
+  const salvar = async () => {
+    if (!alvo) return setErro('Escolha o curso ou a oferta.');
+    if (!acaoId) return setErro('Escolha a ação de conversão.');
+    setOcupado(true);
+    setErro('');
+    try {
+      await enviar('/api/conversoes/acoes', {
+        evento: evento.id,
+        escopo,
+        alvo,
+        alvo_rotulo: opcoesAlvo.find((o) => o.v === alvo)?.r ?? alvo,
+        conversion_action_id: acaoId,
+        conversion_action_nome: disponiveis.find((d) => d.id === acaoId)?.nome ?? null,
+        valor: Number(valor) || 0,
+        ativo: true,
+      });
+      limpar();
+      aoSalvar();
+    } catch (e) {
+      setErro(e.message || 'não deu para salvar');
+    } finally {
+      setOcupado(false);
+    }
+  };
+
+  const remover = async (id) => {
+    setOcupado(true);
+    try {
+      await enviar(`/api/conversoes/acoes/${id}`, undefined, 'DELETE');
+      aoSalvar();
+    } catch (e) {
+      setErro(e.message || 'não deu para remover');
+    } finally {
+      setOcupado(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-borda bg-elevado/40">
+      <button
+        type="button"
+        aria-expanded={aberto}
+        onClick={() => setAberto((a) => !a)}
+        className="w-full flex items-center gap-2 px-3 py-2 bg-transparent border-0 cursor-pointer
+                   text-left hover:bg-superficie-hover"
+      >
+        <span
+          aria-hidden="true"
+          className={`text-tenue text-[9px] transition-transform motion-reduce:transition-none ${aberto ? 'rotate-90' : ''}`}
+        >
+          ▶
+        </span>
+        <span className="text-[11px] font-semibold text-secundario">
+          Metas específicas por curso ou oferta
+        </span>
+        {regras.length > 0 && <Pill tom="sucesso">{regras.length}</Pill>}
+        <span className="text-[10px] text-tenue ml-auto">
+          vencem a regra do nível
+        </span>
+      </button>
+
+      {aberto && (
+        <div className="px-3 pb-3">
+          {regras.length > 0 && (
+            <div className="flex flex-col mb-2">
+              {regras.map((r) => (
+                <div
+                  key={r.id}
+                  className="grid gap-2 items-center py-1.5 border-b border-borda/60 last:border-b-0
+                             grid-cols-1 md:grid-cols-[76px_minmax(0,1.2fr)_minmax(0,1fr)_86px_auto]"
+                >
+                  <Pill tom="neutro">{r.escopo === 'oferta' ? 'oferta' : 'curso'}</Pill>
+                  <span className="text-xs truncate" title={r.alvo_rotulo || r.alvo}>
+                    {r.alvo_rotulo || r.alvo}
+                  </span>
+                  <span className="text-[11px] text-tenue truncate">
+                    {r.conversion_action_nome || r.conversion_action_id}
+                  </span>
+                  <span className="text-[11px] tnum md:text-right">
+                    {r.valor ? `R$ ${Number(r.valor).toFixed(2)}` : '—'}
+                  </span>
+                  <span className="md:text-right">
+                    <BotaoMini onClick={() => remover(r.id)} disabled={ocupado}>Remover</BotaoMini>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="rounded-[8px] border border-borda-forte bg-superficie p-2.5
+                          flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-0.5 min-w-[110px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Escopo</span>
+              <Select
+                rotulo="Escopo da regra"
+                valor={escopo}
+                aoTrocar={(v) => { setEscopo(v); setAlvo(''); }}
+                opcoes={[['oferta', 'Oferta'], ['curso', 'Curso']]}
+                className="w-full"
+              />
+            </label>
+
+            {/*
+              * `datalist` e não `<select>`: são 692 ofertas, e rolar uma lista
+              * desse tamanho para achar uma é pior do que digitar três letras.
+              * O campo aceita o código direto, para quem já o conhece.
+              */}
+            <label className="flex flex-col gap-0.5 flex-1 min-w-[220px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
+                {escopo === 'oferta' ? 'Oferta' : 'Curso'} — digite para buscar
+              </span>
+              <input
+                type="text"
+                list={`alvos-${evento.id}-${escopo}`}
+                value={alvo}
+                onChange={(e) => setAlvo(e.target.value)}
+                placeholder={escopo === 'oferta' ? 'nome ou código da oferta' : 'nome ou código do curso'}
+                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
+                           px-2 py-[5px] text-[11px] w-full"
+              />
+              <datalist id={`alvos-${evento.id}-${escopo}`}>
+                {opcoesAlvo.slice(0, 500).map((o) => (
+                  <option key={o.v} value={o.v}>{o.r}</option>
+                ))}
+              </datalist>
+            </label>
+
+            <label className="flex flex-col gap-0.5 min-w-[190px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Ação</span>
+              <Select
+                rotulo="Ação de conversão da regra"
+                valor={acaoId}
+                aoTrocar={setAcaoId}
+                opcoes={[
+                  ['', '— escolher da conta —'],
+                  ...disponiveis.map((d) => [d.id, `${d.nome} · ${d.id}`]),
+                ]}
+                className="w-full"
+              />
+            </label>
+
+            <label className="flex flex-col gap-0.5 w-[92px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Valor</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                placeholder="0,00"
+                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
+                           px-2 py-[5px] text-[11px] w-full tnum text-right"
+              />
+            </label>
+
+            <button
+              type="button"
+              disabled={ocupado}
+              onClick={salvar}
+              className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500
+                         bg-azul-600 text-white hover:bg-azul-500 cursor-pointer
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {ocupado ? 'Salvando…' : 'Adicionar'}
+            </button>
+          </div>
+
+          {erro && <div className="text-[10px] text-perigo mt-1">{erro}</div>}
+
+          <div className="text-[10px] text-tenue mt-2 leading-relaxed">
+            A ordem de resolução é <strong className="text-secundario">oferta → curso → nível → geral</strong>:
+            a primeira regra que casar vence. O valor daqui só entra quando o webhook não trouxer
+            o preço real da matrícula.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Cartao, Estado, Esqueleto, Pill, Switch } from '../componentes/base';
+import { Cartao, Estado, Esqueleto, Pill, Select, Switch } from '../componentes/base';
 import { MonitorConversoes } from './MonitorConversoes';
 import { useApi } from '../lib/api';
 import { fmtInt } from '../lib/formato';
@@ -77,6 +77,142 @@ function Acao({ children, aoClicar, tom = 'neutro', titulo }) {
         </span>
       )}
     </span>
+  );
+}
+
+/**
+ * Instala a tag no GTM sem sair do painel.
+ *
+ * Faz os cinco passos manuais — criar a tag de HTML personalizado, apontar o
+ * acionamento de todas as páginas, nomear, anotar e salvar — e para antes do
+ * sexto. **Não publica o contêiner**: a publicação vale para o site inteiro e
+ * levaria junto qualquer rascunho que outra pessoa tenha deixado no workspace.
+ * Fica onde já estava, com quem já decide isso.
+ *
+ * A lista de contêineres só é buscada quando alguém abre o bloco: são duas
+ * chamadas ao Google por conta, e a maioria de quem passa por esta tela veio
+ * conferir o monitor, não instalar tag.
+ */
+function InstalarNoGtm() {
+  const [aberto, setAberto] = useState(false);
+  const [container, setContainer] = useState('');
+  const [estado, setEstado] = useState('pronto');
+  const [msg, setMsg] = useState('');
+  const [erroEscopo, setErroEscopo] = useState(false);
+
+  const { dados, carregando, erro } = useApi(aberto ? '/api/conversoes/gtm' : null, `gtm-${aberto}`);
+  const containers = dados?.itens ?? [];
+
+  const instalar = async () => {
+    if (!container) return setMsg('Escolha o contêiner.');
+    setEstado('rodando');
+    setMsg('');
+    setErroEscopo(false);
+    try {
+      const r = await enviar('/api/conversoes/gtm', { container });
+      setEstado('ok');
+      setMsg(r.criada
+        ? 'Tag criada no workspace padrão. Falta publicar o contêiner no GTM.'
+        : 'A tag já existia e foi atualizada. Falta publicar o contêiner no GTM.');
+    } catch (e) {
+      setEstado('erro');
+      setErroEscopo(/Tag Manager|escopo|permissão/i.test(e.message || ''));
+      setMsg(e.message);
+    }
+  };
+
+  if (!aberto) {
+    return (
+      <button
+        type="button"
+        onClick={() => setAberto(true)}
+        className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500 bg-azul-600
+                   text-white hover:bg-azul-500 cursor-pointer"
+      >
+        Adicionar ao GTM automaticamente
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-[8px] border border-azul-500/40 bg-superficie p-2.5 flex flex-col gap-2">
+      <div className="text-[11px] font-semibold">Instalar no contêiner</div>
+
+      {carregando && <div className="text-[11px] text-tenue">Buscando contêineres…</div>}
+
+      {erro && (
+        <div className="text-[11px] text-perigo leading-relaxed">
+          {erro}
+          {/*
+            * O 403 aqui é escopo, não permissão de contêiner — e a mensagem crua
+            * do Google manda procurar no lugar errado.
+            */}
+          <div className="text-tenue mt-1">
+            Se for permissão do Google: o consentimento precisa incluir o Tag Manager. Refaça o
+            consentimento local e republique o secret — ver README.
+          </div>
+        </div>
+      )}
+
+      {!carregando && !erro && containers.length === 0 && (
+        <div className="text-[11px] text-tenue">
+          A conta conectada não enxerga nenhum contêiner web do Tag Manager.
+        </div>
+      )}
+
+      {containers.length > 0 && (
+        <>
+          <Select
+            rotulo="Contêiner do Tag Manager"
+            valor={container}
+            aoTrocar={setContainer}
+            opcoes={[
+              ['', '— escolher contêiner —'],
+              ...containers.map((ct) => [ct.path, `${ct.publicId} · ${ct.nome} (${ct.conta})`]),
+            ]}
+            className="w-full"
+          />
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              disabled={estado === 'rodando'}
+              onClick={instalar}
+              className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500 bg-azul-600
+                         text-white hover:bg-azul-500 cursor-pointer
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {estado === 'rodando' ? 'Instalando…' : 'Criar a tag'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAberto(false)}
+              className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte
+                         bg-superficie text-secundario hover:text-primario cursor-pointer"
+            >
+              Fechar
+            </button>
+          </div>
+        </>
+      )}
+
+      {msg && (
+        <div className={`text-[11px] leading-relaxed ${estado === 'erro' ? 'text-perigo' : 'text-sucesso'}`}>
+          {msg}
+          {erroEscopo && (
+            <span className="block text-tenue mt-1">
+              Falta o escopo <span className="font-mono">tagmanager</span> na credencial.
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="text-[10px] text-tenue leading-relaxed border-t border-borda pt-2">
+        A tag entra como alteração pendente no <strong className="text-secundario">workspace
+        padrão</strong>, com acionamento em todas as páginas. O painel{' '}
+        <strong className="text-secundario">não publica</strong> o contêiner — publicar vale para o
+        site inteiro e levaria junto rascunhos de outras pessoas. Você publica no GTM quando quiser.
+      </div>
+    </div>
   );
 }
 
@@ -238,17 +374,32 @@ export function GoogleConversoes() {
               * mesmo que colar no <head>, e passa pelo controle de versão e
               * publicação do próprio GTM — que é como o time já mexe no site.
               */}
-            <BlocoInstalacao
-              titulo="Pelo Google Tag Manager"
-              recomendado
-              passos={[
-                'Tags → Nova → HTML personalizado',
-                'Cole o código ao lado',
-                'Acionamento: All Pages (Todas as páginas)',
-                'Salvar e publicar o contêiner',
-              ]}
-              codigo={`<script src="${script_url}" async></script>`}
-            />
+            <div className="rounded-[10px] border border-azul-500/40 bg-azul-600/5 p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[12px] font-semibold">Pelo Google Tag Manager</span>
+                <Pill tom="sucesso">recomendado</Pill>
+              </div>
+              <div className="text-[11px] text-tenue leading-relaxed mb-2">
+                O painel cria a tag no workspace padrão, com acionamento em todas as páginas.
+                Você confere e publica o contêiner no GTM.
+              </div>
+              <InstalarNoGtm />
+              <details className="mt-2">
+                <summary className="text-[10px] text-tenue cursor-pointer select-none">
+                  ou fazer à mão
+                </summary>
+                <ol className="text-[11px] text-tenue leading-relaxed list-decimal pl-4 mt-1.5 mb-2 flex flex-col gap-0.5">
+                  <li>Tags → Nova → HTML personalizado</li>
+                  <li>Cole o código abaixo</li>
+                  <li>Acionamento: All Pages (Todas as páginas)</li>
+                  <li>Salvar e publicar o contêiner</li>
+                </ol>
+                <code className="block text-[10px] font-mono bg-superficie border border-borda rounded-[8px]
+                                 px-2 py-[6px] break-all select-all">
+                  {`<script src="${script_url}" async></script>`}
+                </code>
+              </details>
+            </div>
 
             <BlocoInstalacao
               titulo="Direto no HTML"

@@ -34,6 +34,16 @@ export const ESCOPOS_GOOGLE = [
   'https://www.googleapis.com/auth/datamanager',
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/drive.file',
+  /*
+   * Tag Manager: instalar a tag de captura sem sair do painel.
+   *
+   * `readonly` lista contas e contêineres para a pessoa escolher onde instalar,
+   * e `edit.containers` cria a tag no workspace padrão. NÃO pedimos
+   * `publish`: publicar o contêiner leva junto qualquer rascunho que outra
+   * pessoa tenha deixado ali, e essa é uma decisão que não cabe a este painel.
+   */
+  'https://www.googleapis.com/auth/tagmanager.readonly',
+  'https://www.googleapis.com/auth/tagmanager.edit.containers',
 ] as const;
 
 export class ErroGoogle extends Error {

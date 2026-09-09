@@ -175,6 +175,9 @@ type Lead = {
   processo_nome?: string | null;
   etapa: string;
   curso_id?: string | null;
+  curso_codigo?: string | null;
+  oferta_codigo?: string | null;
+  oferta_nome?: string | null;
   registrado_em?: string | null;
   cep?: string | null;
   /** Valor real da matrícula, quando o webhook o traz. Vence o valor da tela. */
@@ -290,8 +293,9 @@ export async function reservar(
     `INSERT OR IGNORE INTO conversoes_offline (
        order_id, lead_etapa_id, contato_id, contato_canonico, contato_nome, email, telefone, cep,
        registro_processo_id, processo_id, processo_nome, etapa, evento,
-       curso_id, click_id_tipo, click_id_valor, valor, modo, status, ocorrido_em
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendente', ?)`,
+       curso_id, curso_codigo, oferta_codigo, oferta_nome,
+       click_id_tipo, click_id_valor, valor, modo, status, ocorrido_em
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pendente', ?)`,
   ).bind(
     oid,
     lead.id ?? null,
@@ -307,6 +311,9 @@ export async function reservar(
     lead.etapa,
     evento,
     lead.curso_id ?? null,
+    lead.curso_codigo ?? null,
+    lead.oferta_codigo ?? null,
+    lead.oferta_nome ?? null,
     lead.gclid ? 'gclid' : lead.gbraid ? 'gbraid' : lead.wbraid ? 'wbraid' : null,
     lead.gclid ?? lead.gbraid ?? lead.wbraid ?? null,
     // Valor do webhook. Nulo aqui deixa `acaoDoEvento` aplicar o da tela.
@@ -357,10 +364,12 @@ export async function avaliarLead(env: Env, lead: Lead): Promise<void> {
 // -------------------------------------------------------------- enriquecer
 
 type Pendente = {
-  id: number; order_id: string; contato_id: string; contato_nome: string | null;
+  id: number; lead_etapa_id: number | null;
+  order_id: string; contato_id: string; contato_nome: string | null;
   email: string | null; telefone: string | null; registro_processo_id: string | null;
   processo_id: string | null; processo_nome: string | null; etapa: string; evento: Evento;
   curso_id: string | null; curso_nome: string | null; nivel_ensino: string | null;
+  curso_codigo: string | null; oferta_codigo: string | null; oferta_nome: string | null;
   click_id_tipo: string | null; click_id_valor: string | null;
   cep: string | null; contato_canonico: string | null; valor: number | null;
   ocorrido_em: string | null; tentativas: number; status: string;
@@ -402,6 +411,45 @@ async function enriquecer(env: Env, cfg: Config, p: Pendente): Promise<Pendente>
      * agora faria o Google ver como nova uma conversão que já contabilizou.
      */
     p.contato_canonico = p.contato_canonico ?? quem.contatoCanonico;
+  }
+
+  /*
+   * A oferta, quando o gatilho não a trouxe.
+   *
+   * Ela decide a regra mais específica do mapa — uma meta por MBA só funciona
+   * se a conversão souber de qual oferta veio. O webhook manda em algumas
+   * etapas e não em outras, então a linha do lead é a segunda chance, e é
+   * consulta indexada num banco que já está aberto.
+   */
+  if ((!p.oferta_codigo || !p.curso_codigo) && p.lead_etapa_id) {
+    const l = await env.DB.prepare(
+      'SELECT oferta_codigo, oferta_nome, curso_codigo FROM leads_etapa WHERE id = ?',
+    ).bind(p.lead_etapa_id).first() as
+      { oferta_codigo: string | null; oferta_nome: string | null; curso_codigo: string | null } | null;
+    if (l) {
+      p.oferta_codigo = p.oferta_codigo ?? l.oferta_codigo;
+      p.oferta_nome = p.oferta_nome ?? l.oferta_nome;
+      p.curso_codigo = p.curso_codigo ?? l.curso_codigo;
+    }
+  }
+
+  /*
+   * O catálogo completa o que a oferta implica: curso, nível e o nome dela.
+   * Uma regra por oferta continua valendo mesmo quando o lead chegou só com o
+   * código — e o nível resolvido daqui evita a ida ao Rubeus mais abaixo.
+   */
+  if (p.oferta_codigo && (!p.nivel_ensino || !p.curso_id || !p.oferta_nome)) {
+    const o = await env.DB.prepare(
+      `SELECT curso_id, curso_codigo, nome, nivel_ensino FROM curso_ofertas
+        WHERE oferta_codigo = ? OR id = ? LIMIT 1`,
+    ).bind(p.oferta_codigo, p.oferta_codigo).first() as
+      { curso_id: string | null; curso_codigo: string | null; nome: string | null; nivel_ensino: string | null } | null;
+    if (o) {
+      p.curso_id = p.curso_id ?? o.curso_id;
+      p.curso_codigo = p.curso_codigo ?? o.curso_codigo;
+      p.oferta_nome = p.oferta_nome ?? o.nome;
+      p.nivel_ensino = p.nivel_ensino ?? o.nivel_ensino;
+    }
   }
 
   // Nível e curso: primeiro o catálogo local, que não custa chamada externa.
@@ -554,17 +602,65 @@ export function momentoGoogle(iso: string | null | undefined): string {
     `${p(br.getUTCHours())}:${p(br.getUTCMinutes())}:${p(br.getUTCSeconds())}-03:00`;
 }
 
-type Acao = { conversion_action_id: string; conversion_action_nome: string | null; valor: number; moeda: string };
+type Acao = {
+  conversion_action_id: string;
+  conversion_action_nome: string | null;
+  valor: number;
+  moeda: string;
+  /** Por qual regra esta ação foi escolhida — vai para o registro. */
+  escopo?: string;
+  alvo?: string | null;
+  alvo_rotulo?: string | null;
+};
 
-/** A ação do nível exato; sem ela, a curinga. Sem nenhuma das duas, não envia. */
-async function acaoDoEvento(db: D1Database, evento: Evento, nivel: string | null): Promise<Acao | null> {
+/**
+ * Qual ação do Google recebe esta conversão — da regra mais específica à mais geral.
+ *
+ * Quatro escopos, e o primeiro que casar vence: oferta → curso → nível → geral.
+ * A ordem é o ponto: uma regra para o MBA de Gestão precisa vencer a regra de
+ * "Pós-Graduação (Presencial)", senão cadastrá-la não teria efeito nenhum e o
+ * curso caro continuaria subindo com o valor médio do nível.
+ *
+ * O curso casa por id OU por código porque as duas grafias circulam — o webhook
+ * manda `cursos.0.id` em alguns payloads e `codCurso` em outros, e uma regra
+ * criada a partir do catálogo guarda o código.
+ */
+async function acaoDoEvento(
+  db: D1Database,
+  evento: Evento,
+  alvos: {
+    oferta: string | null;
+    cursoId: string | null;
+    cursoCodigo: string | null;
+    nivel: string | null;
+  },
+): Promise<Acao | null> {
   const linha = await db.prepare(
-    `SELECT conversion_action_id, conversion_action_nome, valor, moeda
+    `SELECT conversion_action_id, conversion_action_nome, valor, moeda, escopo, alvo, alvo_rotulo
        FROM conversao_acoes
-      WHERE ativo = 1 AND evento = ? AND nivel_ensino IN (?, ?)
-      ORDER BY CASE WHEN nivel_ensino = ? THEN 0 ELSE 1 END
+      WHERE ativo = 1
+        AND evento = ?
+        AND (
+          (escopo = 'oferta' AND ? IS NOT NULL AND alvo = ?)
+          OR (escopo = 'curso' AND (
+                (? IS NOT NULL AND alvo = ?) OR (? IS NOT NULL AND alvo = ?)
+             ))
+          OR (escopo = 'nivel' AND ? IS NOT NULL AND alvo = ?)
+          OR escopo = 'geral'
+        )
+      ORDER BY CASE escopo
+                 WHEN 'oferta' THEN 0
+                 WHEN 'curso'  THEN 1
+                 WHEN 'nivel'  THEN 2
+                 ELSE 3
+               END
       LIMIT 1`,
-  ).bind(evento, nivel ?? NIVEL_PADRAO, NIVEL_PADRAO, nivel ?? NIVEL_PADRAO).first();
+  ).bind(
+    evento,
+    alvos.oferta, alvos.oferta,
+    alvos.cursoId, alvos.cursoId, alvos.cursoCodigo, alvos.cursoCodigo,
+    alvos.nivel, alvos.nivel,
+  ).first();
   return (linha as Acao | null) ?? null;
 }
 
@@ -716,7 +812,12 @@ export async function processarPendentes(
 
   for (const bruto of fila) {
     const p = await enriquecer(env, cfg, bruto);
-    const acao = await acaoDoEvento(env.DB, p.evento, p.nivel_ensino);
+    const acao = await acaoDoEvento(env.DB, p.evento, {
+      oferta: p.oferta_codigo,
+      cursoId: p.curso_id,
+      cursoCodigo: p.curso_codigo,
+      nivel: p.nivel_ensino,
+    });
 
     if (!acao) {
       stmts.push(marcar(env.DB, p, 'sem_acao',
@@ -865,6 +966,9 @@ function marcar(
        cep = COALESCE(?, cep),
        contato_canonico = COALESCE(?, contato_canonico),
        curso_id = COALESCE(?, curso_id),
+       curso_codigo = COALESCE(?, curso_codigo),
+       oferta_codigo = COALESCE(?, oferta_codigo),
+       oferta_nome = COALESCE(?, oferta_nome),
        curso_nome = COALESCE(?, curso_nome),
        nivel_ensino = COALESCE(?, nivel_ensino),
        click_id_tipo = COALESCE(?, click_id_tipo),
@@ -885,7 +989,7 @@ function marcar(
     requestId ?? null,
     p.contato_nome, p.email, p.telefone,
     p.cep, p.contato_canonico,
-    p.curso_id, p.curso_nome, p.nivel_ensino,
+    p.curso_id, p.curso_codigo, p.oferta_codigo, p.oferta_nome, p.curso_nome, p.nivel_ensino,
     p.click_id_tipo, p.click_id_valor,
     extra?.acao.conversion_action_id ?? null,
     extra?.acao.conversion_action_nome ?? null,
@@ -1093,6 +1197,7 @@ export async function subirBackup(
     'Click ID': l.click_id_valor,
     'Order ID': l.order_id,
     'Detalhe do erro': l.erro_detalhe,
+    Oferta: l.oferta_nome || l.oferta_codigo,
     'Diagnóstico do Google': l.diagnostico,
     'Avisos do Google': l.avisos,
     'Request ID': l.request_id,

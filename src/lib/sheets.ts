@@ -54,6 +54,8 @@ export const COLUNAS = [
   'Diagnóstico do Google',
   'Avisos do Google',
   'Request ID',
+  // A oferta virou dimensão de segmentação da meta — ver migration 0035.
+  'Oferta',
 ] as const;
 
 export type LinhaBackup = Record<(typeof COLUNAS)[number], string | number | null | undefined>;

@@ -264,6 +264,29 @@ npx wrangler secret put GOOGLE_ADS_REFRESH_TOKEN
 
 Em produção `credenciais_oauth` fica vazia de propósito, e o token vem do secret.
 
+### Instalar a tag pelo GTM, sem sair do painel
+
+`POST /api/conversoes/gtm` cria a tag de HTML personalizado no **workspace
+padrão** do contêiner, com acionamento em todas as páginas, e devolve o link.
+Idempotente pelo nome: rodar duas vezes atualiza a mesma tag em vez de criar uma
+cópia — o GTM não impede nome repetido, e duas tags iguais na mesma página
+mandariam a captura em dobro.
+
+**Não publica o contêiner, e isso é deliberado.** Publicar vale para o site
+inteiro e leva junto qualquer rascunho que outra pessoa tenha deixado no
+workspace. O escopo `tagmanager.publish` nem é pedido.
+
+O acionamento não usa o id do "All Pages" embutido (`2147479553`). Constante
+mágica de outra ferramenta é o tipo de detalhe que muda sem avisar e falha longe
+de onde foi escrita: o painel procura um gatilho de `pageview` no workspace e
+cria um quando não houver.
+
+Exige dois escopos novos — `tagmanager.readonly` e `tagmanager.edit.containers`
+—, o que significa **refazer o consentimento local e republicar o secret**. Sem
+eles a rota responde 403 com a causa dita por extenso, em vez do "insufficient
+authentication scopes" cru do Google, que manda procurar permissão de contêiner
+quando o problema é o token.
+
 ### A tela verifica, não lembra
 
 O checklist da tela de conversão perguntava à coluna `credenciais_oauth.escopo`
@@ -349,6 +372,38 @@ descarta o identificador e a conversão aprimorada para de casar.
 Marcar "concedido" é uma declaração em nome da faculdade sobre um consentimento
 que só quem administra a captação pode confirmar — por isso mora na tela, com o
 padrão no lado que não afirma nada, em vez de cravado no código.
+
+### Meta por oferta, não só por nível de ensino
+
+A tabela de ações mirava um alvo só: nível de ensino, com `nivel_ensino = '*'`
+de curinga. Basta para separar Pós de Graduação e não basta para o que a
+operação faz: um MBA e um curso de curta duração de R$ 300 caíam no mesmo balde
+e subiam com o mesmo valor, então o Smart Bidding perseguia os dois pelo mesmo
+preço.
+
+O alvo virou um par `(escopo, alvo)` — migration 0035 — com quatro escopos
+resolvidos do mais específico para o mais geral:
+
+| escopo | alvo | quando usar |
+|---|---|---|
+| `oferta` | código da oferta do Rubeus | turma/campus/semestre com meta própria |
+| `curso` | id ou código do curso | vale para todas as ofertas dele |
+| `nivel` | nome do nível de ensino | o que existia |
+| `geral` | — | o curinga, que era o `'*'` |
+
+`acaoDoEvento` para na primeira que casar. A ordem é o ponto: uma regra do MBA
+precisa vencer a de "Pós-Graduação (Presencial)", senão cadastrá-la não teria
+efeito. Acrescentar uma dimensão amanhã — modalidade, unidade — é uma linha no
+`CASE`, não uma migration de coluna.
+
+O `'*'` era valor sentinela dentro de uma coluna de dados: funcionava e obrigava
+todo SELECT a saber que aquele asterisco não é um nível. Com o escopo explícito,
+o curinga deixou de precisar de disfarce.
+
+`conversoes_offline` passou a guardar `oferta_codigo`, `oferta_nome` e
+`curso_codigo` — não havia contra o que casar uma regra por oferta. Ficam na
+própria tabela, e não num join com `leads_etapa`, porque ela é o registro do que
+FOI ENVIADO e precisa continuar dizendo a verdade depois que o cadastro mudar.
 
 ### O valor do curso
 

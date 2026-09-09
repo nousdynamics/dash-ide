@@ -37,9 +37,22 @@ export function useApi(caminhos, chave) {
 
   useEffect(() => {
     let atual = true;
-    setEstado((e) => ({ ...e, carregando: true, erro: null }));
 
-    const lista = Array.isArray(caminhos) ? caminhos : [caminhos];
+    /*
+     * Caminho nulo é "não busque ainda", não um erro.
+     *
+     * Deixa a tela adiar uma consulta cara até alguém precisar dela — a lista de
+     * contêineres do GTM, por exemplo, custa duas idas ao Google por conta e só
+     * interessa a quem abriu o bloco de instalação. Sem esta guarda, o `null`
+     * virava `fetch(null)`, que busca a URL relativa "/null" e devolve 404.
+     */
+    const lista = (Array.isArray(caminhos) ? caminhos : [caminhos]).filter(Boolean);
+    if (!lista.length) {
+      setEstado({ dados: null, carregando: false, erro: null });
+      return undefined;
+    }
+
+    setEstado((e) => ({ ...e, carregando: true, erro: null }));
     Promise.all(lista.map(buscar))
       .then((r) => {
         if (!atual) return;

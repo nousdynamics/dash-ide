@@ -18,6 +18,7 @@ import {
 } from '../lib/conversoes';
 import { estadoDoGoogle } from '../lib/google';
 import { ErroGoogleAds, criarAcaoDeUpload, listarAcoesDeUpload } from '../lib/googleAds';
+import { ErroGtm, instalarTag, listarContainers } from '../lib/gtm';
 import { conferirPlanilha, criarPlanilha } from '../lib/sheets';
 import type { AppEnv } from '../lib/tipos';
 
@@ -53,8 +54,13 @@ conversoes.get('/', async (c) => {
          FROM conversao_gatilhos g ORDER BY g.evento, g.etapa_nome`,
     ).all(),
     c.env.DB.prepare(
-      `SELECT id, evento, nivel_ensino, conversion_action_id, conversion_action_nome,
-              valor, moeda, ativo FROM conversao_acoes ORDER BY evento, nivel_ensino`,
+      `SELECT id, evento, escopo, alvo, alvo_rotulo, conversion_action_id,
+              conversion_action_nome, valor, moeda, ativo
+         FROM conversao_acoes
+        ORDER BY evento,
+                 CASE escopo WHEN 'oferta' THEN 0 WHEN 'curso' THEN 1
+                             WHEN 'nivel' THEN 2 ELSE 3 END,
+                 alvo`,
     ).all(),
     c.env.DB.prepare(
       `SELECT status, COUNT(*) AS total, MAX(enviado_em) AS ultimo
@@ -608,9 +614,21 @@ conversoes.delete('/gatilhos/:id', async (c) => {
 
 // --------------------------------------------------------------------- ações
 
+/**
+ * Escopos do alvo, do mais específico para o mais geral.
+ *
+ * `nivel_ensino` continua aceito por compatibilidade: era o único alvo possível
+ * antes da migration 0035, e a tela antiga em cache no navegador de alguém
+ * seguiria mandando esse campo por mais alguns minutos depois do deploy.
+ */
+const ESCOPOS = ['oferta', 'curso', 'nivel', 'geral'] as const;
+
 const acaoSchema = z.object({
   evento: z.string().refine(ehEvento, 'evento desconhecido'),
-  nivel_ensino: z.string().min(1).max(120),
+  escopo: z.enum(ESCOPOS).optional(),
+  alvo: z.string().max(200).nullish(),
+  alvo_rotulo: z.string().max(200).nullish(),
+  nivel_ensino: z.string().min(1).max(120).optional(),
   conversion_action_id: z.string().regex(/^\d+$/, 'id da ação deve ser numérico'),
   conversion_action_nome: z.string().nullish(),
   valor: z.coerce.number().min(0).max(1_000_000).default(0),
@@ -624,11 +642,27 @@ conversoes.post('/acoes', async (c) => {
   if (!r.success) return c.json({ erro: 'schema_invalido', detalhe: r.error.issues }, 400);
   const d = r.data;
 
+  /*
+   * Traduz a forma antiga (`nivel_ensino`, com `*` de curinga) na nova.
+   *
+   * O asterisco era um valor sentinela dentro de uma coluna de dados: funcionava
+   * e obrigava todo SELECT a saber que aquele `*` não é um nível de ensino.
+   */
+  const escopo = d.escopo
+    ?? (d.nivel_ensino === NIVEL_PADRAO ? 'geral' : 'nivel');
+  const alvo = escopo === 'geral' ? null : (d.alvo ?? d.nivel_ensino ?? null);
+
+  if (escopo !== 'geral' && !alvo) {
+    return c.json({ erro: 'alvo_ausente', detalhe: `escopo "${escopo}" exige um alvo` }, 400);
+  }
+
   await c.env.DB.prepare(
     `INSERT INTO conversao_acoes
-       (evento, nivel_ensino, conversion_action_id, conversion_action_nome, valor, moeda, ativo, atualizado_por)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT (evento, nivel_ensino) DO UPDATE SET
+       (evento, escopo, alvo, alvo_rotulo, conversion_action_id, conversion_action_nome,
+        valor, moeda, ativo, atualizado_por)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (evento, escopo, COALESCE(alvo, '')) DO UPDATE SET
+       alvo_rotulo = COALESCE(excluded.alvo_rotulo, alvo_rotulo),
        conversion_action_id = excluded.conversion_action_id,
        conversion_action_nome = excluded.conversion_action_nome,
        valor = excluded.valor,
@@ -637,7 +671,8 @@ conversoes.post('/acoes', async (c) => {
        atualizado_em = datetime('now'),
        atualizado_por = excluded.atualizado_por`,
   ).bind(
-    d.evento, d.nivel_ensino, d.conversion_action_id, d.conversion_action_nome ?? null,
+    d.evento, escopo, alvo, d.alvo_rotulo ?? alvo,
+    d.conversion_action_id, d.conversion_action_nome ?? null,
     d.valor, d.moeda.toUpperCase(), d.ativo ? 1 : 0, c.get('usuarioEmail') ?? null,
   ).run();
 
@@ -670,7 +705,7 @@ conversoes.post('/acoes', async (c) => {
   ).bind(d.evento).run();
 
   console.log(JSON.stringify({
-    evento: 'acao_conversao_salva', gatilho: d.evento, nivel: d.nivel_ensino,
+    evento: 'acao_conversao_salva', gatilho: d.evento, escopo, alvo,
     valor: d.valor, revividas: meta.changes, por: c.get('usuarioEmail') ?? '?',
   }));
   return c.json({ ok: true, revividas: meta.changes }, 201);
@@ -749,6 +784,62 @@ conversoes.get('/planilha', async (c) => {
   if (!cfg.planilhaId) return c.json({ configurada: false });
   const estado = await conferirPlanilha(c.env, cfg.planilhaId, cfg.planilhaAba);
   return c.json({ configurada: true, url: cfg.planilhaUrl, aba: cfg.planilhaAba, ...estado });
+});
+
+// ----------------------------------------------------------------- GTM
+
+/**
+ * GET /api/conversoes/gtm — os contêineres onde dá para instalar a tag.
+ *
+ * Consultado ao vivo, e não guardado: quem tem acesso a qual contêiner muda no
+ * GTM, e uma lista velha ofereceria um destino que a credencial não alcança
+ * mais — o erro só apareceria no clique de instalar.
+ */
+conversoes.get('/gtm', async (c) => {
+  try {
+    return c.json({ itens: await listarContainers(c.env) });
+  } catch (e) {
+    const erro = e instanceof ErroGtm ? e : null;
+    return c.json(
+      { erro: erro?.message ?? 'falha ao consultar o Tag Manager', escopo: erro?.status === 403 },
+      (erro?.status === 403 ? 403 : 502) as 403 | 502,
+    );
+  }
+});
+
+const instalarGtmSchema = z.object({
+  /* `accounts/123/containers/456` — o caminho que a própria API do GTM devolve. */
+  container: z.string().regex(/^accounts\/\d+\/containers\/\d+$/, 'contêiner inválido'),
+});
+
+/**
+ * POST /api/conversoes/gtm — cria a tag de captura no workspace padrão.
+ *
+ * Escrita real no contêiner do site, então só sai daqui por clique explícito de
+ * quem administra. NÃO publica: a tag fica como alteração pendente no workspace
+ * padrão, e a publicação continua sendo um ato humano no GTM — ela vale para o
+ * site inteiro e levaria junto qualquer rascunho de outra pessoa.
+ */
+conversoes.post('/gtm', async (c) => {
+  const r = instalarGtmSchema.safeParse(await c.req.json().catch(() => null));
+  if (!r.success) return c.json({ erro: 'schema_invalido', detalhe: r.error.issues }, 400);
+
+  const scriptUrl = `${new URL(c.req.url).origin}/coleta/ide-clique.js`;
+
+  try {
+    const feito = await instalarTag(c.env, r.data.container, scriptUrl);
+    console.log(JSON.stringify({
+      evento: 'gtm_instalado', container: r.data.container,
+      criada: feito.criada, por: c.get('usuarioEmail') ?? '?',
+    }));
+    return c.json({ ok: true, ...feito });
+  } catch (e) {
+    const erro = e instanceof ErroGtm ? e : null;
+    return c.json(
+      { erro: erro?.message ?? String(e), escopo: erro?.status === 403 },
+      (erro?.status === 403 ? 403 : 502) as 403 | 502,
+    );
+  }
 });
 
 // ------------------------------------------------------------ campo do Rubeus
