@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { ehAdmin, exigirAdmin } from '../lib/access';
+import { delta, num } from '../lib/metricas';
 import { intervaloDeQuery } from '../lib/periodo';
 import { funilMarketing } from '../lib/rdstation';
 import {
@@ -37,13 +38,6 @@ function janelas(dias: number) {
   };
 }
 
-/** Variação percentual entre dois períodos. `null` quando não há base. */
-function delta(atual: number, anterior: number): number | null {
-  if (!anterior) return null;
-  return Number((((atual - anterior) / anterior) * 100).toFixed(1));
-}
-
-const num = (v: unknown): number => (typeof v === 'number' ? v : Number(v ?? 0) || 0);
 
 const MACRO_ORDEM = [
   'visitantes',

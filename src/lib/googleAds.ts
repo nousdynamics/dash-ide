@@ -180,10 +180,12 @@ async function consultarNaOrigem<T>(env: Env, query: string): Promise<T[]> {
 
 // ------------------------------------------------------------------ helpers
 
-/** Micros → unidade monetária. O Google devolve custo em milionésimos. */
-export const deMicros = (v: unknown): number => (Number(v) || 0) / 1_000_000;
-
-export const num = (v: unknown): number => Number(v) || 0;
+/*
+ * A aritmética mora em `lib/metricas.ts` — reexportada aqui porque as rotas de
+ * mídia já a importavam deste módulo. Havia duas implementações de `num` e três
+ * de `delta` no projeto, com comportamentos diferentes para nulo.
+ */
+export { deMicros, num } from './metricas';
 
 /** Escapa aspas simples pra interpolação segura em GAQL. */
 export const gaql = (v: string): string => v.replace(/'/g, "\\'");

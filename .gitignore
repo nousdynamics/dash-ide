@@ -21,3 +21,10 @@ worker-configuration.d.ts
 # Sistema
 .DS_Store
 *.log
+
+# Planilha de origem do funil.
+#
+# O dado dela já entrou no painel pela migration 0024 — o arquivo é insumo de
+# importação, não fonte do projeto. São ~1 MB de binário que o git não sabe
+# versionar de forma útil: cada salvamento vira um blob novo e inteiro.
+funil-de-vendas*.xlsx

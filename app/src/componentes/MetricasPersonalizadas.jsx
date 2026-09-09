@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Cartao, ChipDelta, Switch } from './base';
+import { Cartao, ChipDelta, Switch, Select } from './base';
 import { avaliar, validarFormula } from '../lib/formula';
 import { fmtBRL, fmtDec, fmtPct } from '../lib/formato';
 
@@ -282,16 +282,19 @@ export function EditorMetricas({ dados, ctx, aoMudar }) {
               aria-label="Nome da métrica"
               className="bg-superficie text-primario border border-borda-forte rounded-[8px] px-2 py-[5px] text-xs flex-1 min-w-[170px]"
             />
-            <select
-              value={form.formato}
-              onChange={(e) => setForm({ ...form, formato: e.target.value })}
-              aria-label="Formato"
-              className="bg-superficie text-primario border border-borda-forte rounded-[8px] px-2 py-[5px] text-xs cursor-pointer"
-            >
-              <option value="numero">Número</option>
-              <option value="moeda">R$</option>
-              <option value="percentual">%</option>
-            </select>
+            {/*
+              * `Select` do design system, não `<select>` cru.
+              *
+              * Era o único lugar do painel com um seletor escrito à mão. Ele já
+              * tinha divergido: com `w-full` na base, este ficava sem — e no dia
+              * em que a base mudou, mudou para todo mundo menos aqui.
+              */}
+            <Select
+              rotulo="Formato"
+              valor={form.formato}
+              aoTrocar={(v) => setForm({ ...form, formato: v })}
+              opcoes={[['numero', 'Número'], ['moeda', 'R$'], ['percentual', '%']]}
+            />
           </div>
 
           <input

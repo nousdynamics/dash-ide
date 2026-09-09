@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AppEnv } from '../lib/tipos';
 import { ErroGoogleAds, consultar, dataValida, deMicros, janelaAnterior, num } from '../lib/googleAds';
+import { delta } from '../lib/metricas';
 
 const ads = new Hono<AppEnv>();
 
@@ -79,12 +80,6 @@ function totalizar(metricas: Array<Record<string, unknown>>): Totais {
     ctr: impressoes > 0 ? (cliques / impressoes) * 100 : null,
     taxa_conversao: cliques > 0 ? (primarias / cliques) * 100 : null,
   };
-}
-
-/** Variação percentual; `null` quando não há base de comparação. */
-function delta(atual: number | null, anterior: number | null): number | null {
-  if (atual === null || anterior === null || !anterior) return null;
-  return Number((((atual - anterior) / anterior) * 100).toFixed(1));
 }
 
 function deltas(a: Totais, b: Totais): Record<string, number | null> {

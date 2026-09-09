@@ -429,8 +429,20 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
     return c.json({ ok: true, repetido: true }, 200);
   }
 
+  /*
+   * `INSERT OR IGNORE`, agora que o banco tem a chave única.
+   *
+   * A consulta acima resolve o caso comum e devolve 200 "repetido" ao Rubeus,
+   * que é a resposta educada. Ela não fecha a corrida: dois webhooks do mesmo
+   * evento no mesmo instante passam os dois pela checagem. Com o índice único
+   * da migration 0036, o segundo INSERT estouraria e viraria 500 — e 500 faz o
+   * Rubeus tratar como falha um evento que foi recebido e já está gravado.
+   *
+   * `OR IGNORE` transforma esse choque em `meta.changes = 0`, que é exatamente
+   * a verdade: nada foi inserido porque já estava lá.
+   */
   const { meta } = await c.env.DB.prepare(
-    `INSERT INTO leads_etapa (
+    `INSERT OR IGNORE INTO leads_etapa (
        contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, etapa, status,
        curso_id, curso_codigo, oferta_codigo, oferta_nome,
        origem, modalidade, unidade, responsavel_comercial, registrado_em,
@@ -476,6 +488,14 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       d.email ?? d.telefone ?? d.contato_id,
     )
     .run();
+
+  /* Perdeu a corrida: a linha já existe, gravada pelo webhook gêmeo. */
+  if (!meta.changes) {
+    console.log(JSON.stringify({
+      evento: 'etapa_repetida_corrida', contato_id: d.contato_id, etapa: d.etapa,
+    }));
+    return c.json({ ok: true, repetido: true }, 200);
+  }
 
   /*
    * Espalha a identidade para trás.
