@@ -339,3 +339,91 @@ export function Esqueleto({ linhas = 3 }) {
     </Cartao>
   );
 }
+
+/**
+ * Diálogo modal — usado para tirar da tela o que só se lê de vez em quando.
+ *
+ * `<dialog>` nativo em vez de div com overlay: ele traz de fábrica o que uma
+ * reimplementação sempre esquece — foco preso dentro do diálogo, Esc fechando,
+ * o resto da página marcado como inerte para leitor de tela e a pilha de
+ * empilhamento acima de qualquer `z-index` da página.
+ *
+ * O `::backdrop` é estilizado no CSS global, que é o único lugar de onde ele
+ * pode ser alcançado.
+ */
+export function Modal({ aberto, aoFechar, titulo, descricao, children, largura = '640px' }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return undefined;
+    if (aberto && !d.open) d.showModal();
+    if (!aberto && d.open) d.close();
+    return undefined;
+  }, [aberto]);
+
+  /*
+   * `close` cobre as saídas que não passam pelo botão — Esc, e o clique fora
+   * tratado abaixo. Sem escutar o evento, o estado do pai continuaria "aberto"
+   * e o diálogo não reabriria no clique seguinte.
+   */
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return undefined;
+    const aoCancelar = () => aoFechar();
+    d.addEventListener('close', aoCancelar);
+    return () => d.removeEventListener('close', aoCancelar);
+  }, [aoFechar]);
+
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby="modal-titulo"
+      onClick={(e) => {
+        // Clique no backdrop: o alvo é o próprio <dialog>, não o conteúdo.
+        if (e.target === ref.current) aoFechar();
+      }}
+      className="m-auto p-0 border-0 bg-transparent max-h-[85vh] w-[calc(100vw-2rem)]"
+      style={{ maxWidth: largura }}
+    >
+      <div className="bg-superficie border border-borda rounded-[12px] shadow-xl overflow-hidden">
+        <div className="flex items-start justify-between gap-4 px-4 py-3 border-b border-borda bg-elevado">
+          <div className="min-w-0">
+            <h2 id="modal-titulo" className="text-[13px] font-semibold m-0">{titulo}</h2>
+            {descricao && <p className="text-[11px] text-tenue mt-1 mb-0 leading-relaxed">{descricao}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={aoFechar}
+            aria-label="Fechar"
+            className="w-7 h-7 shrink-0 rounded-[8px] border border-borda bg-superficie text-secundario
+                       flex items-center justify-center cursor-pointer text-[15px] leading-none
+                       hover:bg-superficie-hover hover:text-primario"
+          >
+            ×
+          </button>
+        </div>
+        <div className="px-4 py-3 overflow-y-auto max-h-[calc(85vh-56px)]">{children}</div>
+      </div>
+    </dialog>
+  );
+}
+
+/** Botão só de ícone, com rótulo acessível — abre painéis auxiliares. */
+export function BotaoIcone({ aoClicar, titulo, children, tom = 'neutro' }) {
+  const cor = tom === 'atencao'
+    ? 'border-atencao/40 bg-atencao/12 text-atencao hover:bg-atencao/20'
+    : 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario';
+  return (
+    <button
+      type="button"
+      onClick={aoClicar}
+      title={titulo}
+      aria-label={titulo}
+      className={`w-8 h-8 shrink-0 rounded-[8px] border flex items-center justify-center
+                  cursor-pointer ${cor}`}
+    >
+      {children}
+    </button>
+  );
+}

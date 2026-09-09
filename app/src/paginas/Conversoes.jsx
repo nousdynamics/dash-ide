@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Cartao, Estado, Esqueleto, Pill, Select, Switch } from '../componentes/base';
+import { BotaoIcone, Cartao, Estado, Esqueleto, Modal, Pill, Select, Switch } from '../componentes/base';
 import { useApi } from '../lib/api';
 import { ROTULO_STATUS, TOM_STATUS } from '../lib/conversao';
 import { MonitorConversoes } from './MonitorConversoes';
@@ -81,6 +81,8 @@ export function Conversoes() {
   const recarregar = useCallback(() => setVersao((v) => v + 1), []);
   const { dados, carregando, erro } = useApi('/api/conversoes', `conversoes-${versao}`);
   const [processoAtivo, setProcessoAtivo] = useState(null);
+  /** Qual painel auxiliar está aberto: 'checklist', 'envio' ou nenhum. */
+  const [modal, setModal] = useState(null);
 
   const pipelinesOrd = useMemo(() => {
     const lista = (dados?.pipelines ?? []).map((p) => ({
@@ -169,19 +171,112 @@ export function Conversoes() {
       falta: 'Colar ou criar ctId na seção 2',
     },
     {
+      /*
+       * O envio em modo teste JÁ conta como configuração pronta.
+       *
+       * Teste não é rascunho: o Google valida o evento inteiro e devolve os
+       * mesmos erros, só não contabiliza. Marcar isso como pendência empurraria
+       * para o modo real quem ainda está conferindo o mapa de etapas — que é
+       * exatamente quem não deveria estar lá.
+       */
       ok: config.ligado,
-      rotulo: 'Envio ligado',
-      falta: 'Ligar o interruptor abaixo',
+      rotulo: config.modo === 'real'
+        ? 'Em operação, enviando conversões reais'
+        : 'Em operação, em modo teste',
+      falta: 'Sair da pausa em “Ajustes do envio”',
     },
   ];
+
+  const pendencias = checklist.filter((c) => !c.ok).length;
 
   return (
     <>
       {cabecalho}
 
-      {/* Checklist do que falta para enviar */}
+      {/*
+        * A barra de operação: o que se olha todo dia fica visível, o resto abre.
+        *
+        * Antes o checklist de configuração e o painel de envio ocupavam duas
+        * faixas inteiras no topo — informação que se lê uma vez, na instalação,
+        * empurrando para baixo da dobra o mapa de gatilhos, que é o trabalho
+        * real da tela. Agora são dois ícones.
+        *
+        * O interruptor NÃO entra no modal. Ele é a única coisa aqui que muda o
+        * que o Google Ads recebe, e esconder atrás de um clique um controle
+        * dessa consequência é o oposto do que ele pede: quem abre a tela precisa
+        * ver, sem procurar, se está mandando conversão de verdade.
+        */}
       <Cartao>
-        <div className="text-[13px] font-semibold mb-2">Para o Google receber o evento</div>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <Switch
+              ligado={config.modo === 'real'}
+              aoTrocar={(v) => trocarConfig({ ligado: true, modo: v ? 'real' : 'teste' })}
+            >
+              <span className="sr-only">Enviar conversões reais ao Google Ads</span>
+            </Switch>
+            <div className="min-w-0">
+              <div className={`text-[13px] font-semibold ${config.modo === 'real' ? 'text-sucesso' : 'text-secundario'}`}>
+                {config.modo === 'real' ? 'Enviando conversões reais' : 'Somente teste'}
+              </div>
+              <div className="text-[11px] text-tenue leading-relaxed">
+                {config.modo === 'real'
+                  ? 'Cada conversão conta na conta de anúncios e influencia o lance das campanhas.'
+                  : 'O Google valida cada envio e descarta — nada é contabilizado.'}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {resumo.map((r) => (
+              <Pill key={r.status} tom={TOM_STATUS[r.status] ?? 'neutro'}>
+                {fmtInt(r.total)} {ROTULO_STATUS[r.status] ?? r.status}
+              </Pill>
+            ))}
+            {resumo.length === 0 && (
+              <span className="text-[11px] text-tenue">Nenhuma conversão em 30 dias</span>
+            )}
+
+            <Acao
+              tom="primario"
+              titulo="Processa a fila agora"
+              aoClicar={async () => {
+                const r = await enviar('/api/conversoes/processar');
+                recarregar();
+                return `${r.enviadas} enviada(s), ${r.falhas} falha(s), ${r.sem_identificador} sem identificador.`;
+              }}
+            >
+              Processar a fila
+            </Acao>
+
+            {/*
+              * Pendência vira alerta no próprio ícone.
+              *
+              * Um checklist escondido num modal é um checklist que ninguém abre.
+              * O ícone muda de cor quando falta alguma coisa, e é isso que faz o
+              * item pendente continuar pedindo atenção depois de sair da tela.
+              */}
+            <BotaoIcone
+              titulo={pendencias ? `Configuração: ${pendencias} item(ns) pendente(s)` : 'Configuração do envio'}
+              tom={pendencias ? 'atencao' : 'neutro'}
+              aoClicar={() => setModal('checklist')}
+            >
+              {pendencias ? '!' : '✓'}
+            </BotaoIcone>
+
+            <BotaoIcone titulo="Ajustes do envio" aoClicar={() => setModal('envio')}>
+              ⚙
+            </BotaoIcone>
+          </div>
+        </div>
+      </Cartao>
+
+      <Modal
+        aberto={modal === 'checklist'}
+        aoFechar={() => setModal(null)}
+        titulo="Para o Google receber o evento"
+        descricao="O que precisa estar de pé para uma conversão sair daqui e chegar lá."
+      >
         <ul className="flex flex-col gap-1.5">
           {checklist.map((c) => (
             <li key={c.rotulo} className="flex items-start gap-2 text-xs">
@@ -194,6 +289,7 @@ export function Conversoes() {
             </li>
           ))}
         </ul>
+
         <div className="text-[11px] text-tenue mt-3 pt-3 border-t border-borda leading-relaxed">
           Em cada envio o Google exige ainda: <strong className="text-secundario">identificador</strong>{' '}
           (gclid/gbraid/wbraid <em>ou</em> e-mail/telefone em hash) +{' '}
@@ -201,73 +297,44 @@ export function Conversoes() {
           <strong className="text-secundario">ctId</strong> da ação. Valor (R$) é opcional no protocolo,
           mas necessário para Smart Bidding.
         </div>
-      </Cartao>
 
-      {!google.tem_datamanager && (
-        <Cartao>
-          <div className="min-w-0">
-            <div className="text-[13px] font-semibold text-atencao">
+        {!google.tem_datamanager && (
+          <div className="mt-3 pt-3 border-t border-borda">
+            <div className="text-[12px] font-semibold text-atencao">
               {google.conectado
                 ? 'A conta Google conectada não tem o escopo Data Manager'
                 : 'Nenhuma conta Google conectada'}
             </div>
-            <div className="text-[11px] text-tenue mt-1 max-w-[680px] leading-relaxed">
+            <div className="text-[11px] text-tenue mt-1 leading-relaxed">
               Upload offline de integração nova só entra pela Data Manager API, que exige o escopo{' '}
               <span className="font-mono">datamanager</span>. Sem ele, todo envio volta 403.
-              {google.erro && (
-                <> <span className="text-atencao">{google.erro}</span>.</>
-              )}
-              {/*
-                * O tamanho do token, nunca o valor.
-                *
-                * Separa "secret vazio" de "secret com aspas ou JSON colado
-                * junto" sem expor credencial — um refresh token do Google tem
-                * cerca de 100 caracteres.
-                */}
+              {google.erro && <> <span className="text-atencao">{google.erro}</span>.</>}
               {google.tamanho > 0 && (
                 <> Token em uso: <span className="font-mono">{google.tamanho}</span> caracteres.</>
               )}
             </div>
             {/*
-              * Sem botão "Conectar Google" aqui.
+              * Sem botão "Conectar Google".
               *
-              * Nesta conta o consentimento é feito na máquina de quem administra,
-              * contra o Worker local, e o refresh token é publicado como secret.
-              * O painel em produção não expõe o fluxo de conexão — um botão que
-              * grava credencial no banco daria um segundo caminho, com precedência
-              * sobre o secret, e a origem da credencial deixaria de ser óbvia.
+              * Nesta conta o consentimento é feito na máquina de quem administra
+              * e o refresh token vai para secret do Worker. `/oauth/google/*` só
+              * responde em desenvolvimento — ver `src/routes/oauth.ts`.
               */}
-            <div className="text-[11px] text-tenue mt-2 leading-relaxed max-w-[680px]">
+            <div className="text-[11px] text-tenue mt-2 leading-relaxed">
               A credencial é publicada como secret do Worker
               (<span className="font-mono">GOOGLE_ADS_REFRESH_TOKEN</span>), a partir do
               consentimento feito localmente. Ver a seção “Conversão offline” no README.
             </div>
           </div>
-        </Cartao>
-      )}
+        )}
+      </Modal>
 
-      <Cartao>
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="min-w-0">
-            <div className="text-[13px] font-semibold">Envio para o Google Ads</div>
-            <div className="text-[11px] text-tenue mt-1 max-w-[560px] leading-relaxed">
-              Em <strong className="text-secundario">teste</strong> o Google valida e não contabiliza.
-              Em <strong className="text-secundario">real</strong>, conta na conta de anúncios.
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 items-end shrink-0">
-            <Switch ligado={config.ligado} aoTrocar={(v) => trocarConfig({ ligado: v })}>
-              {config.ligado ? 'Envio ligado' : 'Envio desligado'}
-            </Switch>
-            <Select
-              rotulo="Modo de envio"
-              valor={config.modo}
-              aoTrocar={(v) => trocarConfig({ modo: v })}
-              opcoes={[['teste', 'Modo teste'], ['real', 'Modo real']]}
-            />
-          </div>
-        </div>
-
+      <Modal
+        aberto={modal === 'envio'}
+        aoFechar={() => setModal(null)}
+        titulo="Ajustes do envio"
+        descricao="Declarações e a chave geral. O modo teste/real fica no interruptor da tela."
+      >
         {/*
           * Consentimento é declaração, não ajuste técnico.
           *
@@ -277,55 +344,55 @@ export function Conversoes() {
           * aplica a regra da conta; negado, ele descarta o identificador e a
           * conversão aprimorada para de casar.
           */}
-        <div className="flex items-start justify-between gap-4 flex-wrap mt-3 pt-3 border-t border-borda">
-          <div className="min-w-0">
-            <div className="text-[12px] font-semibold">Consentimento declarado ao Google</div>
-            <div className="text-[11px] text-tenue mt-1 max-w-[560px] leading-relaxed">
-              Só marque <strong className="text-secundario">concedido</strong> se a captação de
-              leads de fato coleta esse consentimento — é uma declaração em nome da faculdade.
-              O padrão não afirma nada e deixa o Google aplicar a regra da conta;{' '}
-              <strong className="text-secundario">negado</strong> faz o Google descartar
-              e-mail e telefone, e a conversão aprimorada para de casar.
-            </div>
-          </div>
-          <div className="shrink-0 min-w-[210px]">
-            <Select
-              rotulo="Consentimento de dados do usuário"
-              valor={config.consentimento ?? 'nao_informado'}
-              aoTrocar={(v) => trocarConfig({ consentimento: v })}
-              opcoes={[
-                ['nao_informado', 'Não informar (padrão)'],
-                ['concedido', 'Concedido'],
-                ['negado', 'Negado'],
-              ]}
-              className="w-full"
-            />
-          </div>
+        <div className="text-[12px] font-semibold">Consentimento declarado ao Google</div>
+        <div className="text-[11px] text-tenue mt-1 leading-relaxed">
+          Só marque <strong className="text-secundario">concedido</strong> se a captação de
+          leads de fato coleta esse consentimento — é uma declaração em nome da faculdade.
+          O padrão não afirma nada e deixa o Google aplicar a regra da conta;{' '}
+          <strong className="text-secundario">negado</strong> faz o Google descartar
+          e-mail e telefone, e a conversão aprimorada para de casar.
+        </div>
+        <div className="mt-2 max-w-[260px]">
+          <Select
+            rotulo="Consentimento de dados do usuário"
+            valor={config.consentimento ?? 'nao_informado'}
+            aoTrocar={(v) => trocarConfig({ consentimento: v })}
+            opcoes={[
+              ['nao_informado', 'Não informar (padrão)'],
+              ['concedido', 'Concedido'],
+              ['negado', 'Negado'],
+            ]}
+            className="w-full"
+          />
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap mt-3 pt-3 border-t border-borda">
-          {resumo.length === 0
-            ? <span className="text-[11px] text-tenue">Nenhuma conversão nos últimos 30 dias.</span>
-            : resumo.map((r) => (
-              <Pill key={r.status} tom={TOM_STATUS[r.status] ?? 'neutro'}>
-                {fmtInt(r.total)} {ROTULO_STATUS[r.status] ?? r.status}
-              </Pill>
-            ))}
-          <span className="ml-auto">
-            <Acao
-              tom="primario"
-              titulo="Processa a fila agora"
-              aoClicar={async () => {
-                const r = await enviar('/api/conversoes/processar');
-                recarregar();
-                return `${r.enviadas} enviada(s), ${r.falhas} falha(s), ${r.sem_identificador} sem identificador.`;
-              }}
+        {/*
+          * A chave geral sobrevive à fusão do interruptor.
+          *
+          * O interruptor da tela escolhe entre teste e real, e nas duas posições
+          * o painel conversa com o Google. Quando algo está errado de verdade —
+          * mapa de etapas trocado, Google recusando tudo — é preciso poder parar
+          * de conversar, e não só parar de contabilizar. Fica aqui porque é
+          * manobra de exceção, não ajuste do dia a dia.
+          */}
+        <div className="mt-3 pt-3 border-t border-borda">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <div className="text-[12px] font-semibold">Pausar tudo</div>
+              <div className="text-[11px] text-tenue mt-1 leading-relaxed max-w-[360px]">
+                Interrompe qualquer conversa com o Google, inclusive as validações do
+                modo teste. Os eventos continuam sendo registrados e ficam na fila.
+              </div>
+            </div>
+            <Switch
+              ligado={!config.ligado}
+              aoTrocar={(v) => trocarConfig({ ligado: !v })}
             >
-              Processar a fila agora
-            </Acao>
-          </span>
+              {config.ligado ? 'Em operação' : 'Pausado'}
+            </Switch>
+          </div>
         </div>
-      </Cartao>
+      </Modal>
 
       {/* 1. Gatilhos por processo */}
       <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)] gap-3 items-start">

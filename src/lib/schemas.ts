@@ -130,11 +130,32 @@ export const normalizarEtapa = (bruto: unknown): unknown => {
    * Um único fluxo do Rubeus atende várias etapas — sete, no funil de
    * Pós-Graduação. Todas apontam para a mesma URL, então a etapa PRECISA vir no
    * corpo; separar por URL exigiria um fluxo por etapa, que não é como a conta
-   * está montada. Aqui cobrimos tanto o payload padrão do Rubeus
-   * (`resumoAtual.nome`) quanto o montado campo a campo no fluxo.
+   * está montada.
+   *
+   * O que NÃO entra aqui, e por quê:
+   *
+   *   `resumoAtualNome` / `resumoAtual.nome` / `resumo.nome` — resumo é o
+   *   andamento do contato com a pessoa ("Não contactado"), não o degrau do
+   *   funil. Chega em webhook de ATIVIDADE, que não é passagem de etapa:
+   *
+   *     "atividade": "Parcial passo 2 - 8 dias - Entrar em contato (...)",
+   *     "oportunidades": [{ "resumoAtual": "1", "resumoAtualNome": "Não contactado" }]
+   *
+   *   Enquanto estes apelidos estiveram na lista, "Não contactado" virou etapa
+   *   em CINCO processos ao mesmo tempo — a única do banco sem `etapa_id`,
+   *   porque resumo não tem id de etapa — e 317 pessoas foram contadas como
+   *   Qualificados sem ninguém ter falado com elas.
+   *
+   *   `situacao` / `situacao.nome` — situação é Em andamento / Ganho / Perdida.
+   *   Já tem destino próprio em `status`, logo abaixo. Aceitar nos dois lugares
+   *   era o mesmo campo do CRM caindo em duas colunas conforme a grafia.
+   *
+   * A etapa real vem de `etapaNome` (com `etapa` = id), que é o que a API
+   * devolve em listarOportunidades. Payload sem isso não descreve movimento no
+   * funil e cai em ETAPA_DESCONHECIDA, visível no diário para ser mapeado.
    */
 
-  preencher('etapa', ['etapa', 'etapa_atual', 'etapaAtual', 'stage', 'situacao', 'etapa_nome', 'nome_etapa', 'resumoAtual.nome', 'resumo.nome', 'etapa.nome', 'situacao.nome', 'oportunidades.0.resumoAtualNome']);
+  preencher('etapa', ['etapa', 'etapa_atual', 'etapaAtual', 'stage', 'etapaNome', 'etapa_nome', 'nome_etapa', 'etapa.nome', 'oportunidades.0.etapaNome']);
   /*
    * `contatos.0.id` vem ANTES de `id`.
    *

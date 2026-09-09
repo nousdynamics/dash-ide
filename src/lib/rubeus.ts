@@ -520,7 +520,21 @@ export async function sincronizarEtapasDeOportunidades(
   return { contatos: contatosOk, etapas: vistos.size };
 }
 
-/** Upsert de uma etapa observada em webhook. */
+/**
+ * Upsert de uma etapa observada em webhook.
+ *
+ * Etapa sem `etapa_id` nasce em quarentena: `macro_etapa` NULL.
+ *
+ * Toda etapa de verdade tem id no Rubeus — é o que a API devolve em
+ * `etapaNome`+`etapa`. Nome sem id significa que o webhook mandou outra coisa
+ * no lugar da etapa, e adivinhar a macro pelo nome foi exatamente como
+ * "Não contactado" (que é resumo, não etapa) entrou como Qualificados em cinco
+ * processos e ficou lá contando gente que ninguém tinha contactado.
+ *
+ * Macro NULL não entra em nenhuma contagem (o JOIN com rank_macro descarta),
+ * então a linha aparece na tela de Etapas para alguém classificar, e até lá não
+ * mexe em número nenhum. Nada se perde: o evento continua em `leads_etapa`.
+ */
 export async function aprenderEtapaDoEvento(
   db: D1Database,
   processoId: string | null | undefined,
@@ -530,7 +544,7 @@ export async function aprenderEtapaDoEvento(
   const pid = processoId != null ? String(processoId) : '';
   const nome = (etapaNome || '').trim();
   if (!pid || !nome) return;
-  const macro = inferirMacroEtapa(nome);
+  const macro = etapaId ? inferirMacroEtapa(nome) : null;
   await db.prepare(
     `INSERT INTO processo_etapas (processo_id, etapa_id, etapa_nome, ordem, macro_etapa, atualizado_em)
      VALUES (?, ?, ?, ?, ?, datetime('now'))
@@ -538,7 +552,7 @@ export async function aprenderEtapaDoEvento(
        etapa_id = COALESCE(excluded.etapa_id, processo_etapas.etapa_id),
        atualizado_em = excluded.atualizado_em`,
   )
-    .bind(pid, etapaId ?? null, nome, inferirOrdemEtapa(nome, macro), macro)
+    .bind(pid, etapaId ?? null, nome, inferirOrdemEtapa(nome, macro ?? inferirMacroEtapa(nome)), macro)
     .run();
 }
 

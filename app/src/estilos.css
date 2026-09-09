@@ -80,3 +80,12 @@
     box-shadow: 0 1px 3px rgba(10, 14, 20, 0.04), 0 4px 16px rgba(10, 14, 20, 0.04);
   }
 }
+
+/*
+ * O fundo do <dialog> só é alcançável por aqui — `::backdrop` não aceita classe
+ * utilitária, porque não é um elemento do documento.
+ */
+dialog::backdrop {
+  background: rgba(10, 14, 20, 0.45);
+  backdrop-filter: blur(2px);
+}
