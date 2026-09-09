@@ -215,7 +215,17 @@ export function Conversoes() {
               Upload offline de integração nova só entra pela Data Manager API, que exige o escopo{' '}
               <span className="font-mono">datamanager</span>. Sem ele, todo envio volta 403.
               {google.erro && (
-                <> O Google respondeu: <span className="text-atencao">{google.erro}</span>.</>
+                <> <span className="text-atencao">{google.erro}</span>.</>
+              )}
+              {/*
+                * O tamanho do token, nunca o valor.
+                *
+                * Separa "secret vazio" de "secret com aspas ou JSON colado
+                * junto" sem expor credencial — um refresh token do Google tem
+                * cerca de 100 caracteres.
+                */}
+              {google.tamanho > 0 && (
+                <> Token em uso: <span className="font-mono">{google.tamanho}</span> caracteres.</>
               )}
             </div>
             {/*

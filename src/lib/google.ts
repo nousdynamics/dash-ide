@@ -68,7 +68,16 @@ export async function obterAccessToken(env: Env): Promise<string> {
   const agora = Date.now();
 
   const guardado = await refreshTokenGuardado(env);
-  const refreshToken = guardado?.token ?? env.GOOGLE_ADS_REFRESH_TOKEN;
+  /*
+   * `trim` no secret.
+   *
+   * `wrangler secret put` guarda exatamente o que foi colado, e um Enter a mais
+   * ou um espaço no fim viajam junto. O Google recusa o token com erro genérico
+   * de `invalid_grant`, e o diagnóstico aponta para o lugar errado — parece
+   * credencial revogada quando é só um caractere invisível.
+   */
+  const doSecret = (env.GOOGLE_ADS_REFRESH_TOKEN ?? '').trim();
+  const refreshToken = guardado?.token ?? doSecret;
   const origem = guardado ? 'banco' : 'secret';
 
   /*
@@ -127,6 +136,14 @@ export type EstadoGoogle = {
   /** De onde saiu o refresh token: a tela gravou no banco, ou é secret do Worker. */
   origem: 'banco' | 'secret' | null;
   escopos: string[];
+  /**
+   * Quantos caracteres tem o refresh token em uso. NUNCA o valor.
+   *
+   * É o que separa "secret vazio" de "secret com lixo colado junto" sem expor
+   * credencial: um refresh token do Google tem ~100 caracteres, e 0 ou 3 dizem
+   * na hora o que aconteceu na hora de publicar.
+   */
+  tamanho: number;
   tem_datamanager: boolean;
   escopos_necessarios: readonly string[];
   /** Por que não deu para verificar, quando não deu. */
@@ -162,21 +179,40 @@ export async function estadoDoGoogle(env: Env): Promise<EstadoGoogle> {
   if (estadoCache && estadoCache.expiraEm > agora) return estadoCache.valor;
 
   const guardado = await refreshTokenGuardado(env);
+  /*
+   * Aparado antes de testar. Um secret publicado com só um Enter existe, aparece
+   * em `wrangler secret list` e é string vazia aqui — e a tela dizia "nenhum
+   * refresh token", mandando procurar o que já estava lá.
+   */
+  const doSecret = (env.GOOGLE_ADS_REFRESH_TOKEN ?? '').trim();
+  const declarado = env.GOOGLE_ADS_REFRESH_TOKEN !== undefined;
   const origem: EstadoGoogle['origem'] = guardado
     ? 'banco'
-    : env.GOOGLE_ADS_REFRESH_TOKEN ? 'secret' : null;
+    : doSecret ? 'secret' : null;
 
   const base: EstadoGoogle = {
     conectado: false,
     origem,
     escopos: [],
+    tamanho: guardado ? guardado.token.length : doSecret.length,
     tem_datamanager: false,
     escopos_necessarios: ESCOPOS_GOOGLE,
     erro: null,
   };
 
   if (!origem) {
-    return guardar({ ...base, erro: 'nenhum refresh token — nem no banco, nem em secret' });
+    /*
+     * Os dois casos pedem ações diferentes, e confundi-los custa tempo: publicar
+     * um secret que já existe não conserta nada, e procurar por um que nunca foi
+     * publicado é procurar no lugar errado.
+     */
+    return guardar({
+      ...base,
+      tamanho: 0,
+      erro: declarado
+        ? 'GOOGLE_ADS_REFRESH_TOKEN existe no Worker mas está vazio — republique colando o valor'
+        : 'GOOGLE_ADS_REFRESH_TOKEN não está publicado como secret',
+    });
   }
 
   try {
