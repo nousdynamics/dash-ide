@@ -489,9 +489,10 @@ export function Conversoes() {
             2. ctId do Google · {pipeline?.processo_nome || 'escolha o processo acima'}
           </div>
           <div className="text-[11px] text-tenue mt-1 leading-relaxed max-w-[720px]">
-            Usa o <strong className="text-secundario">mesmo processo</strong> da etapa 1.
-            Cada bloco é um gatilho que você ligou (ex.: Oportunidade). Dentro dele, cole o ctId
-            por modalidade do curso (Presencial / EAD / …).
+            Um bloco por gatilho que você ligou na etapa 1, e dentro dele uma linha por nível
+            de ensino. Escolher a ação da conta é o caminho seguro — ctId digitado à mão é aceito
+            aqui e só falha na hora do envio. O nível{' '}
+            <em className="text-secundario">qualquer</em> recebe quem chegou sem curso identificado.
           </div>
         </div>
         <TabelaAcoes
@@ -682,6 +683,20 @@ function familiaNivel(nivel) {
  * Etapa 2: um bloco por gatilho ativo do processo (Oportunidade, Oportunidade paga…).
  * Dentro de cada bloco, ctId por modalidade do curso.
  */
+/**
+ * Etapa 2: a qual ação do Google Ads cada nível de ensino manda a conversão.
+ *
+ * O desenho anterior empilhava, em cada célula, TRÊS caminhos para a mesma
+ * decisão — digitar o ctId à mão, escolher da conta, criar uma nova — todos
+ * visíveis ao mesmo tempo. Com dois gatilhos e três níveis eram seis pilhas de
+ * quatro controles, nada alinhado entre as linhas, e a pergunta que a tela
+ * responde ("este nível já tem ação?") exigia ler tudo para descobrir.
+ *
+ * Agora é uma tabela: uma linha por nível, colunas alinhadas, e o estado de cada
+ * linha visível de relance. Escolher da conta é o caminho principal, porque um
+ * ctId digitado errado só falha na hora do envio, longe de quem digitou; colar
+ * à mão continua possível, atrás de um clique.
+ */
 function TabelaAcoes({
   eventos, metas, niveis, acoes, gatilhos, processoId, processoNome, aoSalvar,
 }) {
@@ -714,9 +729,7 @@ function TabelaAcoes({
     });
   }, [niveis, familia]);
 
-  if (!processoId) {
-    return <Estado mensagem="Selecione um processo na etapa 1." />;
-  }
+  if (!processoId) return <Estado mensagem="Selecione um processo na etapa 1." />;
 
   if (!gatilhosDoProcesso.length) {
     return (
@@ -728,58 +741,71 @@ function TabelaAcoes({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       {erro && (
-        <div className="text-[11px] text-atencao">
-          Não listou ações do Google Ads: {erro}
-        </div>
+        <div className="text-[11px] text-atencao">Não listou ações do Google Ads: {erro}</div>
       )}
       {!erro && disponiveis.length === 0 && (
         <div className="text-[11px] text-atencao leading-relaxed">
-          Nenhuma ação <span className="font-mono">UPLOAD_CLICKS</span> na conta. Crie no Google Ads
-          ou use “Criar no Google Ads” em cada linha.
+          Nenhuma ação <span className="font-mono">UPLOAD_CLICKS</span> na conta. Use
+          “Criar ação” em cada linha, ou crie no Google Ads.
         </div>
       )}
 
       {gatilhosDoProcesso.map((g) => {
         const ev = eventos.find((e) => e.id === g.evento);
         if (!ev) return null;
+
+        const doEvento = niveisDoProcesso.map((nivel) => ({
+          nivel,
+          atual: acoes.find((a) => a.evento === ev.id && a.nivel_ensino === nivel),
+        }));
+        const mapeados = doEvento.filter((l) => l.atual?.conversion_action_id).length;
+
         return (
           <div
             key={`${g.processo_id ?? 'g'}::${g.etapa_nome}::${g.evento}`}
-            className="rounded-[10px] border border-borda bg-elevado/60 p-3"
+            className="rounded-[10px] border border-borda overflow-hidden"
           >
-            <div className="mb-3 pb-2 border-b border-borda">
-              <div className="text-[14px] font-semibold text-primario">
-                {g.etapa_nome}
+            {/* Cabeçalho do gatilho: a etapa, o evento que ela dispara, e o progresso. */}
+            <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2 bg-elevado border-b border-borda">
+              <div className="flex items-center gap-2 min-w-0 text-xs">
+                <span className="font-semibold truncate">{g.etapa_nome}</span>
+                <span className="text-tenue" aria-hidden="true">→</span>
+                <Pill tom="neutro">{ev.rotulo}</Pill>
               </div>
-              <div className="text-[11px] text-tenue mt-0.5">
-                dispara → <strong className="text-secundario">{ev.rotulo}</strong>
-                {' '}· cole o ctId abaixo por modalidade
-              </div>
+              <span
+                className={`text-[11px] tnum shrink-0 ${
+                  mapeados === doEvento.length ? 'text-sucesso' : 'text-atencao'
+                }`}
+              >
+                {mapeados} de {doEvento.length} {doEvento.length === 1 ? 'nível mapeado' : 'níveis mapeados'}
+              </span>
             </div>
 
-            <div className="flex flex-col gap-3">
-              {niveisDoProcesso.map((nivel) => (
-                <div
+            {/* Cabeçalho das colunas — some no mobile, onde a linha vira bloco. */}
+            <div
+              className="hidden md:grid gap-3 px-3 py-1.5 border-b border-borda
+                         text-[10px] font-semibold uppercase tracking-wide text-tenue
+                         grid-cols-[minmax(150px,0.9fr)_minmax(0,1.6fr)_96px_auto]"
+            >
+              <div>Nível de ensino</div>
+              <div>Ação de conversão (ctId)</div>
+              <div className="text-right">Valor</div>
+              <div />
+            </div>
+
+            <div className="flex flex-col">
+              {doEvento.map(({ nivel, atual }) => (
+                <LinhaAcao
                   key={nivel}
-                  className="grid grid-cols-1 md:grid-cols-[minmax(140px,0.45fr)_minmax(0,1fr)]
-                             gap-2 md:gap-3 items-start py-2 border-t border-borda/60 first:border-t-0 first:pt-0"
-                >
-                  <div className="text-xs font-semibold pt-1">
-                    {nivel === '*'
-                      ? <em className="text-tenue font-normal">qualquer / não identificado</em>
-                      : nivel}
-                  </div>
-                  <CelulaAcao
-                    evento={ev}
-                    nivel={nivel}
-                    metas={metas}
-                    atual={acoes.find((a) => a.evento === ev.id && a.nivel_ensino === nivel)}
-                    disponiveis={disponiveis}
-                    aoSalvar={aoSalvar}
-                  />
-                </div>
+                  evento={ev}
+                  nivel={nivel}
+                  metas={metas}
+                  atual={atual}
+                  disponiveis={disponiveis}
+                  aoSalvar={aoSalvar}
+                />
               ))}
             </div>
           </div>
@@ -793,198 +819,264 @@ function nomeSugerido(evento, nivel) {
   return `IDE | ${evento.rotulo} | ${nivel === '*' ? 'Geral' : nivel}`;
 }
 
-function CelulaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
-  const [acaoId, setAcaoId] = useState(atual?.conversion_action_id ?? '');
+/**
+ * Uma linha da tabela: um nível de ensino e a ação que recebe a conversão dele.
+ *
+ * Dois estados, e a linha mostra só o do momento:
+ *
+ *   MAPEADA   — o nome da ação, o ctId em fonte monoespaçada e o valor editável
+ *               na mesma altura. É o estado de repouso, e ocupa uma linha.
+ *   VAZIA     — um seletor com as ações da conta e o atalho para criar uma nova.
+ *
+ * Colar o ctId à mão fica atrás de "colar ctId". Não é o caminho principal
+ * porque um número digitado errado é aceito pela tela e só falha no envio, dias
+ * depois — enquanto escolher da conta não tem como errar.
+ */
+function LinhaAcao({ evento, nivel, metas, atual, disponiveis, aoSalvar }) {
   const [valor, setValor] = useState(atual?.valor ?? 0);
-  const [formAberto, setFormAberto] = useState(false);
+  const [modo, setModo] = useState(null); // 'colar' | 'criar' | null
+  const [ctIdManual, setCtIdManual] = useState('');
   const [nomeNovo, setNomeNovo] = useState(() => nomeSugerido(evento, nivel));
   const [metaNova, setMetaNova] = useState(() => evento.categoria || 'DEFAULT');
-  const [criando, setCriando] = useState(false);
-  const [erroCriar, setErroCriar] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState('');
+
+  useEffect(() => setValor(atual?.valor ?? 0), [atual?.valor]);
 
   useEffect(() => {
-    setAcaoId(atual?.conversion_action_id ?? '');
-    setValor(atual?.valor ?? 0);
-  }, [atual?.conversion_action_id, atual?.valor]);
-
-  useEffect(() => {
-    if (!formAberto) return;
+    if (modo !== 'criar') return;
     setNomeNovo(nomeSugerido(evento, nivel));
     setMetaNova(evento.categoria || 'DEFAULT');
-    setErroCriar('');
-  }, [formAberto, evento, nivel]);
+    setErro('');
+  }, [modo, evento, nivel]);
 
-  const salvar = async (sobrescrever = {}) => {
-    const id = String(sobrescrever.acaoId ?? acaoId).replace(/\D/g, '');
+  const mapeada = Boolean(atual?.conversion_action_id);
+
+  const salvar = async (over = {}) => {
+    const id = String(over.acaoId ?? atual?.conversion_action_id ?? '').replace(/\D/g, '');
     if (!id) return;
-    await enviar('/api/conversoes/acoes', {
-      evento: evento.id,
-      nivel_ensino: nivel,
-      conversion_action_id: id,
-      conversion_action_nome:
-        sobrescrever.nome
-        ?? disponiveis.find((d) => d.id === id)?.nome
-        ?? atual?.conversion_action_nome
-        ?? null,
-      valor: Number(sobrescrever.valor ?? valor) || 0,
-      ativo: true,
-    });
-    aoSalvar();
+    setOcupado(true);
+    setErro('');
+    try {
+      await enviar('/api/conversoes/acoes', {
+        evento: evento.id,
+        nivel_ensino: nivel,
+        conversion_action_id: id,
+        conversion_action_nome:
+          over.nome
+          ?? disponiveis.find((d) => d.id === id)?.nome
+          ?? atual?.conversion_action_nome
+          ?? null,
+        valor: Number(over.valor ?? valor) || 0,
+        ativo: true,
+      });
+      setModo(null);
+      setCtIdManual('');
+      aoSalvar();
+    } catch (e) {
+      setErro(e.message || 'não deu para salvar');
+    } finally {
+      setOcupado(false);
+    }
+  };
+
+  const remover = async () => {
+    if (!atual?.id) return;
+    setOcupado(true);
+    try {
+      await enviar(`/api/conversoes/acoes/${atual.id}`, undefined, 'DELETE');
+      aoSalvar();
+    } catch (e) {
+      setErro(e.message || 'não deu para remover');
+    } finally {
+      setOcupado(false);
+    }
   };
 
   const criarNoGoogle = async () => {
     const nome = nomeNovo.trim();
-    if (nome.length < 3) {
-      setErroCriar('Nome com pelo menos 3 caracteres.');
-      return;
-    }
-    if (!metaNova) {
-      setErroCriar('Escolha a meta.');
-      return;
-    }
-    setCriando(true);
-    setErroCriar('');
+    if (nome.length < 3) return setErro('Nome com pelo menos 3 caracteres.');
+    setOcupado(true);
+    setErro('');
     try {
       const r = await enviar('/api/conversoes/acoes-google', {
-        nome,
-        evento: evento.id,
-        categoria: metaNova,
+        nome, evento: evento.id, categoria: metaNova,
       });
-      setAcaoId(r.id);
-      setFormAberto(false);
       await salvar({ acaoId: r.id, nome });
     } catch (e) {
-      setErroCriar(e.message || 'Falha ao criar no Google Ads');
-    } finally {
-      setCriando(false);
+      setErro(e.message || 'Falha ao criar no Google Ads');
+      setOcupado(false);
     }
   };
 
-  const opcoesMeta = (metas?.length
-    ? metas
-    : [{ id: evento.categoria || 'DEFAULT', rotulo: evento.categoria || 'padrão' }]
-  ).map((m) => [m.id, m.rotulo]);
+  const rotuloNivel = nivel === '*'
+    ? <em className="text-tenue font-normal">qualquer / não identificado</em>
+    : nivel;
 
   return (
-    <div className="flex flex-col gap-1.5 min-w-[240px]">
-      <label className="flex flex-col gap-0.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">ctId</span>
-        <input
-          type="text"
-          inputMode="numeric"
-          placeholder="ex.: 1234567890"
-          value={acaoId}
-          onChange={(ev) => setAcaoId(ev.target.value.replace(/\D/g, ''))}
-          onBlur={() => {
-            if (acaoId && acaoId !== (atual?.conversion_action_id ?? '')) salvar();
-          }}
-          aria-label={`ctId de ${evento.rotulo} para ${nivel}`}
-          className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                     px-2 py-[5px] text-[11px] font-mono w-full"
-        />
-      </label>
+    <div className="border-t border-borda/60 first:border-t-0">
+      <div
+        className="grid gap-2 md:gap-3 items-center px-3 py-2
+                   grid-cols-1 md:grid-cols-[minmax(150px,0.9fr)_minmax(0,1.6fr)_96px_auto]"
+      >
+        <div className="text-xs font-semibold min-w-0 truncate">{rotuloNivel}</div>
 
-      <Select
-        rotulo={`Ação de ${evento.rotulo} para ${nivel}`}
-        valor={acaoId}
-        aoTrocar={(v) => {
-          setAcaoId(v);
-          if (v) salvar({ acaoId: v });
-        }}
-        opcoes={[
-          ['', '— escolher na conta —'],
-          ...disponiveis.map((d) => [d.id, `${d.nome} · ${d.id}`]),
-        ]}
-        className="w-full"
-      />
-
-      {acaoId && (
-        <label className="flex items-center gap-1 text-[11px] text-tenue">
-          R$
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={valor}
-            onChange={(ev) => setValor(ev.target.value)}
-            onBlur={() => salvar()}
-            aria-label={`Valor de ${evento.rotulo} para ${nivel}`}
-            className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                       px-2 py-[3px] text-[11px] w-[90px] tnum"
-          />
-        </label>
-      )}
-
-      {!acaoId && !formAberto && (
-        <button
-          type="button"
-          onClick={() => setFormAberto(true)}
-          className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte
-                     bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario
-                     cursor-pointer self-start"
-        >
-          Criar no Google Ads
-        </button>
-      )}
-
-      {!acaoId && formAberto && (
-        <div className="mt-1 p-2.5 rounded-[8px] border border-borda-forte bg-superficie flex flex-col gap-2">
-          <div className="text-[11px] font-semibold text-primario">Nova ação no Google Ads</div>
-
-          <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Nome</span>
-            <input
-              type="text"
-              value={nomeNovo}
-              onChange={(ev) => setNomeNovo(ev.target.value)}
-              maxLength={80}
-              aria-label="Nome da conversão no Google Ads"
-              className="bg-elevado text-primario border border-borda-forte rounded-[8px]
-                         px-2 py-[5px] text-[11px] w-full"
-            />
-          </label>
-
-          <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
-              Meta (categoria)
+        {/* Coluna da ação: o valor mapeado, ou os caminhos para mapear. */}
+        <div className="min-w-0">
+          {mapeada ? (
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sucesso shrink-0" aria-hidden="true">✓</span>
+              <span className="min-w-0">
+                <span className="block text-xs truncate">
+                  {atual.conversion_action_nome || 'ação sem nome'}
+                </span>
+                <span className="block text-[10px] text-tenue font-mono">
+                  {atual.conversion_action_id}
+                </span>
+              </span>
+            </div>
+          ) : modo === 'colar' ? (
+            <span className="flex items-center gap-1.5">
+              <input
+                type="text"
+                inputMode="numeric"
+                autoFocus
+                placeholder="ex.: 1234567890"
+                value={ctIdManual}
+                onChange={(e) => setCtIdManual(e.target.value.replace(/\D/g, ''))}
+                aria-label={`ctId de ${evento.rotulo} para ${nivel}`}
+                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
+                           px-2 py-[5px] text-[11px] font-mono min-w-0 flex-1"
+              />
+              <BotaoMini onClick={() => salvar({ acaoId: ctIdManual })} disabled={!ctIdManual || ocupado}>
+                Salvar
+              </BotaoMini>
+              <BotaoMini onClick={() => setModo(null)} disabled={ocupado}>Cancelar</BotaoMini>
             </span>
+          ) : (
             <Select
-              rotulo="Meta da conversão no Google Ads"
-              valor={metaNova}
-              aoTrocar={setMetaNova}
-              opcoes={opcoesMeta}
+              rotulo={`Ação de ${evento.rotulo} para ${nivel}`}
+              valor=""
+              aoTrocar={(v) => v && salvar({ acaoId: v })}
+              opcoes={[
+                ['', disponiveis.length ? '— escolher da conta —' : '— nenhuma ação na conta —'],
+                ...disponiveis.map((d) => [d.id, `${d.nome} · ${d.id}`]),
+              ]}
               className="w-full"
             />
-          </label>
-
-          {erroCriar && (
-            <div className="text-[10px] text-perigo leading-snug">{erroCriar}</div>
           )}
+        </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
+        {/* Valor: só faz sentido depois de haver ação para recebê-lo. */}
+        <div className="md:text-right">
+          {mapeada ? (
+            <label className="inline-flex items-center gap-1 text-[11px] text-tenue">
+              R$
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={valor}
+                disabled={ocupado}
+                onChange={(e) => setValor(e.target.value)}
+                onBlur={() => Number(valor) !== Number(atual?.valor) && salvar()}
+                aria-label={`Valor de ${evento.rotulo} para ${nivel}`}
+                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
+                           px-2 py-[3px] text-[11px] w-[74px] tnum text-right"
+              />
+            </label>
+          ) : (
+            <span className="text-[11px] text-tenue">—</span>
+          )}
+        </div>
+
+        {/* Ações da linha, sempre no mesmo canto. */}
+        <div className="flex items-center gap-1 justify-start md:justify-end">
+          {mapeada ? (
+            <BotaoMini onClick={remover} disabled={ocupado} titulo="Desfaz o mapeamento deste nível">
+              Remover
+            </BotaoMini>
+          ) : (
+            <>
+              {modo !== 'colar' && (
+                <BotaoMini onClick={() => setModo('colar')} disabled={ocupado}>colar ctId</BotaoMini>
+              )}
+              <BotaoMini
+                onClick={() => setModo(modo === 'criar' ? null : 'criar')}
+                disabled={ocupado}
+                titulo="Cria a ação de conversão na conta do Google Ads"
+              >
+                {modo === 'criar' ? 'Cancelar' : 'Criar ação'}
+              </BotaoMini>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Criar no Google Ads: escrita real na conta, então abre por clique explícito. */}
+      {modo === 'criar' && !mapeada && (
+        <div className="px-3 pb-3 -mt-1">
+          <div className="rounded-[8px] border border-borda-forte bg-elevado p-2.5 flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-0.5 flex-1 min-w-[200px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
+                Nome na conta do Google Ads
+              </span>
+              <input
+                type="text"
+                value={nomeNovo}
+                maxLength={80}
+                onChange={(e) => setNomeNovo(e.target.value)}
+                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
+                           px-2 py-[5px] text-[11px] w-full"
+              />
+            </label>
+            <label className="flex flex-col gap-0.5 min-w-[170px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
+                Meta (categoria)
+              </span>
+              <Select
+                rotulo="Meta da conversão no Google Ads"
+                valor={metaNova}
+                aoTrocar={setMetaNova}
+                opcoes={(metas?.length
+                  ? metas
+                  : [{ id: evento.categoria || 'DEFAULT', rotulo: evento.categoria || 'padrão' }]
+                ).map((m) => [m.id, m.rotulo])}
+                className="w-full"
+              />
+            </label>
             <button
               type="button"
-              disabled={criando}
+              disabled={ocupado}
               onClick={criarNoGoogle}
-              className="text-[11px] px-2 py-[5px] rounded-[8px] border border-azul-500
+              className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500
                          bg-azul-600 text-white hover:bg-azul-500 cursor-pointer
                          disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {criando ? 'Criando…' : 'Criar ação'}
-            </button>
-            <button
-              type="button"
-              disabled={criando}
-              onClick={() => setFormAberto(false)}
-              className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte
-                         bg-transparent text-secundario hover:text-primario cursor-pointer
-                         disabled:opacity-50"
-            >
-              Cancelar
+              {ocupado ? 'Criando…' : 'Criar e mapear'}
             </button>
           </div>
         </div>
       )}
+
+      {erro && <div className="px-3 pb-2 text-[10px] text-perigo">{erro}</div>}
     </div>
+  );
+}
+
+/** Botão de texto pequeno, o mesmo em toda linha da tabela. */
+function BotaoMini({ children, onClick, disabled, titulo }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={titulo}
+      className="text-[11px] px-2 py-[4px] rounded-[7px] border border-borda-forte bg-superficie
+                 text-secundario hover:bg-superficie-hover hover:text-primario cursor-pointer
+                 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {children}
+    </button>
   );
 }
