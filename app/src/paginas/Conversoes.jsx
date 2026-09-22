@@ -141,7 +141,7 @@ export function Conversoes() {
 
   const {
     config, eventos, gatilhos, acoes, resumo, niveis, cobertura,
-    nivel_padrao, google, metas_google,
+    nivel_padrao, google, metas_google, bases_valor,
   } = dados;
 
   const pipeline = pipelinesOrd.find((p) => p.processo_id === processoAtivo) ?? null;
@@ -540,6 +540,7 @@ export function Conversoes() {
         <TabelaAcoes
           eventos={eventos}
           metas={metas_google ?? []}
+          bases={bases_valor ?? []}
           niveis={[nivel_padrao, ...(niveis ?? []).map((n) => n.nivel)]}
           acoes={acoes}
           gatilhos={gatilhos}
@@ -679,7 +680,7 @@ function familiaNivel(nivel) {
  * à mão continua possível, atrás de um clique.
  */
 function TabelaAcoes({
-  eventos, metas, niveis, acoes, gatilhos, processoId, processoNome, aoSalvar, nivelPadrao, cobertura,
+  eventos, metas, bases, niveis, acoes, gatilhos, processoId, processoNome, aoSalvar, nivelPadrao, cobertura,
 }) {
   const { dados: doGoogle, erro } = useApi('/api/conversoes/acoes-google', 'acoes-google');
   const { dados: catalogo } = useApi('/api/catalogo/cursos', 'catalogo-cursos');
@@ -862,6 +863,7 @@ function TabelaAcoes({
                     : nivel}
                   leads={leads}
                   metas={metas}
+                  bases={bases}
                   atual={atual}
                   disponiveis={disponiveis}
                   aoSalvar={aoSalvar}
@@ -887,6 +889,7 @@ function TabelaAcoes({
               regras={especificas}
               catalogo={catalogo}
               metas={metas}
+              bases={bases}
               disponiveis={disponiveis}
               aoSalvar={aoSalvar}
             />
@@ -914,8 +917,19 @@ function nomeSugerido(evento, alvo) {
  * porque um número digitado errado é aceito pela tela e só falha no envio, dias
  * depois — enquanto escolher da conta não tem como errar.
  */
-function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, atual, disponiveis, aoSalvar }) {
+/**
+ * Fallback das bases, para a tela funcionar antes de a API responder.
+ * A fonte é `bases_valor` do servidor — ver BASES_VALOR em routes/conversoes.ts.
+ */
+const BASES_PADRAO = [
+  { id: 'total', rotulo: 'Valor total do curso' },
+  { id: 'inscricao', rotulo: 'Valor da inscrição' },
+  { id: 'fixo', rotulo: 'Valor fixo desta regra' },
+];
+
+function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atual, disponiveis, aoSalvar }) {
   const [valor, setValor] = useState(atual?.valor ?? 0);
+  const [base, setBase] = useState(atual?.base_valor ?? 'total');
   const [modo, setModo] = useState(null); // 'colar' | 'criar' | null
   const [ctIdManual, setCtIdManual] = useState('');
   const [nomeNovo, setNomeNovo] = useState(() => nomeSugerido(evento, alvo));
@@ -924,6 +938,7 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, atual, disp
   const [erro, setErro] = useState('');
 
   useEffect(() => setValor(atual?.valor ?? 0), [atual?.valor]);
+  useEffect(() => setBase(atual?.base_valor ?? 'total'), [atual?.base_valor]);
 
   useEffect(() => {
     if (modo !== 'criar') return;
@@ -951,6 +966,7 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, atual, disp
           ?? atual?.conversion_action_nome
           ?? null,
         valor: Number(over.valor ?? valor) || 0,
+        base_valor: over.base_valor ?? base,
         ativo: true,
       });
       setModo(null);
@@ -1063,26 +1079,48 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, atual, disp
           )}
         </div>
 
-        {/* Valor: só faz sentido depois de haver ação para recebê-lo. */}
-        <div className="md:text-right">
+        {/*
+          * Qual preço vai ao Google — não quanto.
+          *
+          * A oferta do Rubeus guarda os dois: total do curso e inscrição. Antes
+          * havia só um campo de reais digitado à mão, e ele obrigava a escolher
+          * um número para o nível inteiro — a mesma cifra para um MBA e para um
+          * curso de R$ 300. Aqui se escolhe a FONTE, e o preço vem da oferta que
+          * o lead de fato escolheu.
+          *
+          * O campo de reais sobrevive como "fixo", para o caso de o catálogo não
+          * ter preço — e é o que as regras antigas continuam usando.
+          */}
+        <div className="min-w-0">
           {mapeada ? (
-            <label className="inline-flex items-center gap-1 text-[11px] text-tenue">
-              R$
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={valor}
-                disabled={ocupado}
-                onChange={(e) => setValor(e.target.value)}
-                onBlur={() => Number(valor) !== Number(atual?.valor) && salvar()}
-                aria-label={`Valor de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
-                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                           px-2 py-[3px] text-[11px] w-[74px] tnum text-right"
+            <div className="flex flex-col gap-1 md:items-end">
+              <Select
+                rotulo={`Base do valor de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
+                valor={base}
+                aoTrocar={(v) => { setBase(v); salvar({ base_valor: v }); }}
+                opcoes={(bases?.length ? bases : BASES_PADRAO).map((b) => [b.id, b.rotulo])}
+                className="w-full md:w-[152px]"
               />
-            </label>
+              {base === 'fixo' && (
+                <label className="inline-flex items-center gap-1 text-[11px] text-tenue">
+                  R$
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={valor}
+                    disabled={ocupado}
+                    onChange={(e) => setValor(e.target.value)}
+                    onBlur={() => Number(valor) !== Number(atual?.valor) && salvar()}
+                    aria-label={`Valor fixo de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
+                    className="bg-superficie text-primario border border-borda-forte rounded-[8px]
+                               px-2 py-[3px] text-[11px] w-[84px] tnum text-right"
+                  />
+                </label>
+              )}
+            </div>
           ) : (
-            <span className="text-[11px] text-tenue">—</span>
+            <span className="text-[11px] text-tenue md:block md:text-right">—</span>
           )}
         </div>
 
@@ -1171,12 +1209,13 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, atual, disp
  * primeiro daria a impressão de que é preciso cadastrar uma regra por curso —
  * são 692 ofertas no catálogo, e ninguém termina.
  */
-function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar }) {
+function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSalvar }) {
   const [aberto, setAberto] = useState(false);
   const [escopo, setEscopo] = useState('oferta');
   const [alvo, setAlvo] = useState('');
   const [acaoId, setAcaoId] = useState('');
   const [valor, setValor] = useState('');
+  const [base, setBase] = useState('total');
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState('');
   /*
@@ -1229,7 +1268,7 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
 
   const limpar = () => {
     setAlvo(''); setAcaoId(''); setValor(''); setErro('');
-    setCriando(false);
+    setBase('total'); setCriando(false);
   };
 
   const salvar = async (over = {}) => {
@@ -1248,6 +1287,7 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
         conversion_action_nome:
           over.nome ?? disponiveis.find((d) => d.id === id)?.nome ?? null,
         valor: Number(valor) || 0,
+        base_valor: base,
         ativo: true,
       });
       limpar();
@@ -1447,19 +1487,42 @@ function Especificas({ evento, regras, catalogo, metas, disponiveis, aoSalvar })
               </label>
             )}
 
-            <label className="flex flex-col gap-0.5 w-[92px]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Valor</span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={valor}
-                onChange={(e) => setValor(e.target.value)}
-                placeholder="0,00"
-                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                           px-2 py-[5px] text-[11px] w-full tnum text-right"
+            {/*
+              * A base do valor importa mais aqui do que na linha de nível.
+              *
+              * Meta específica existe para separar um curso do resto — e o que
+              * separa de verdade é o preço dele. A oferta do Rubeus já guarda os
+              * dois, então escolher a FONTE evita digitar cifra que envelhece no
+              * dia em que o curso reajusta.
+              */}
+            <label className="flex flex-col gap-0.5 min-w-[150px]">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
+                Valor enviado
+              </span>
+              <Select
+                rotulo="Base do valor desta regra"
+                valor={base}
+                aoTrocar={setBase}
+                opcoes={(bases?.length ? bases : BASES_PADRAO).map((b) => [b.id, b.rotulo])}
+                className="w-full"
               />
             </label>
+
+            {base === 'fixo' && (
+              <label className="flex flex-col gap-0.5 w-[92px]">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">R$</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={valor}
+                  onChange={(e) => setValor(e.target.value)}
+                  placeholder="0,00"
+                  className="bg-superficie text-primario border border-borda-forte rounded-[8px]
+                             px-2 py-[5px] text-[11px] w-full tnum text-right"
+                />
+              </label>
+            )}
 
             <button
               type="button"

@@ -465,6 +465,40 @@ o curinga deixou de precisar de disfarce.
 própria tabela, e não num join com `leads_etapa`, porque ela é o registro do que
 FOI ENVIADO e precisa continuar dizendo a verdade depois que o cadastro mudar.
 
+### Dois preços por oferta, e a regra escolhe
+
+Conferido na API do Rubeus em 22/09/2026 (`/api/Curso/listarOfertas`): cada
+oferta traz **dois** valores, com significados diferentes.
+
+| campo do Rubeus | exemplo | é |
+|---|---|---|
+| `complemento` | `197,00` | valor da **inscrição** |
+| `valor` | `6195.00` | valor **total** do curso |
+
+Repare nos formatos: um com vírgula decimal, outro com ponto. São campos
+digitados em telas diferentes do CRM, e `Number("197,00")` é `NaN` — que não
+estoura nada, só faz a conversão subir com o valor padrão da tela, sem aviso.
+`valorMonetario` (em `lib/metricas.ts`) trata os dois.
+
+Cada regra do mapa escolhe a base: **total**, **inscrição** ou **fixo**. Não é
+preferência: "Inscrição concluída" vale o que a pessoa pagou para se inscrever,
+"Pagamento realizado" vale o curso. Mandar o total nas duas infla o retorno da
+conta — mandar a inscrição nas duas some com ele.
+
+Cada base tem seu próprio encadeamento de recurso, e **nenhuma cai na outra**:
+se a regra pede inscrição e o catálogo não tem, entra o valor fixo da regra,
+nunca o total — que seria trinta vezes maior e passaria despercebido. O registro
+guarda os dois preços que estavam em mãos e qual foi usado (`valor_base`).
+
+**Cobertura hoje, medida.** Só 9% das ofertas do Rubeus têm `valor` preenchido e
+10% têm `complemento`. Entre as 20 ofertas que mais convertem a taxa sobe para
+55% — as ativas estão melhor cadastradas. Ponderando por lead, das 1.324
+passagens pelas etapas de conversão em 60 dias, 19% chegam a uma oferta com
+preço. O resto cai no valor fixo.
+
+O gargalo não é o painel, é o cadastro: preencher `valor` e `complemento` nas
+ofertas ativas do Rubeus é o que faz esse número subir.
+
 ### O valor do curso
 
 **Correção de 05/09/2026.** Este README afirmava que o Rubeus não tem o preço em

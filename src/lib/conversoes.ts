@@ -370,6 +370,7 @@ type Pendente = {
   processo_id: string | null; processo_nome: string | null; etapa: string; evento: Evento;
   curso_id: string | null; curso_nome: string | null; nivel_ensino: string | null;
   curso_codigo: string | null; oferta_codigo: string | null; oferta_nome: string | null;
+  valor_total: number | null; valor_inscricao: number | null; valor_base: string | null;
   click_id_tipo: string | null; click_id_valor: string | null;
   cep: string | null; contato_canonico: string | null; valor: number | null;
   ocorrido_em: string | null; tentativas: number; status: string;
@@ -438,17 +439,42 @@ async function enriquecer(env: Env, cfg: Config, p: Pendente): Promise<Pendente>
    * Uma regra por oferta continua valendo mesmo quando o lead chegou só com o
    * código — e o nível resolvido daqui evita a ida ao Rubeus mais abaixo.
    */
-  if (p.oferta_codigo && (!p.nivel_ensino || !p.curso_id || !p.oferta_nome)) {
+  if (p.oferta_codigo && (!p.nivel_ensino || !p.curso_id || !p.oferta_nome
+      || p.valor_total == null || p.valor_inscricao == null)) {
     const o = await env.DB.prepare(
-      `SELECT curso_id, curso_codigo, nome, nivel_ensino FROM curso_ofertas
-        WHERE oferta_codigo = ? OR id = ? LIMIT 1`,
-    ).bind(p.oferta_codigo, p.oferta_codigo).first() as
-      { curso_id: string | null; curso_codigo: string | null; nome: string | null; nivel_ensino: string | null } | null;
+      `SELECT curso_id, curso_codigo, nome, nivel_ensino, valor_total, valor_inscricao
+         FROM curso_ofertas WHERE oferta_codigo = ? OR id = ? LIMIT 1`,
+    ).bind(p.oferta_codigo, p.oferta_codigo).first() as {
+      curso_id: string | null; curso_codigo: string | null; nome: string | null;
+      nivel_ensino: string | null; valor_total: number | null; valor_inscricao: number | null;
+    } | null;
     if (o) {
       p.curso_id = p.curso_id ?? o.curso_id;
       p.curso_codigo = p.curso_codigo ?? o.curso_codigo;
       p.oferta_nome = p.oferta_nome ?? o.nome;
       p.nivel_ensino = p.nivel_ensino ?? o.nivel_ensino;
+      p.valor_total = p.valor_total ?? o.valor_total;
+      p.valor_inscricao = p.valor_inscricao ?? o.valor_inscricao;
+    }
+  }
+
+  /*
+   * Sem oferta identificada, o curso-pai serve de aproximação.
+   *
+   * Um curso costuma ter várias ofertas — turmas, semestres, campi — com preços
+   * próximos mas não iguais. Pegar a mais recente é melhor do que cair no valor
+   * fixo da tela, e o registro guarda qual preço foi usado para quem quiser
+   * conferir depois.
+   */
+  if (!p.oferta_codigo && p.curso_id && (p.valor_total == null || p.valor_inscricao == null)) {
+    const o = await env.DB.prepare(
+      `SELECT valor_total, valor_inscricao FROM curso_ofertas
+        WHERE curso_id = ? AND (valor_total IS NOT NULL OR valor_inscricao IS NOT NULL)
+        ORDER BY atualizado_em DESC LIMIT 1`,
+    ).bind(p.curso_id).first() as { valor_total: number | null; valor_inscricao: number | null } | null;
+    if (o) {
+      p.valor_total = p.valor_total ?? o.valor_total;
+      p.valor_inscricao = p.valor_inscricao ?? o.valor_inscricao;
     }
   }
 
@@ -602,11 +628,57 @@ export function momentoGoogle(iso: string | null | undefined): string {
     `${p(br.getUTCHours())}:${p(br.getUTCMinutes())}:${p(br.getUTCSeconds())}-03:00`;
 }
 
+/**
+ * Quanto esta conversão vale para o Google, e por quê.
+ *
+ * A oferta do Rubeus traz DOIS preços — o total do curso e o da inscrição — e
+ * eles respondem perguntas diferentes. "Inscrição concluída" vale o que a
+ * pessoa pagou para se inscrever; "Pagamento realizado" vale o curso. Mandar o
+ * total nas duas infla o retorno da conta; mandar a inscrição nas duas some com
+ * ele. Por isso quem escolhe é a REGRA do mapa, evento a evento.
+ *
+ * Cada base tem seu próprio encadeamento de recurso, e nenhuma cai na outra: se
+ * a regra pede inscrição e o catálogo não tem, o valor da tela entra — nunca o
+ * total, que seria trinta vezes maior e passaria despercebido.
+ */
+function valorDaConversao(p: Pendente, acao: Acao): { valor: number; base: string } {
+  const base = acao.base_valor || 'total';
+
+  if (base === 'fixo') return { valor: acao.valor, base: 'fixo' };
+
+  if (base === 'inscricao') {
+    const v = p.valor_inscricao;
+    return v != null && v > 0
+      ? { valor: v, base: 'inscricao' }
+      : { valor: acao.valor, base: 'fixo (sem inscrição no catálogo)' };
+  }
+
+  /*
+   * Total, com três fontes em ordem de confiança:
+   *
+   *   1. o catálogo de ofertas, sincronizado do Rubeus — é o preço da oferta
+   *      exata que o lead escolheu;
+   *   2. `valor_do_curso` do corpo do webhook, que chega em parte dos eventos;
+   *   3. o que a API de oportunidades devolveu no enriquecimento.
+   *
+   * O da tela fecha a fila: é a rede de segurança, não a fonte.
+   */
+  const v = p.valor_total ?? p.valor ?? p.valor_rubeus;
+  return v != null && v > 0
+    ? { valor: v, base: 'total' }
+    : { valor: acao.valor, base: 'fixo (sem total no catálogo)' };
+}
+
 type Acao = {
   conversion_action_id: string;
   conversion_action_nome: string | null;
   valor: number;
   moeda: string;
+  /**
+   * Qual preço esta ação manda ao Google: 'total', 'inscricao' ou 'fixo'.
+   * Ver `valorDaConversao` — é a decisão que separa o retorno real do inflado.
+   */
+  base_valor?: string | null;
   /** Por qual regra esta ação foi escolhida — vai para o registro. */
   escopo?: string;
   alvo?: string | null;
@@ -636,7 +708,8 @@ async function acaoDoEvento(
   },
 ): Promise<Acao | null> {
   const linha = await db.prepare(
-    `SELECT conversion_action_id, conversion_action_nome, valor, moeda, escopo, alvo, alvo_rotulo
+    `SELECT conversion_action_id, conversion_action_nome, valor, moeda, base_valor,
+            escopo, alvo, alvo_rotulo
        FROM conversao_acoes
       WHERE ativo = 1
         AND evento = ?
@@ -680,19 +753,16 @@ async function montar(
   p: Pendente,
   acao: Acao,
 ): Promise<{ evento: EventoConversao; identificadores: string } | null> {
+  const precoEscolhido = valorDaConversao(p, acao);
+  /* Registra a base aplicada: o "por quê" do número, junto do número. */
+  p.valor_base = precoEscolhido.base;
+
   const evento: EventoConversao = {
     eventTimestamp: momentoGoogle(p.ocorrido_em),
     // O mesmo orderId da idempotência interna: o Google também deduplica por ele.
     transactionId: p.order_id,
-    /*
-     * Ordem do valor: webhook → API do Rubeus → tabela da tela.
-     *
-     * `p.valor` é o `valor_do_curso` que veio no corpo do webhook, e é o mais
-     * confiável: é o preço daquela matrícula, não a média do nível de ensino.
-     * O README afirmava que o Rubeus não tinha preço em lugar nenhum — verdade
-     * para a API, falso para o webhook. A tabela da tela vira o último recurso.
-     */
-    conversionValue: p.valor ?? p.valor_rubeus ?? acao.valor,
+    // Qual preço vai — e por quê — está em `valorDaConversao`.
+    conversionValue: precoEscolhido.valor,
     currency: acao.moeda || 'BRL',
     /*
      * `OTHER`, e não `WEB`.
@@ -969,6 +1039,9 @@ function marcar(
        curso_codigo = COALESCE(?, curso_codigo),
        oferta_codigo = COALESCE(?, oferta_codigo),
        oferta_nome = COALESCE(?, oferta_nome),
+       valor_total = COALESCE(?, valor_total),
+       valor_inscricao = COALESCE(?, valor_inscricao),
+       valor_base = COALESCE(?, valor_base),
        curso_nome = COALESCE(?, curso_nome),
        nivel_ensino = COALESCE(?, nivel_ensino),
        click_id_tipo = COALESCE(?, click_id_tipo),
@@ -989,7 +1062,9 @@ function marcar(
     requestId ?? null,
     p.contato_nome, p.email, p.telefone,
     p.cep, p.contato_canonico,
-    p.curso_id, p.curso_codigo, p.oferta_codigo, p.oferta_nome, p.curso_nome, p.nivel_ensino,
+    p.curso_id, p.curso_codigo, p.oferta_codigo, p.oferta_nome,
+    p.valor_total, p.valor_inscricao, p.valor_base,
+    p.curso_nome, p.nivel_ensino,
     p.click_id_tipo, p.click_id_valor,
     extra?.acao.conversion_action_id ?? null,
     extra?.acao.conversion_action_nome ?? null,

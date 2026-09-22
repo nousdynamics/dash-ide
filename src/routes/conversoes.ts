@@ -56,7 +56,7 @@ conversoes.get('/', async (c) => {
     ).all(),
     c.env.DB.prepare(
       `SELECT id, evento, escopo, alvo, alvo_rotulo, conversion_action_id,
-              conversion_action_nome, valor, moeda, ativo
+              conversion_action_nome, valor, moeda, base_valor, ativo
          FROM conversao_acoes
         ORDER BY evento,
                  CASE escopo WHEN 'oferta' THEN 0 WHEN 'curso' THEN 1
@@ -174,6 +174,7 @@ conversoes.get('/', async (c) => {
     config: cfg,
     eventos: EVENTOS.map((e) => ({ id: e, rotulo: ROTULO_EVENTO[e], categoria: CATEGORIA_EVENTO[e] })),
     metas_google: METAS_GOOGLE,
+    bases_valor: BASES_VALOR,
     nivel_padrao: NIVEL_PADRAO,
     gatilhos: gatilhos.results,
     acoes: acoes.results,
@@ -665,11 +666,25 @@ conversoes.delete('/gatilhos/:id', async (c) => {
  */
 const ESCOPOS = ['oferta', 'curso', 'nivel', 'geral'] as const;
 
+/**
+ * De onde sai o valor que vai ao Google.
+ *
+ * A oferta do Rubeus traz os dois preços — total do curso e inscrição — e
+ * "Inscrição concluída" não vale o mesmo que "Pagamento realizado". Ver
+ * `valorDaConversao` em `lib/conversoes.ts`.
+ */
+export const BASES_VALOR = [
+  { id: 'total', rotulo: 'Valor total do curso' },
+  { id: 'inscricao', rotulo: 'Valor da inscrição' },
+  { id: 'fixo', rotulo: 'Valor fixo desta regra' },
+] as const;
+
 const acaoSchema = z.object({
   evento: z.string().refine(ehEvento, 'evento desconhecido'),
   escopo: z.enum(ESCOPOS).optional(),
   alvo: z.string().max(200).nullish(),
   alvo_rotulo: z.string().max(200).nullish(),
+  base_valor: z.enum(['total', 'inscricao', 'fixo']).optional(),
   nivel_ensino: z.string().min(1).max(120).optional(),
   conversion_action_id: z.string().regex(/^\d+$/, 'id da ação deve ser numérico'),
   conversion_action_nome: z.string().nullish(),
@@ -701,21 +716,23 @@ conversoes.post('/acoes', async (c) => {
   await c.env.DB.prepare(
     `INSERT INTO conversao_acoes
        (evento, escopo, alvo, alvo_rotulo, conversion_action_id, conversion_action_nome,
-        valor, moeda, ativo, atualizado_por)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        valor, moeda, base_valor, ativo, atualizado_por)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (evento, escopo, COALESCE(alvo, '')) DO UPDATE SET
        alvo_rotulo = COALESCE(excluded.alvo_rotulo, alvo_rotulo),
        conversion_action_id = excluded.conversion_action_id,
        conversion_action_nome = excluded.conversion_action_nome,
        valor = excluded.valor,
        moeda = excluded.moeda,
+       base_valor = excluded.base_valor,
        ativo = excluded.ativo,
        atualizado_em = datetime('now'),
        atualizado_por = excluded.atualizado_por`,
   ).bind(
     d.evento, escopo, alvo, d.alvo_rotulo ?? alvo,
     d.conversion_action_id, d.conversion_action_nome ?? null,
-    d.valor, d.moeda.toUpperCase(), d.ativo ? 1 : 0, c.get('usuarioEmail') ?? null,
+    d.valor, d.moeda.toUpperCase(), d.base_valor ?? 'total',
+    d.ativo ? 1 : 0, c.get('usuarioEmail') ?? null,
   ).run();
 
   /*

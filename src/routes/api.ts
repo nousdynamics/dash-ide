@@ -6,6 +6,8 @@ import { funilMarketing } from '../lib/rdstation';
 import {
   ErroRubeus,
   enriquecerCursoDosLeads,
+  listarCursos,
+  listarOfertas,
   listarOportunidades,
   sincronizarCursos,
   sincronizarEtapasDeOportunidades,
@@ -1875,6 +1877,50 @@ api.get('/admin/rubeus/oportunidades/:contatoId', exigirAdmin, async (c) => {
   } catch (e) {
     const status = e instanceof ErroRubeus ? e.status : 502;
     return c.json({ erro: 'consulta_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
+  }
+});
+
+/**
+ * GET /api/admin/rubeus/amostra — as CHAVES que o Rubeus devolve, sem os valores.
+ *
+ * Existe porque o tipo `OfertaRubeus` deste projeto é uma declaração do que
+ * usamos, não do que chega: se o CRM passar a mandar um campo novo — um preço,
+ * um complemento — ninguém descobre lendo o código daqui. Esta rota responde
+ * "o que existe do outro lado" sem exigir acesso ao painel do Rubeus.
+ *
+ * Devolve nome do campo e um exemplo curto. Nada de PII: a amostra é de
+ * catálogo (curso e oferta), não de contato.
+ */
+api.get('/admin/rubeus/amostra', exigirAdmin, async (c) => {
+  try {
+    const [cursos, ofertas] = await Promise.all([listarCursos(c.env), listarOfertas(c.env)]);
+    const resumir = (lista: Array<Record<string, unknown>>) => {
+      const campos = new Map<string, string>();
+      for (const item of lista.slice(0, 40)) {
+        for (const [k, v] of Object.entries(item ?? {})) {
+          if (v === null || v === undefined || v === '') continue;
+          if (!campos.has(k)) campos.set(k, String(v).slice(0, 60));
+        }
+      }
+      return [...campos].map(([campo, exemplo]) => ({ campo, exemplo }));
+    };
+    /* Quantas ofertas realmente preenchem cada campo — não "existe em alguma". */
+    const preenchimento = (lista: Array<Record<string, unknown>>, campos: string[]) =>
+      Object.fromEntries(campos.map((k) => [
+        k,
+        lista.filter((i) => i?.[k] !== null && i?.[k] !== undefined && i?.[k] !== '').length,
+      ]));
+
+    return c.json({
+      cursos: { total: cursos.length, campos: resumir(cursos as never) },
+      ofertas: {
+        total: ofertas.length,
+        campos: resumir(ofertas as never),
+        preenchimento: preenchimento(ofertas as never, ['valor', 'complemento', 'codigo', 'nome']),
+      },
+    });
+  } catch (e) {
+    return c.json({ erro: e instanceof ErroRubeus ? e.message : String(e) }, 502);
   }
 });
 

@@ -1,3 +1,4 @@
+import { valorMonetario } from './metricas';
 import { inferirOrdemEtapa } from './etapas';
 
 /**
@@ -114,6 +115,12 @@ export type OfertaRubeus = {
   modalidade?: string;
   processoSeletivo?: string;
   processoSeletivoNome?: string;
+  /**
+   * Os dois preços da oferta, como o Rubeus os devolve: TEXTO, e em convenções
+   * decimais diferentes entre si. Ver `valorMonetario` em `lib/metricas.ts`.
+   */
+  valor?: string | number | null;        // total do curso — "6195.00"
+  complemento?: string | number | null;  // valor da inscrição — "197,00"
 };
 
 export type OportunidadeRubeus = {
@@ -430,8 +437,9 @@ export async function sincronizarCursos(env: Env, db: D1Database): Promise<{ cur
     stmts.push(
       db.prepare(
         `INSERT INTO curso_ofertas
-           (id, curso_codigo, oferta_codigo, nome, nivel_ensino, modalidade, processo_seletivo_id, atualizado_em)
-         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           (id, curso_codigo, oferta_codigo, nome, nivel_ensino, modalidade, processo_seletivo_id,
+            valor_total, valor_inscricao, atualizado_em)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET
            curso_codigo = excluded.curso_codigo,
            oferta_codigo = excluded.oferta_codigo,
@@ -439,6 +447,14 @@ export async function sincronizarCursos(env: Env, db: D1Database): Promise<{ cur
            nivel_ensino = excluded.nivel_ensino,
            modalidade = excluded.modalidade,
            processo_seletivo_id = excluded.processo_seletivo_id,
+           /*
+            * COALESCE e nao excluded direto: o Rubeus devolve o campo vazio
+            * em parte das ofertas, e um sync não pode APAGAR um preço que já
+            * estava guardado. Preço que some faz a conversão cair para o valor
+            * padrão da tela sem nada indicando a troca.
+            */
+           valor_total = COALESCE(excluded.valor_total, valor_total),
+           valor_inscricao = COALESCE(excluded.valor_inscricao, valor_inscricao),
            atualizado_em = excluded.atualizado_em`,
       ).bind(
         String(o.id),
@@ -448,6 +464,8 @@ export async function sincronizarCursos(env: Env, db: D1Database): Promise<{ cur
         o.nivelEnsinoNome ?? (o.nivelEnsino != null ? String(o.nivelEnsino) : null),
         o.modalidadeNome ?? (o.modalidade != null ? String(o.modalidade) : null),
         o.processoSeletivo != null ? String(o.processoSeletivo) : null,
+        valorMonetario(o.valor),
+        valorMonetario(o.complemento),
       ),
     );
     // Completa nivel/modalidade no curso pai quando conhecemos a oferta.

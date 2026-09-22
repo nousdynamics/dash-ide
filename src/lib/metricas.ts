@@ -37,3 +37,24 @@ export function delta(atual: number | null, anterior: number | null): number | n
 
 /** Micros → unidade monetária. O Google devolve custo em milionésimos. */
 export const deMicros = (v: unknown): number => num(v) / 1_000_000;
+
+/**
+ * Texto monetário do Rubeus → número.
+ *
+ * O CRM devolve preço como TEXTO, e em duas convenções ao mesmo tempo: a mesma
+ * oferta traz `valor: "6195.00"` (ponto decimal) e `complemento: "197,00"`
+ * (vírgula). São campos digitados em telas diferentes, e `Number("197,00")` é
+ * `NaN` — que aqui não estoura nada, só faz a conversão subir com o valor
+ * padrão da tela, sem aviso.
+ *
+ * O ponto só é tratado como separador de milhar quando vem seguido de
+ * exatamente três dígitos. Sem essa checagem, "6195.00" viraria 619500 e a
+ * conversão subiria com cem vezes o preço do curso.
+ */
+export function valorMonetario(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const bruto = String(v).replace(/[^\d.,-]/g, '');
+  if (!bruto) return null;
+  const n = Number(bruto.replace(/\.(?=\d{3}\b)/g, '').replace(',', '.'));
+  return Number.isFinite(n) && n > 0 && n < 1_000_000 ? n : null;
+}
