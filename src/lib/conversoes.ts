@@ -36,19 +36,62 @@ import { identidadeDoContato, normalizarCep, partirNome } from './identidade';
 import { dadosPessoa, enriquecerCursoDosLeads, listarOportunidades } from './rubeus';
 import { acrescentarLinhas, type LinhaBackup } from './sheets';
 
-/** Os dois eventos que a conta mede. Nome interno, estável, não é rótulo de tela. */
-export const EVENTOS = ['inscricao_concluida', 'pagamento_realizado'] as const;
+/**
+ * Os eventos que a conta mede, do topo do funil para o fundo.
+ *
+ * Nome interno, estável, não é rótulo de tela. A ordem aqui é a da jornada, e
+ * ela importa: cada um vale um dinheiro diferente, e é isso que separa medir
+ * retorno de inventá-lo.
+ *
+ *   inscricao_concluida  — "Oportunidade": preencheu o formulário. Não pagou
+ *                          nada ainda, então não há preço real a mandar.
+ *   pagamento_realizado  — "Oportunidade paga": pagou a TAXA DE INSCRIÇÃO.
+ *   matricula_comercial  — "Matrícula COMERCIAL concluída": fechou o negócio.
+ *                          É aqui que o valor do curso existe de fato.
+ */
+export const EVENTOS = [
+  'inscricao_concluida',
+  'pagamento_realizado',
+  'matricula_comercial',
+] as const;
 export type Evento = (typeof EVENTOS)[number];
 
 export const ROTULO_EVENTO: Record<Evento, string> = {
   inscricao_concluida: 'Inscrição concluída',
   pagamento_realizado: 'Pagamento realizado',
+  matricula_comercial: 'Matrícula comercial',
 };
 
 /** Categoria do Google Ads sugerida ao criar a ação de cada evento. */
 export const CATEGORIA_EVENTO: Record<Evento, string> = {
   inscricao_concluida: 'SUBMIT_LEAD_FORM',
-  pagamento_realizado: 'PURCHASE',
+  /*
+   * `SIGNUP` e não `PURCHASE`.
+   *
+   * O pagamento aqui é o da taxa de inscrição, não o da matrícula. Marcar como
+   * compra faria a conta tratar uma taxa de R$ 197 como a venda do curso, e o
+   * relatório de receita do Google passaria a somar duas vezes a mesma jornada
+   * quando a matrícula chegasse. Só afeta ações criadas daqui em diante.
+   */
+  pagamento_realizado: 'SIGNUP',
+  matricula_comercial: 'PURCHASE',
+};
+
+/**
+ * Qual preço cada evento manda, por padrão.
+ *
+ * Definido pela operação, não pelo código: a taxa de inscrição é o que a pessoa
+ * pagou em "Oportunidade paga", e o valor do curso só existe de verdade na
+ * matrícula comercial — quando o aluno está praticamente dentro do curso.
+ *
+ * "Inscrição concluída" nasce em `fixo` porque naquele momento não houve
+ * pagamento nenhum: qualquer preço ali é um valor MODELADO por quem administra
+ * a conta, e fingir que veio do catálogo esconderia essa escolha.
+ */
+export const BASE_VALOR_PADRAO: Record<Evento, 'total' | 'inscricao' | 'fixo'> = {
+  inscricao_concluida: 'fixo',
+  pagamento_realizado: 'inscricao',
+  matricula_comercial: 'total',
 };
 
 /**

@@ -50,6 +50,7 @@ const FILTRO_INICIAL = () => ({
   evento: [],
   nivel: [],
   curso: [],
+  oferta: [],
   processo: [],
   acao: [],
   diagnostico: [],
@@ -73,7 +74,7 @@ function query(f) {
   const p = new URLSearchParams();
   if (f.de) p.set('de', f.de);
   if (f.ate) p.set('ate', f.ate);
-  for (const k of ['status', 'evento', 'nivel', 'curso', 'processo', 'acao', 'diagnostico']) {
+  for (const k of ['status', 'evento', 'nivel', 'curso', 'oferta', 'processo', 'acao', 'diagnostico']) {
     for (const v of f[k] ?? []) p.append(k, v);
   }
   if (f.modo) p.set('modo', f.modo);
@@ -150,6 +151,24 @@ export function MonitorConversoes() {
     return cursos.filter((c) => filtro.nivel.includes(c.nivel));
   }, [opcoes.cursos, filtro.nivel]);
 
+  /*
+   * Ofertas do curso escolhido.
+   *
+   * Comparar ofertas só faz sentido dentro de um curso — é ali que elas
+   * disputam a mesma verba com preços diferentes. Com um curso marcado, o
+   * seletor mostra só as dele.
+   */
+  const ofertasVisiveis = useMemo(() => {
+    const ofertas = opcoes.ofertas ?? [];
+    if (!filtro.curso.length) return ofertas;
+    const daLista = new Set(
+      (d?.por_oferta ?? [])
+        .filter((o) => filtro.curso.includes(o.curso))
+        .map((o) => o.codigo),
+    );
+    return ofertas.filter((o) => daLista.has(o.codigo));
+  }, [opcoes.ofertas, filtro.curso, d?.por_oferta]);
+
   const serie = useMemo(
     () => densificarPorDia(d?.por_dia ?? [], filtro.de, filtro.ate),
     [d?.por_dia, filtro.de, filtro.ate],
@@ -169,6 +188,7 @@ export function MonitorConversoes() {
 
   const filtrosAtivos =
     filtro.status.length + filtro.evento.length + filtro.nivel.length + filtro.curso.length
+    + filtro.oferta.length
     + filtro.processo.length + filtro.acao.length + filtro.diagnostico.length
     + (filtro.modo ? 1 : 0) + (filtro.atribuicao ? 1 : 0) + (filtro.q ? 1 : 0);
 
@@ -261,6 +281,13 @@ export function MonitorConversoes() {
             valores={filtro.curso}
             aoTrocar={(v) => mudar({ curso: v })}
             opcoes={cursosVisiveis.map((c) => [c.nome, c.nome === '—' ? 'Não identificado' : c.nome])}
+          />
+          <MultiSelect
+            rotulo="Oferta"
+            rotuloVazio="Todas as ofertas"
+            valores={filtro.oferta}
+            aoTrocar={(v) => mudar({ oferta: v })}
+            opcoes={ofertasVisiveis.map((o) => [o.codigo, o.nome])}
           />
           <MultiSelect
             rotulo="Evento"
@@ -475,6 +502,68 @@ export function MonitorConversoes() {
               fmt={fmtInt}
             />
           </div>
+
+          {/*
+            * Ofertas do mesmo curso lado a lado.
+            *
+            * O ranking por curso responde "o que vende"; este responde "qual
+            * turma vende" — e é ele que diz onde colocar verba, porque é a
+            * oferta que tem preço, data e vaga própria.
+            */}
+          {(d.por_oferta ?? []).length > 0 && (
+            <Cartao>
+              <div className="flex items-baseline justify-between gap-3 mb-2 flex-wrap">
+                <div>
+                  <div className="text-[13px] font-semibold">Por oferta</div>
+                  <div className="text-[11px] text-tenue mt-px">
+                    Turmas do mesmo curso competem aqui — cada uma com seu preço
+                  </div>
+                </div>
+                <span className="text-[11px] text-tenue">
+                  {fmtInt((d.por_oferta ?? []).length)} oferta(s) com conversão
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="text-tenue text-[11px] text-left">
+                      <th className="py-1 pr-3 font-medium">Oferta</th>
+                      <th className="py-1 pr-3 font-medium">Curso</th>
+                      <th className="py-1 pr-3 font-medium text-right">Conversões</th>
+                      <th className="py-1 pr-3 font-medium text-right">Entregues</th>
+                      <th className="py-1 pr-3 font-medium text-right">Inscrição</th>
+                      <th className="py-1 pr-3 font-medium text-right">Total do curso</th>
+                      <th className="py-1 pr-3 font-medium text-right">Valor enviado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {d.por_oferta.map((o) => (
+                      <tr key={`${o.codigo}-${o.oferta}`} className="border-t border-borda">
+                        <td className="py-1.5 pr-3">
+                          <div className="truncate max-w-[220px]">{o.oferta}</div>
+                          {o.codigo && (
+                            <div className="text-[10px] text-tenue font-mono">{o.codigo}</div>
+                          )}
+                        </td>
+                        <td className="py-1.5 pr-3 text-tenue truncate max-w-[180px]">{o.curso}</td>
+                        <td className="py-1.5 pr-3 text-right tnum">{fmtInt(o.total)}</td>
+                        <td className="py-1.5 pr-3 text-right tnum">{fmtInt(o.enviadas)}</td>
+                        <td className="py-1.5 pr-3 text-right tnum text-tenue">
+                          {o.preco_inscricao != null ? fmtBRL(o.preco_inscricao) : '—'}
+                        </td>
+                        <td className="py-1.5 pr-3 text-right tnum text-tenue">
+                          {o.preco_total != null ? fmtBRL(o.preco_total) : '—'}
+                        </td>
+                        <td className="py-1.5 pr-3 text-right tnum font-medium">
+                          {fmtBRL(Number(o.valor) || 0)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Cartao>
+          )}
 
           <Cartao>
             <div className="text-[13px] font-semibold mb-2">Por evento</div>

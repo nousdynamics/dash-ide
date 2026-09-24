@@ -465,6 +465,46 @@ o curinga deixou de precisar de disfarce.
 própria tabela, e não num join com `leads_etapa`, porque ela é o registro do que
 FOI ENVIADO e precisa continuar dizendo a verdade depois que o cadastro mudar.
 
+### Três eventos, três dinheiros
+
+A jornada tem três marcos que valem coisas diferentes, e misturá-los é o que faz
+o retorno da conta mentir:
+
+| evento | etapa no Rubeus | vale |
+|---|---|---|
+| `inscricao_concluida` | Oportunidade | nada ainda — valor **fixo**, modelado |
+| `pagamento_realizado` | Oportunidade paga | a **taxa de inscrição** (`complemento`) |
+| `matricula_comercial` | Matrícula COMERCIAL concluída | o **valor do curso** (`valor`) |
+
+"Oportunidade" é formulário preenchido: não houve pagamento, então qualquer preço
+ali é escolha de quem administra a conta, e o padrão `fixo` deixa isso explícito
+em vez de fingir que veio do catálogo.
+
+A matrícula comercial é onde o aluno está praticamente dentro do curso — é o
+único momento em que o valor total existe de fato. Tem 103 leads em 60 dias.
+
+A categoria sugerida de `pagamento_realizado` passou de `PURCHASE` para `SIGNUP`
+pelo mesmo motivo: marcar a taxa de R$ 197 como compra faria o Google somar duas
+vezes a mesma jornada quando a matrícula chegasse. Só afeta ações criadas daqui
+em diante.
+
+A tela sugere a base de cada evento e **avisa quando a regra diverge** — taxa e
+curso diferem por um fator de trinta nesta conta, e trocar um pelo outro sem
+perceber multiplica ou divide o retorno da campanha.
+
+### Oferta é a unidade de análise, não o curso
+
+Ofertas do mesmo curso têm preços diferentes. Medido no catálogo: "Saúde
+Coletiva" tem Turma A (Fortaleza) a R$ 14.500 e Turma C (Recife) a R$ 11.000,
+com inscrições de R$ 197 e R$ 249. Outros cursos variam de R$ 11.000 a R$ 21.900
+entre suas ofertas.
+
+Por isso o monitor ganhou **Por oferta** ao lado de Por curso: "Psicologia vendeu
+40" não diz qual turma vendeu, e é a oferta que carrega preço, data e vaga
+própria — é nela que se decide verba. A tabela mostra os dois preços da oferta
+ao lado das conversões, e o seletor de oferta se estreita ao curso escolhido,
+porque comparar ofertas só faz sentido dentro de um curso.
+
 ### Dois preços por oferta, e a regra escolhe
 
 Conferido na API do Rubeus em 22/09/2026 (`/api/Curso/listarOfertas`): cada

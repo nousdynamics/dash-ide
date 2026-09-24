@@ -921,6 +921,13 @@ function nomeSugerido(evento, alvo) {
  * Fallback das bases, para a tela funcionar antes de a API responder.
  * A fonte é `bases_valor` do servidor — ver BASES_VALOR em routes/conversoes.ts.
  */
+/** Nome curto de cada base, para o aviso de divergência caber numa linha. */
+const ROTULO_EVENTO_BASE = {
+  total: 'Valor total do curso',
+  inscricao: 'Valor da inscrição',
+  fixo: 'Valor fixo',
+};
+
 const BASES_PADRAO = [
   { id: 'total', rotulo: 'Valor total do curso' },
   { id: 'inscricao', rotulo: 'Valor da inscrição' },
@@ -929,7 +936,7 @@ const BASES_PADRAO = [
 
 function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atual, disponiveis, aoSalvar }) {
   const [valor, setValor] = useState(atual?.valor ?? 0);
-  const [base, setBase] = useState(atual?.base_valor ?? 'total');
+  const [base, setBase] = useState(atual?.base_valor ?? evento.base_valor ?? 'total');
   const [modo, setModo] = useState(null); // 'colar' | 'criar' | null
   const [ctIdManual, setCtIdManual] = useState('');
   const [nomeNovo, setNomeNovo] = useState(() => nomeSugerido(evento, alvo));
@@ -938,7 +945,10 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atua
   const [erro, setErro] = useState('');
 
   useEffect(() => setValor(atual?.valor ?? 0), [atual?.valor]);
-  useEffect(() => setBase(atual?.base_valor ?? 'total'), [atual?.base_valor]);
+  useEffect(
+    () => setBase(atual?.base_valor ?? evento.base_valor ?? 'total'),
+    [atual?.base_valor, evento.base_valor],
+  );
 
   useEffect(() => {
     if (modo !== 'criar') return;
@@ -1101,6 +1111,18 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atua
                 opcoes={(bases?.length ? bases : BASES_PADRAO).map((b) => [b.id, b.rotulo])}
                 className="w-full md:w-[152px]"
               />
+              {/*
+                * Divergir da recomendação é permitido e às vezes certo — mas
+                * precisa ser visível. Taxa de inscrição e valor de curso diferem
+                * por um fator de trinta nesta conta: trocar um pelo outro sem
+                * perceber multiplica ou divide o retorno da campanha.
+                */}
+              {evento.base_valor && base !== evento.base_valor && (
+                <span className="text-[10px] text-atencao md:text-right leading-snug">
+                  {ROTULO_EVENTO_BASE[evento.base_valor] ?? evento.base_valor} é o recomendado
+                  para “{evento.rotulo}”
+                </span>
+              )}
               {base === 'fixo' && (
                 <label className="inline-flex items-center gap-1 text-[11px] text-tenue">
                   R$
@@ -1215,7 +1237,7 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
   const [alvo, setAlvo] = useState('');
   const [acaoId, setAcaoId] = useState('');
   const [valor, setValor] = useState('');
-  const [base, setBase] = useState('total');
+  const [base, setBase] = useState(evento.base_valor ?? 'total');
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState('');
   /*
@@ -1268,7 +1290,7 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
 
   const limpar = () => {
     setAlvo(''); setAcaoId(''); setValor(''); setErro('');
-    setBase('total'); setCriando(false);
+    setBase(evento.base_valor ?? 'total'); setCriando(false);
   };
 
   const salvar = async (over = {}) => {

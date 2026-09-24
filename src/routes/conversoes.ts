@@ -11,6 +11,7 @@ import {
   type Evento,
   NIVEL_PADRAO,
   ROTULO_EVENTO,
+  BASE_VALOR_PADRAO,
   conferirDiagnosticos,
   gravarConfig,
   lerConfig,
@@ -172,7 +173,13 @@ conversoes.get('/', async (c) => {
   return c.json({
     google,
     config: cfg,
-    eventos: EVENTOS.map((e) => ({ id: e, rotulo: ROTULO_EVENTO[e], categoria: CATEGORIA_EVENTO[e] })),
+    eventos: EVENTOS.map((e) => ({
+      id: e,
+      rotulo: ROTULO_EVENTO[e],
+      categoria: CATEGORIA_EVENTO[e],
+      /* Qual preço este evento manda por padrão — a tela usa como sugestão. */
+      base_valor: BASE_VALOR_PADRAO[e],
+    })),
     metas_google: METAS_GOOGLE,
     bases_valor: BASES_VALOR,
     nivel_padrao: NIVEL_PADRAO,
@@ -254,6 +261,7 @@ function filtrosDoPedido(
   junta(listaEm('evento', qs('evento')));
   junta(listaEm('nivel_ensino', qs('nivel')));
   junta(listaEm('curso_nome', qs('curso')));
+  junta(listaEm('oferta_codigo', qs('oferta')));
   junta(listaEm('processo_id', qs('processo')));
   junta(listaEm('conversion_action_id', qs('acao')));
   junta(listaEm('diagnostico', qs('diagnostico')));
@@ -354,7 +362,7 @@ conversoes.get('/monitor', async (c) => {
    */
   const ENVIADA = `status = 'enviada'`;
 
-  const [geral, porStatus, porNivel, porCurso, porEvento, porDia, opcoes, requisicoes] =
+  const [geral, porStatus, porNivel, porCurso, porOferta, porEvento, porDia, opcoes, requisicoes] =
     await Promise.all([
       c.env.DB.prepare(
         `SELECT COUNT(*) AS total,
@@ -402,6 +410,28 @@ conversoes.get('/monitor', async (c) => {
           GROUP BY curso, nivel ORDER BY total DESC LIMIT 40`,
       ).bind(...f.params).all(),
 
+      /*
+       * Por OFERTA, não só por curso.
+       *
+       * Um curso tem várias ofertas — turmas, semestres, campi — e elas têm
+       * preços diferentes entre si. "Psicologia vendeu 40" não responde qual
+       * turma vendeu: é a oferta que carrega o preço e a data, e é por ela que
+       * se decide onde colocar verba. O curso aparece junto para dar contexto,
+       * porque nome de oferta sozinho ("Turma 1 (Ead)") não diz de quê.
+       */
+      c.env.DB.prepare(
+        `SELECT COALESCE(NULLIF(oferta_nome, ''), NULLIF(oferta_codigo, ''), '—') AS oferta,
+                COALESCE(NULLIF(oferta_codigo, ''), '') AS codigo,
+                COALESCE(NULLIF(curso_nome, ''), '—') AS curso,
+                COUNT(*) AS total,
+                SUM(CASE WHEN ${ENVIADA} THEN 1 ELSE 0 END) AS enviadas,
+                SUM(CASE WHEN ${ENVIADA} THEN COALESCE(valor, 0) ELSE 0 END) AS valor,
+                MAX(valor_total) AS preco_total,
+                MAX(valor_inscricao) AS preco_inscricao
+           FROM conversoes_offline ${f.sql}
+          GROUP BY oferta, codigo, curso ORDER BY total DESC LIMIT 40`,
+      ).bind(...f.params).all(),
+
       c.env.DB.prepare(
         `SELECT evento, COUNT(*) AS total,
                 SUM(CASE WHEN ${ENVIADA} THEN 1 ELSE 0 END) AS enviadas,
@@ -433,6 +463,9 @@ conversoes.get('/monitor', async (c) => {
                 NULL AS extra FROM conversoes_offline
          UNION SELECT DISTINCT 'curso', COALESCE(NULLIF(curso_nome, ''), '—'),
                 COALESCE(NULLIF(nivel_ensino, ''), '—') FROM conversoes_offline
+         UNION SELECT DISTINCT 'oferta', COALESCE(NULLIF(oferta_codigo, ''), ''),
+                COALESCE(NULLIF(oferta_nome, ''), oferta_codigo) FROM conversoes_offline
+                WHERE COALESCE(oferta_codigo, '') != ''
          UNION SELECT DISTINCT 'processo', COALESCE(processo_id, ''),
                 COALESCE(processo_nome, processo_id) FROM conversoes_offline
                 WHERE processo_id IS NOT NULL
@@ -457,12 +490,14 @@ conversoes.get('/monitor', async (c) => {
     por_status: porStatus.results,
     por_nivel: porNivel.results,
     por_curso: porCurso.results,
+    por_oferta: porOferta.results,
     por_evento: porEvento.results,
     por_dia: porDia.results,
     requisicoes: requisicoes.results,
     opcoes: {
       niveis: doTipo('nivel').map((l) => l.valor),
       cursos: doTipo('curso').map((l) => ({ nome: l.valor, nivel: l.extra })),
+      ofertas: doTipo('oferta').map((l) => ({ codigo: l.valor, nome: l.extra || l.valor })),
       processos: doTipo('processo').map((l) => ({ id: l.valor, nome: l.extra || l.valor })),
       acoes: doTipo('acao').map((l) => ({ id: l.valor, nome: l.extra || l.valor })),
       eventos: EVENTOS.map((e) => ({ id: e, rotulo: ROTULO_EVENTO[e] })),
@@ -731,7 +766,15 @@ conversoes.post('/acoes', async (c) => {
   ).bind(
     d.evento, escopo, alvo, d.alvo_rotulo ?? alvo,
     d.conversion_action_id, d.conversion_action_nome ?? null,
-    d.valor, d.moeda.toUpperCase(), d.base_valor ?? 'total',
+    /*
+     * Sem base explícita, vale a do evento — ver BASE_VALOR_PADRAO.
+     *
+     * O padrão fixo de 'total' que a migration deixou serve para não reescrever
+     * o sentido de linha já cadastrada, mas é errado para regra nova: taxa de
+     * inscrição e valor de curso não são intercambiáveis.
+     */
+    d.valor, d.moeda.toUpperCase(),
+    d.base_valor ?? BASE_VALOR_PADRAO[d.evento as Evento] ?? 'total',
     d.ativo ? 1 : 0, c.get('usuarioEmail') ?? null,
   ).run();
 
