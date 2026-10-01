@@ -333,7 +333,18 @@ api.get('/overview', cacheDeBorda(300), async (c) => {
  * da tabela e a contagem da gaveta divergiriam, e aí não dá para conferir
  * número nenhum — que é justamente para o que a gaveta serve.
  */
-const CTE_ORIGEM_DA_PESSOA = `
+/*
+ * Só para as pessoas de `conjunto` — um CTE anterior com a coluna `pessoa`.
+ *
+ * A versão sem recorte calculava o último curso e o último funil de TODAS as
+ * pessoas do banco, com duas janelas sobre `leads_etapa` inteira, para depois
+ * usar só as poucas centenas que a tela pedia: ~143 mil linhas lidas por
+ * abertura do Funil, a maior parte da cota diária do D1 no dia em que ela
+ * estourou. Com `pessoa_id IN (...)` o índice `idx_leads_pessoa_em` busca só o
+ * histórico de quem interessa. O resultado é o mesmo: continua sendo o último
+ * curso da pessoa em qualquer data, não só no período.
+ */
+const cteOrigemDaPessoa = (conjunto: string) => `
   pessoa_curso AS (
     SELECT l.pessoa_id AS pessoa,
            l.curso_codigo, l.curso_id, l.oferta_codigo, l.oferta_nome,
@@ -342,10 +353,11 @@ const CTE_ORIGEM_DA_PESSOA = `
              ORDER BY l.registrado_em DESC
            ) AS recencia
       FROM leads_etapa l
-     WHERE (l.curso_codigo IS NOT NULL AND l.curso_codigo != '')
+     WHERE l.pessoa_id IN (SELECT pessoa FROM ${conjunto})
+       AND ((l.curso_codigo IS NOT NULL AND l.curso_codigo != '')
         OR (l.curso_id IS NOT NULL AND l.curso_id != '')
         OR (l.oferta_codigo IS NOT NULL AND l.oferta_codigo != '')
-        OR (l.oferta_nome IS NOT NULL AND l.oferta_nome != '')
+        OR (l.oferta_nome IS NOT NULL AND l.oferta_nome != ''))
   ),
   curso_da_pessoa AS (
     SELECT pessoa, curso_codigo, curso_id, oferta_codigo, oferta_nome
@@ -359,7 +371,8 @@ const CTE_ORIGEM_DA_PESSOA = `
              ORDER BY l.registrado_em DESC
            ) AS recencia
       FROM leads_etapa l
-     WHERE l.funil_id IS NOT NULL
+     WHERE l.pessoa_id IN (SELECT pessoa FROM ${conjunto})
+       AND l.funil_id IS NOT NULL
   ),
   funil_da_pessoa AS (
     SELECT pessoa, funil_id FROM pessoa_funil WHERE recencia = 1
@@ -374,15 +387,43 @@ const CTE_ORIGEM_DA_PESSOA = `
  * categoria: `categoria_fallback` é nulo para "Pós-Graduação", que não separa
  * presencial de EAD de medicina.
  */
+/*
+ * Uma busca por chave, da mais precisa à mais solta — não um OR só.
+ *
+ * `curso_categoria` é view sobre o catálogo inteiro (cursos + ofertas), com
+ * uma subconsulta de regra por linha. Com as quatro chaves num OR, o SQLite
+ * não usa índice e percorre a view toda para cada pessoa: com ~500 pessoas
+ * no mês, eram centenas de milhares de linhas lidas por abertura do Funil.
+ * Separadas, cada busca vira igualdade que desce para dentro da view e usa o
+ * índice da tabela de baixo, e o COALESCE só avalia a seguinte se a anterior
+ * não achou.
+ *
+ * A ordem reproduz a do OR: a view devolve as linhas de `cursos` antes das
+ * de `curso_ofertas`, então qualquer linha de curso vencia qualquer oferta
+ * quando as duas casavam com categorias diferentes. Inverter mudaria a
+ * contagem por categoria — conferido em cópia local com 24 mil eventos.
+ */
 const SQL_CATEGORIA_RESOLVIDA = `COALESCE(
+  -- 1º as linhas de \`cursos\` (na view, as que têm oferta_codigo nulo)
   (SELECT cc.categoria FROM curso_categoria cc
-    WHERE cc.categoria IS NOT NULL
-      AND ((cd.oferta_codigo IS NOT NULL AND cc.oferta_codigo = cd.oferta_codigo)
-        OR (cd.curso_codigo  IS NOT NULL AND cc.curso_codigo  = cd.curso_codigo)
-        OR (cd.curso_id      IS NOT NULL AND cc.curso_id      = cd.curso_id)
-        OR (cd.oferta_nome   IS NOT NULL AND cd.oferta_nome != ''
-            AND cc.nome = cd.oferta_nome))
-    LIMIT 1),
+    WHERE cc.oferta_codigo IS NULL AND cd.curso_codigo IS NOT NULL
+      AND cc.curso_codigo = cd.curso_codigo AND cc.categoria IS NOT NULL LIMIT 1),
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cc.oferta_codigo IS NULL AND cd.curso_id IS NOT NULL
+      AND cc.curso_id = cd.curso_id AND cc.categoria IS NOT NULL LIMIT 1),
+  -- 2º as ofertas
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cd.curso_codigo IS NOT NULL AND cc.curso_codigo = cd.curso_codigo
+      AND cc.categoria IS NOT NULL LIMIT 1),
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cd.curso_id IS NOT NULL AND cc.curso_id = cd.curso_id
+      AND cc.categoria IS NOT NULL LIMIT 1),
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cd.oferta_codigo IS NOT NULL AND cc.oferta_codigo = cd.oferta_codigo
+      AND cc.categoria IS NOT NULL LIMIT 1),
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cd.oferta_nome IS NOT NULL AND cd.oferta_nome != '' AND cc.nome = cd.oferta_nome
+      AND cc.categoria IS NOT NULL LIMIT 1),
   (SELECT f.categoria_fallback FROM funis f WHERE f.id = fd.funil_id),
   ''
 )`;
@@ -677,7 +718,7 @@ api.get('/funil/macro', cacheDeBorda(300), async (c) => {
     const fCat = filtrosDaQuery(q.data, 'l');
 
     const linhas = await c.env.DB.prepare(
-      `WITH ${CTE_ORIGEM_DA_PESSOA},
+      `WITH
        /*
         * Acumulado, igual ao funil de cima.
         *
@@ -702,7 +743,8 @@ api.get('/funil/macro', cacheDeBorda(300), async (c) => {
             ${fCat.sql}
           GROUP BY pessoa
          HAVING nivel >= 3
-       )
+       ),
+       ${cteOrigemDaPessoa('marcos')}
        SELECT ${SQL_CATEGORIA_RESOLVIDA} AS categoria,
               COALESCE(fu.nome, '') AS funil_nome,
               COUNT(*) AS inscricoes,
@@ -920,7 +962,6 @@ api.get('/funil/macro/pessoas', cacheDeBorda(300), async (c) => {
     WITH rank_macro(macro, nivel) AS (
       VALUES ('qualificados', 1), ('oportunidade', 2), ('inscricao', 3), ('matricula', 4)
     ),
-    ${CTE_ORIGEM_DA_PESSOA},
     topo AS (
       SELECT l.pessoa_id AS pessoa,
              MAX(rank_macro.nivel) AS nivel
@@ -934,6 +975,7 @@ api.get('/funil/macro/pessoas', cacheDeBorda(300), async (c) => {
        GROUP BY pessoa
       HAVING nivel >= ?
     ),
+    ${cteOrigemDaPessoa('topo')},
     -- O evento mais recente DENTRO do período dá o nome, a etapa e a data que
     -- a lista mostra. Fora do período seria outra pergunta.
     ultimo AS (
@@ -949,11 +991,18 @@ api.get('/funil/macro/pessoas', cacheDeBorda(300), async (c) => {
     listagem AS (
       SELECT u.contato_id, u.contato_nome, u.email, u.telefone, u.etapa, u.registrado_em,
              cd.curso_codigo,
-             COALESCE(cd.oferta_nome, (SELECT k.nome FROM curso_catalogo k
-               WHERE (cd.oferta_codigo IS NOT NULL AND k.oferta_codigo = cd.oferta_codigo)
-                  OR (cd.curso_codigo  IS NOT NULL AND k.curso_codigo  = cd.curso_codigo)
-                  OR (cd.curso_id      IS NOT NULL AND k.curso_id      = cd.curso_id)
-               LIMIT 1)) AS curso_nome,
+             -- Mesma troca do OR por buscas separadas de SQL_CATEGORIA_RESOLVIDA.
+             COALESCE(cd.oferta_nome,
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE k.oferta_codigo IS NULL AND cd.curso_codigo IS NOT NULL AND k.curso_codigo = cd.curso_codigo LIMIT 1),
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE k.oferta_codigo IS NULL AND cd.curso_id IS NOT NULL AND k.curso_id = cd.curso_id LIMIT 1),
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE cd.curso_codigo IS NOT NULL AND k.curso_codigo = cd.curso_codigo LIMIT 1),
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE cd.curso_id IS NOT NULL AND k.curso_id = cd.curso_id LIMIT 1),
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE cd.oferta_codigo IS NOT NULL AND k.oferta_codigo = cd.oferta_codigo LIMIT 1)) AS curso_nome,
              (SELECT f.nome FROM funis f WHERE f.id = fd.funil_id) AS funil_nome,
              ${SQL_CATEGORIA_RESOLVIDA} AS categoria
         FROM topo t
