@@ -1502,6 +1502,14 @@ api.get('/funil/leads', async (c) => {
   const bindsBusca = busca ? [like, like, like, like] : [];
 
   /*
+   * Filtro pela etapa ATUAL da pessoa — a do evento mais recente, a mesma que
+   * o card mostra. Filtrar por "já passou pela etapa" responderia outra
+   * pergunta, e a lista mostraria gente cujo card diz outra etapa.
+   */
+  const etapas = listaCsv(c.req.query('etapa'));
+  const filtroEtapa = etapas.length ? `WHERE ${inSql('u.etapa', etapas.length)}` : '';
+
+  /*
    * Um card por PESSOA, não por contato_id.
    *
    * O Rubeus emite id de contato diferente conforme o gatilho e, pior, o mesmo
@@ -1571,16 +1579,16 @@ api.get('/funil/leads', async (c) => {
               COUNT(DISTINCT curso_codigo)           AS cursos,
               MAX(registrado_em)                     AS ult
        FROM base GROUP BY quem
+     ),
+     ultimo AS (
+       SELECT b.* FROM base b
+        JOIN agg a ON a.quem = b.quem AND a.ult = b.registrado_em
+        GROUP BY b.quem
      )`;
 
   const [pagRes, totalRes] = await Promise.all([
     c.env.DB.prepare(
-      `${cte},
-       ultimo AS (
-         SELECT b.* FROM base b
-          JOIN agg a ON a.quem = b.quem AND a.ult = b.registrado_em
-          GROUP BY b.quem
-       )
+      `${cte}
        SELECT a.quem, a.eventos, a.ids_no_crm, a.processos, a.cursos,
               a.ult AS registrado_em,
               u.etapa, u.curso_codigo, u.oferta_codigo, u.oferta_nome, u.processo_nome, u.origem,
@@ -1594,18 +1602,35 @@ api.get('/funil/leads', async (c) => {
               COALESCE(u.contato_nome,
                        (SELECT MAX(b2.contato_nome) FROM base b2 WHERE b2.quem = a.quem)) AS contato_nome
        FROM agg a JOIN ultimo u ON u.quem = a.quem
+       ${filtroEtapa}
        ORDER BY a.ult DESC LIMIT ? OFFSET ?`,
     )
-      .bind(...escopoBinds, ...bindsBusca, porPagina, offset)
+      .bind(...escopoBinds, ...bindsBusca, ...etapas, porPagina, offset)
       .all(),
 
-    // Total de PESSOAS que casam com o filtro — é o que pagina, não linhas.
-    c.env.DB.prepare(`${cte} SELECT COUNT(*) AS total FROM agg`)
+    /*
+     * Pessoas por etapa atual, sem o filtro de etapa — é o que o seletor mostra
+     * ao lado de cada opção. O total da paginação sai daqui (soma das etapas
+     * escolhidas), e não de uma terceira consulta: cada passada por `bruto`
+     * custa leitura no D1.
+     */
+    c.env.DB.prepare(
+      `${cte}
+       SELECT COALESCE(u.etapa, '') AS etapa, COUNT(*) AS pessoas,
+              (SELECT MIN(pe.ordem) FROM processo_etapas pe WHERE pe.etapa_nome = u.etapa) AS ordem
+         FROM ultimo u
+        GROUP BY u.etapa
+        ORDER BY ordem IS NULL, ordem, etapa`,
+    )
       .bind(...escopoBinds, ...bindsBusca)
-      .first<{ total: number }>(),
+      .all<{ etapa: string; pessoas: number; ordem: number | null }>(),
   ]);
 
-  const total = num(totalRes?.total);
+  const porEtapa = totalRes.results.map((r) => ({ etapa: r.etapa, pessoas: num(r.pessoas) }));
+  const escolhidas = new Set(etapas);
+  const total = porEtapa
+    .filter((r) => !escolhidas.size || escolhidas.has(r.etapa))
+    .reduce((t, r) => t + r.pessoas, 0);
   return c.json({
     funil_id: funilIds.length === 1 ? funilIds[0] : null,
     funil_ids: funilIds,
@@ -1614,6 +1639,8 @@ api.get('/funil/leads', async (c) => {
     por_pagina: porPagina,
     paginas: Math.max(1, Math.ceil(total / porPagina)),
     busca: busca || null,
+    etapas,
+    por_etapa: porEtapa,
     itens: pagRes.results,
   });
 });

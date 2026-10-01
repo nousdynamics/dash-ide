@@ -596,7 +596,9 @@ function qsFiltrosCrm({ categoria, oferta, modalidade, unidade, origem, funilId 
 function LeadsDoFunil({ funilId, aoAbrir }) {
   const [busca, setBusca] = useState('');
   const [aplicada, setAplicada] = useState('');
+  const [etapas, setEtapas] = useState([]);
   const [pagina, setPagina] = useState(1);
+  const chaveEtapas = etapas.join('|');
 
   /*
    * `manter`: página e busca trocam a chave mas não o formato da resposta.
@@ -606,8 +608,9 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
   const { dados, atualizando } = useApi(
     `/api/funil/leads?pagina=${pagina}&por_pagina=${POR_PAGINA}` +
       (funilId ? `&funil_id=${encodeURIComponent(funilId)}` : '') +
-      (aplicada.trim() ? `&busca=${encodeURIComponent(aplicada.trim())}` : ''),
-    `leads-${funilId}-${pagina}-${aplicada}`,
+      (aplicada.trim() ? `&busca=${encodeURIComponent(aplicada.trim())}` : '') +
+      (etapas.length ? `&etapa=${etapas.map(encodeURIComponent).join(',')}` : ''),
+    `leads-${funilId}-${pagina}-${aplicada}-${chaveEtapas}`,
     { manter: true },
   );
 
@@ -623,13 +626,25 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
    */
   useEffect(() => {
     setPagina(1);
-  }, [aplicada, funilId]);
+  }, [aplicada, funilId, chaveEtapas]);
+
+  // Etapa escolhida em outro funil não existe neste — começa sem filtro.
+  useEffect(() => {
+    setEtapas([]);
+  }, [funilId]);
 
   if (!dados) return <EsqueletoPessoas n={6} />;
 
   const itens = dados.itens;
 
-  if (!dados.total && !dados.busca) {
+  const filtrando = Boolean(dados.busca) || etapas.length > 0;
+  const opcoesEtapa = (dados.por_etapa ?? []).map((e) => [
+    e.etapa,
+    e.etapa || '(sem etapa)',
+    { detalhe: `${fmtInt(e.pessoas)} pessoa${e.pessoas === 1 ? '' : 's'} nesta etapa agora` },
+  ]);
+
+  if (!dados.total && !filtrando) {
     return (
       <Estado
         icone="pessoas"
@@ -658,9 +673,20 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
                        hover:border-azul-400/50 focus:border-azul-400"
           />
         </label>
-        <span className="text-[13px] text-secundario tnum">
+        <div className="w-full sm:w-[240px]">
+          <MultiSelect
+            rotulo="Etapa atual"
+            rotuloVazio="Todas as etapas"
+            valores={etapas}
+            aoTrocar={setEtapas}
+            opcoes={opcoesEtapa}
+            placeholderBusca="Buscar etapa…"
+          />
+        </div>
+        <span className="text-[13px] text-secundario tnum flex items-center gap-1">
           <strong className="text-primario font-semibold">{fmtInt(dados.total)}</strong> lead(s)
-          {dados.busca ? ' encontrados' : ''}
+          {filtrando ? ' encontrados' : ''}
+          <InfoDica texto="O filtro de etapa usa a etapa atual da pessoa — a do evento mais recente, a mesma que aparece no card." />
           {dados.paginas > 1 && ` · página ${dados.pagina} de ${dados.paginas}`}
         </span>
       </div>
@@ -729,8 +755,15 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
       {!itens.length && (
         <Estado
           icone="busca"
-          titulo="Nenhum lead com esse termo"
+          titulo={etapas.length && !dados.busca ? 'Nenhum lead nesta etapa' : 'Nenhum lead com esse filtro'}
           mensagem="A busca procura em nome, e-mail, código do curso e id, no funil inteiro — não só nesta página."
+          acao={
+            etapas.length > 0 && (
+              <Botao tamanho="sm" variante="secundario" icone="x" onClick={() => setEtapas([])}>
+                Limpar filtro de etapa
+              </Botao>
+            )
+          }
         />
       )}
 
