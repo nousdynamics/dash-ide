@@ -23,6 +23,7 @@ import { ErroGoogleAds, criarAcaoDeUpload, listarAcoesDeUpload } from '../lib/go
 import { ErroGtm, instalarTag, listarContainers } from '../lib/gtm';
 import { conferirPlanilha, criarPlanilha } from '../lib/sheets';
 import type { AppEnv } from '../lib/tipos';
+import { esquecer, memorizar } from '../lib/cacheBorda';
 
 /**
  * Tela de conversão offline.
@@ -102,7 +103,13 @@ conversoes.get('/', async (c) => {
      * O nível é resolvido como no envio: catálogo de cursos primeiro, ofertas
      * depois. Vazio quer dizer "cai no curinga".
      */
-    c.env.DB.prepare(
+    /*
+     * Memorizado por 15 minutos: é a consulta mais cara da tela (~28 mil linhas
+     * por abertura, 60 dias de leads cruzados com os gatilhos) e só muda quando
+     * chega lead ou quando um gatilho é salvo — e salvar gatilho a esquece.
+     */
+    memorizar(c, 'conversoes-volume-por-nivel', 900, () =>
+      c.env.DB.prepare(
       /*
        * LEFT JOIN, não subconsulta correlacionada.
        *
@@ -128,6 +135,7 @@ conversoes.get('/', async (c) => {
         GROUP BY g.evento, nivel
         ORDER BY leads DESC`,
     ).all(),
+    ),
     c.env.DB.prepare(
       `SELECT COUNT(*) AS total,
               SUM(CASE WHEN casado_em IS NOT NULL THEN 1 ELSE 0 END) AS casados,
@@ -682,11 +690,13 @@ conversoes.post('/gatilhos', async (c) => {
     evento: 'gatilho_salvo', etapa: d.etapa_nome, gatilho: d.evento, ativo: d.ativo,
     por: c.get('usuarioEmail') ?? '?',
   }));
+  esquecer(c, 'conversoes-volume-por-nivel');
   return c.json({ ok: true }, 201);
 });
 
 conversoes.delete('/gatilhos/:id', async (c) => {
   await c.env.DB.prepare('DELETE FROM conversao_gatilhos WHERE id = ?').bind(c.req.param('id')).run();
+  esquecer(c, 'conversoes-volume-por-nivel');
   return c.json({ ok: true });
 });
 

@@ -22,6 +22,7 @@ import {
   reordenarEtapasSchema,
 } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
+import { cacheDeBorda } from '../lib/cacheBorda';
 
 /**
  * Agregados do D1 — funil Rubeus / Macro (planilha) e conversas Evolution.
@@ -247,7 +248,7 @@ api.get('/me', (c) => c.json({
 }));
 
 /** GET /api/overview?dias=30 — leads captados e conversas, direto do D1. */
-api.get('/overview', async (c) => {
+api.get('/overview', cacheDeBorda(300), async (c) => {
   const q = periodoQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
   const { dias } = q.data;
@@ -390,7 +391,7 @@ const SQL_CATEGORIA_RESOLVIDA = `COALESCE(
  * GET /api/funil/macro — visão principal da planilha.
  * Visitantes/Leads: RD Marketing. Qualificados+: Rubeus.
  */
-api.get('/funil/macro', async (c) => {
+api.get('/funil/macro', cacheDeBorda(300), async (c) => {
   const q = macroQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
@@ -890,7 +891,7 @@ api.get('/funil/macro', async (c) => {
  * usarem critérios parecidos-mas-diferentes, a conferência vira mais uma
  * dúvida em vez de resposta.
  */
-api.get('/funil/macro/pessoas', async (c) => {
+api.get('/funil/macro/pessoas', cacheDeBorda(300), async (c) => {
   const q = pessoasDaEtapaQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
@@ -1009,7 +1010,7 @@ api.get('/funil/macro/pessoas', async (c) => {
  *
  * A esteira sempre lista as etapas visíveis do catálogo, mesmo zeradas.
  */
-api.get('/funil', async (c) => {
+api.get('/funil', cacheDeBorda(300), async (c) => {
   const q = funilQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
@@ -1264,7 +1265,7 @@ api.get('/funil', async (c) => {
   });
 });
 
-api.get('/funil/serie', async (c) => {
+api.get('/funil/serie', cacheDeBorda(300), async (c) => {
   const q = funilQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
@@ -1661,7 +1662,7 @@ api.get('/funil/lead/:contato_id', async (c) => {
   });
 });
 
-api.get('/catalogo/cursos', async (c) => {
+api.get('/catalogo/cursos', cacheDeBorda(1800), async (c) => {
   /*
    * Lista OFERTAS do Rubeus (turma/campus/semestre), não o curso-pai.
    * É o que aparece no kanban e no filtro do Funil.
@@ -1724,7 +1725,7 @@ api.get('/catalogo/etapas', async (c) => {
 });
 
 /** Valores distintos para popular selects do Funil. */
-api.get('/catalogo/filtros', async (c) => {
+api.get('/catalogo/filtros', cacheDeBorda(3600), async (c) => {
   const [modalidades, unidades, origens, funis] = await Promise.all([
     c.env.DB.prepare(
       `SELECT DISTINCT modalidade AS v FROM leads_etapa

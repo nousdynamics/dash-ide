@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 export class ErroApi extends Error {}
 
@@ -31,10 +31,19 @@ export async function buscar(caminho) {
   }
 }
 
+/*
+ * Depois de uma gravação, as próximas buscas pedem ao Worker que pule o cache
+ * de borda (ver src/lib/cacheBorda.ts). Sem isto, ocultar uma etapa e voltar
+ * ao Funil mostraria a esteira de antes por até cinco minutos.
+ */
+let semCacheAte = 0;
+
 async function buscarSemContar(caminho) {
   let resp;
   try {
-    resp = await fetch(caminho, { headers: { Accept: 'application/json' } });
+    const headers = { Accept: 'application/json' };
+    if (Date.now() < semCacheAte) headers['X-Sem-Cache'] = '1';
+    resp = await fetch(caminho, { headers });
   } catch {
     throw new ErroApi('Não foi possível falar com o servidor. Verifique a conexão.');
   }
@@ -76,9 +85,20 @@ const LIMITE_CACHE = 80;
 let seqBusca = 0;
 let ultimaInvalidacao = 0;
 const seqGuardado = new Map();
+const guardadoEm = new Map();
+
+/*
+ * Resposta com menos de um minuto não é buscada de novo ao abrir a tela.
+ *
+ * Cada busca custa leitura no D1, e a cota diária é o limite real do painel —
+ * foi ela que derrubou todas as telas com 500. Ir e voltar entre Funil e
+ * Visão geral refazia todas as consultas a cada troca de menu.
+ */
+const FRESCO_MS = 60_000;
 function guardar(caminho, dados, seq) {
   if (seq < ultimaInvalidacao || seq < (seqGuardado.get(caminho) ?? 0)) return;
   seqGuardado.set(caminho, seq);
+  guardadoEm.set(caminho, Date.now());
   cache.delete(caminho);
   cache.set(caminho, dados);
   if (cache.size > LIMITE_CACHE) {
@@ -91,6 +111,7 @@ function guardar(caminho, dados, seq) {
 /** Esquece o cache de rotas que começam com `prefixo` — use depois de gravar. */
 export function invalidar(prefixo = '') {
   ultimaInvalidacao = ++seqBusca;
+  semCacheAte = Date.now() + 15_000;
   for (const k of [...cache.keys()]) if (k.startsWith(prefixo)) cache.delete(k);
 }
 
@@ -123,8 +144,18 @@ export function useApi(caminhos, chave, { manter = false } = {}) {
     return { dados: c, carregando: !c, atualizando: Boolean(c), erro: null };
   });
 
+  /*
+   * Só a busca da chave com que a tela abriu pode ser poupada; troca de chave
+   * sempre busca (é assim que as telas recarregam depois de gravar). Compara
+   * a chave em vez de contar execuções porque o StrictMode roda o efeito duas
+   * vezes na montagem.
+   */
+  const ultimaChave = useRef(chave);
+
   useEffect(() => {
     let atual = true;
+    const primeira = ultimaChave.current === chave;
+    ultimaChave.current = chave;
 
     /*
      * Caminho nulo é "não busque ainda", não um erro.
@@ -141,6 +172,10 @@ export function useApi(caminhos, chave, { manter = false } = {}) {
     }
 
     const doCache = lerCache();
+    if (primeira && doCache && lista.every((c) => Date.now() - (guardadoEm.get(c) ?? 0) < FRESCO_MS)) {
+      setEstado({ dados: doCache, carregando: false, atualizando: false, erro: null });
+      return undefined;
+    }
     setEstado((e) => {
       if (doCache) return { dados: doCache, carregando: false, atualizando: true, erro: null };
       if (manter && e.dados) return { ...e, carregando: false, atualizando: true, erro: null };
