@@ -532,9 +532,40 @@ export function Select({ valor, aoTrocar, opcoes, rotulo, className = '' }) {
   );
 }
 
+/** Minúsculas e sem acento — "estetica" acha "Estética". */
+const normalizar = (t) =>
+  String(t ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase();
+
+/** Rótulo com o trecho buscado em negrito — mostra por que a opção apareceu. */
+function Realce({ texto, termo }) {
+  const t = String(texto ?? '');
+  if (!termo) return t;
+  const i = normalizar(t).indexOf(normalizar(termo));
+  if (i < 0) return t;
+  return (
+    <>
+      {t.slice(0, i)}
+      <mark className="bg-azul-400/20 text-inherit rounded-[3px] px-px">{t.slice(i, i + termo.length)}</mark>
+      {t.slice(i + termo.length)}
+    </>
+  );
+}
+
 /**
  * Multi-seleção — um filtro pode somar várias opções (ex.: Pós + Qualificação).
  * `valores` é string[]; vazio = "todas".
+ *
+ * `opcoes` aceita `[valor, rotulo]` ou `[valor, rotulo, { grupo, detalhe, busca }]`:
+ * `grupo` separa a lista em blocos com título, `detalhe` é a linha cinza abaixo
+ * do rótulo e `busca` é texto extra que a digitação também encontra (código,
+ * modalidade) sem precisar aparecer.
+ *
+ * A lista abre em portal, com posição fixa. Dentro da barra de filtros ela
+ * ficava presa no empilhamento do cartão: as abas que vinham depois na página
+ * eram pintadas por cima e cobriam as opções. No `body` não há nada acima dela.
  *
  * A marca de selecionado é um ✓ solto, não uma caixinha: caixa com check lê
  * como checkbox, e o painel não usa checkbox.
@@ -546,116 +577,320 @@ export function MultiSelect({
   rotulo,
   rotuloVazio = 'Todas',
   className = '',
+  buscavel,
+  placeholderBusca = 'Digite para buscar…',
 }) {
   const [aberto, setAberto] = useState(false);
-  const raiz = useRef(null);
+  const [termo, setTermo] = useState('');
+  const [foco, setFoco] = useState(-1);
+  const [pos, setPos] = useState(null);
+  const gatilho = useRef(null);
+  const painel = useRef(null);
+  const campo = useRef(null);
+  const lista = useRef(null);
+  const idLista = useId();
 
-  useEffect(() => {
-    if (!aberto) return undefined;
-    const fechar = (e) => {
-      if (raiz.current && !raiz.current.contains(e.target)) setAberto(false);
-    };
-    const esc = (e) => {
-      if (e.key === 'Escape') setAberto(false);
-    };
-    document.addEventListener('mousedown', fechar);
-    document.addEventListener('keydown', esc);
-    return () => {
-      document.removeEventListener('mousedown', fechar);
-      document.removeEventListener('keydown', esc);
-    };
-  }, [aberto]);
+  const todas = opcoes.filter(([v]) => v !== '' && v !== null && v !== undefined);
+  // Com poucas opções a busca só ocupa espaço; com muitas, é o jeito de achar.
+  const comBusca = buscavel ?? todas.length > 7;
 
   const selecionados = new Set((valores ?? []).map(String).filter(Boolean));
-  const rotulosSel = opcoes
-    .filter(([v]) => v !== '' && selecionados.has(String(v)))
-    .map(([, r]) => r);
+  const rotulosSel = todas.filter(([v]) => selecionados.has(String(v))).map(([, r]) => r);
 
   let texto = rotuloVazio;
   if (rotulosSel.length === 1) texto = rotulosSel[0];
   else if (rotulosSel.length === 2) texto = rotulosSel.join(', ');
   else if (rotulosSel.length > 2) texto = `${rotulosSel.length} selecionados`;
+  // Valor salvo que não está mais entre as opções (ex.: oferta fora da categoria escolhida).
+  else if (selecionados.size > 0) texto = `${selecionados.size} selecionado${selecionados.size > 1 ? 's' : ''}`;
+
+  const t = normalizar(termo.trim());
+  const visiveis = t
+    ? todas.filter(([v, r, extra]) => normalizar(`${r} ${extra?.detalhe ?? ''} ${extra?.busca ?? ''} ${v}`).includes(t))
+    : todas;
+
+  const fechar = useCallback(() => {
+    setAberto(false);
+    setTermo('');
+    setFoco(-1);
+    setPos(null);
+  }, []);
+
+  const medir = useCallback(() => {
+    const g = gatilho.current;
+    if (!g) return;
+    const a = g.getBoundingClientRect();
+    const largura = Math.min(Math.max(a.width, 300), 420, window.innerWidth - 16);
+    const alturaMax = 380;
+    const abaixo = window.innerHeight - a.bottom - 12;
+    const acima = a.top - 12;
+    const paraCima = abaixo < 260 && acima > abaixo;
+    const left = Math.max(8, Math.min(a.left, window.innerWidth - largura - 8));
+    setPos({
+      left,
+      largura,
+      paraCima,
+      top: paraCima ? undefined : a.bottom + 6,
+      bottom: paraCima ? window.innerHeight - a.top + 6 : undefined,
+      altura: Math.min(alturaMax, paraCima ? acima : abaixo),
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (aberto) medir();
+  }, [aberto, medir]);
+
+  useEffect(() => {
+    if (!aberto) return undefined;
+    const aoClicarFora = (e) => {
+      if (gatilho.current?.contains(e.target) || painel.current?.contains(e.target)) return;
+      fechar();
+    };
+    // Acompanha a página em vez de fechar: rolar com a lista aberta é comum em tela longa.
+    window.addEventListener('scroll', medir, true);
+    window.addEventListener('resize', medir);
+    document.addEventListener('pointerdown', aoClicarFora);
+    return () => {
+      window.removeEventListener('scroll', medir, true);
+      window.removeEventListener('resize', medir);
+      document.removeEventListener('pointerdown', aoClicarFora);
+    };
+  }, [aberto, medir, fechar, comBusca]);
+
+  // Foca a busca só depois de medir: antes disso o painel está `hidden` e recusa foco.
+  const medido = Boolean(pos);
+  useEffect(() => {
+    if (aberto && medido && comBusca) campo.current?.focus({ preventScroll: true });
+  }, [aberto, medido, comBusca]);
+
+  // Mantém a opção destacada pelo teclado dentro da área visível da lista.
+  useEffect(() => {
+    if (foco < 0) return;
+    lista.current?.querySelector(`[data-indice="${foco}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [foco]);
 
   const alternar = (v) => {
     const id = String(v);
-    if (!id) {
-      aoTrocar([]);
-      return;
-    }
     const prox = new Set(selecionados);
     if (prox.has(id)) prox.delete(id);
     else prox.add(id);
     aoTrocar([...prox]);
   };
 
+  const selecionarVisiveis = () => {
+    const prox = new Set(selecionados);
+    visiveis.forEach(([v]) => prox.add(String(v)));
+    aoTrocar([...prox]);
+  };
+
+  const aoTeclar = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      fechar();
+      gatilho.current?.focus();
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setFoco((f) => Math.min(visiveis.length - 1, f + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFoco((f) => Math.max(0, f - 1));
+    } else if (e.key === 'Enter' && foco >= 0 && visiveis[foco]) {
+      e.preventDefault();
+      alternar(visiveis[foco][0]);
+    }
+  };
+
   const ativo = selecionados.size > 0;
 
+  // Agrupa preservando a ordem em que os grupos aparecem nas opções.
+  const blocos = [];
+  visiveis.forEach((o, i) => {
+    const g = o[2]?.grupo ?? '';
+    let b = blocos[blocos.length - 1];
+    if (!b || b.grupo !== g) {
+      b = blocos.find((x) => x.grupo === g);
+      if (!b) {
+        b = { grupo: g, itens: [] };
+        blocos.push(b);
+      }
+    }
+    b.itens.push([o, i]);
+  });
+
   return (
-    <div ref={raiz} className={`relative min-w-0 ${className}`}>
+    <div className={`relative min-w-0 ${className}`}>
       <button
+        ref={gatilho}
         type="button"
         aria-label={rotulo}
         aria-expanded={aberto}
         aria-haspopup="listbox"
-        onClick={() => setAberto((a) => !a)}
-        className={`w-full min-w-0 flex items-center justify-between gap-1 text-primario
+        aria-controls={aberto ? idLista : undefined}
+        onClick={() => (aberto ? fechar() : setAberto(true))}
+        onKeyDown={(e) => {
+          if (!aberto && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            setAberto(true);
+          } else if (aberto) aoTeclar(e);
+        }}
+        className={`w-full min-w-0 flex items-center justify-between gap-1.5 text-primario
                    border rounded-[9px] px-2.5 py-[6px] text-[13px] font-sans
                    cursor-pointer text-left transition-colors
+                   ${aberto ? 'ring-2 ring-azul-400/30 border-azul-400/60' : ''}
                    ${ativo ? 'bg-azul-50 border-azul-400/50' : 'bg-superficie border-borda-forte hover:bg-superficie-hover'}`}
       >
-        <span className="truncate">{texto}</span>
-        <Icone
-          nome="chevronBaixo"
-          className={`w-[14px] h-[14px] text-tenue transition-transform duration-200 ${aberto ? 'rotate-180' : ''}`}
-        />
+        <span className={`truncate ${ativo ? 'font-medium text-azul-700' : ''}`}>{texto}</span>
+        <span className="flex items-center gap-1 shrink-0">
+          {selecionados.size > 1 && (
+            <span className="text-[11.5px] tnum px-1.5 rounded-full bg-azul-600 text-white">{selecionados.size}</span>
+          )}
+          <Icone
+            nome="chevronBaixo"
+            className={`w-[14px] h-[14px] text-tenue transition-transform duration-200 ${aberto ? 'rotate-180' : ''}`}
+          />
+        </span>
       </button>
-      {aberto && (
-        <div
-          role="listbox"
-          aria-multiselectable="true"
-          aria-label={rotulo}
-          className="absolute z-40 left-0 min-w-full w-max max-w-[320px] mt-1 max-h-64 overflow-auto rounded-[10px]
-                     border border-borda-forte bg-superficie shadow-[var(--shadow-flutuante)] p-1 animate-escala origin-top"
-        >
-          <button
-            type="button"
-            role="option"
-            aria-selected={selecionados.size === 0}
-            onClick={() => {
-              aoTrocar([]);
-              setAberto(false);
+
+      {aberto &&
+        createPortal(
+          <div
+            ref={painel}
+            onKeyDown={aoTeclar}
+            style={{
+              position: 'fixed',
+              left: pos?.left ?? -9999,
+              top: pos?.top,
+              bottom: pos?.bottom,
+              width: pos?.largura ?? 300,
+              maxHeight: pos?.altura ?? 380,
+              visibility: pos ? 'visible' : 'hidden',
             }}
-            className={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-[7px] text-[13px] border-0 cursor-pointer
-              ${selecionados.size === 0 ? 'bg-azul-50 text-azul-700 font-medium' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
+            className={`z-[95] flex flex-col rounded-[12px] border border-borda-forte bg-superficie
+                        shadow-[var(--shadow-flutuante)] overflow-hidden animate-escala
+                        ${pos?.paraCima ? 'origin-bottom' : 'origin-top'}`}
           >
-            <span className="w-4 shrink-0 text-azul-600">
-              {selecionados.size === 0 && <Icone nome="check" className="w-4 h-4" traco={2.2} />}
-            </span>
-            {rotuloVazio}
-          </button>
-          {opcoes
-            .filter(([v]) => v !== '')
-            .map(([v, r]) => {
-              const on = selecionados.has(String(v));
-              return (
+            {comBusca && (
+              <div className="p-2 border-b border-borda">
+                <div className="relative">
+                  <Icone nome="busca" className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-tenue pointer-events-none" />
+                  <input
+                    ref={campo}
+                    type="search"
+                    value={termo}
+                    onChange={(e) => {
+                      setTermo(e.target.value);
+                      setFoco(0);
+                    }}
+                    placeholder={placeholderBusca}
+                    aria-label={`Buscar em ${rotulo}`}
+                    aria-controls={idLista}
+                    className="w-full bg-elevado border border-borda rounded-[8px] pl-8 pr-2 py-[7px] text-[13px]
+                               outline-none focus:border-azul-400/60 focus:bg-superficie"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-borda text-[12.5px] text-secundario">
+              <span className="tnum">
+                {t ? `${visiveis.length} de ${todas.length}` : `${todas.length} opç${todas.length === 1 ? 'ão' : 'ões'}`}
+                {ativo && <> · <strong className="text-azul-700 font-semibold">{selecionados.size} marcada{selecionados.size > 1 ? 's' : ''}</strong></>}
+              </span>
+              <span className="flex items-center gap-1">
+                {visiveis.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={selecionarVisiveis}
+                    className="px-1.5 py-0.5 rounded-[6px] border-0 bg-transparent text-azul-600 hover:bg-azul-50 cursor-pointer font-medium"
+                  >
+                    {t ? 'Marcar estes' : 'Marcar todas'}
+                  </button>
+                )}
+                {ativo && (
+                  <button
+                    type="button"
+                    onClick={() => aoTrocar([])}
+                    className="px-1.5 py-0.5 rounded-[6px] border-0 bg-transparent text-secundario hover:text-perigo hover:bg-perigo/8 cursor-pointer font-medium"
+                  >
+                    Limpar
+                  </button>
+                )}
+              </span>
+            </div>
+
+            <div
+              ref={lista}
+              id={idLista}
+              role="listbox"
+              aria-multiselectable="true"
+              aria-label={rotulo}
+              className="overflow-y-auto overscroll-contain p-1 flex-1 min-h-0"
+            >
+              {!t && (
                 <button
-                  key={v}
                   type="button"
                   role="option"
-                  aria-selected={on}
-                  onClick={() => alternar(v)}
+                  aria-selected={!ativo}
+                  onClick={() => {
+                    aoTrocar([]);
+                    fechar();
+                  }}
                   className={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-[7px] text-[13px] border-0 cursor-pointer
-                    ${on ? 'bg-azul-50 text-primario font-medium' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
+                    ${!ativo ? 'bg-azul-50 text-azul-700 font-medium' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
                 >
-                  <span className="w-4 shrink-0 text-azul-600">
-                    {on && <Icone nome="check" className="w-4 h-4" traco={2.2} />}
-                  </span>
-                  <span className="truncate">{r}</span>
+                  <span className="w-4 shrink-0 text-azul-600">{!ativo && <Icone nome="check" className="w-4 h-4" traco={2.2} />}</span>
+                  {rotuloVazio}
                 </button>
-              );
-            })}
-        </div>
-      )}
+              )}
+
+              {visiveis.length === 0 && (
+                <div className="px-3 py-6 text-center text-[13px] text-secundario">
+                  Nada encontrado para “{termo.trim()}”.
+                </div>
+              )}
+
+              {blocos.map((b) => (
+                <div key={b.grupo || '_'} role={b.grupo ? 'group' : undefined} aria-label={b.grupo || undefined}>
+                  {b.grupo && (
+                    <div className="sticky top-0 z-[1] bg-superficie/95 backdrop-blur-sm px-2.5 pt-2 pb-1 text-[11.5px] font-semibold uppercase tracking-[0.06em] text-tenue">
+                      {b.grupo} <span className="font-normal normal-case tracking-normal">· {b.itens.length}</span>
+                    </div>
+                  )}
+                  {b.itens.map(([[v, r, extra], i]) => {
+                    const on = selecionados.has(String(v));
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        role="option"
+                        aria-selected={on}
+                        data-indice={i}
+                        onClick={() => alternar(v)}
+                        onMouseEnter={() => setFoco(i)}
+                        className={`w-full flex items-start gap-2 text-left px-2.5 py-1.5 rounded-[7px] text-[13px] border-0 cursor-pointer
+                          ${foco === i ? 'bg-superficie-hover' : on ? 'bg-azul-50' : 'bg-transparent'}
+                          ${on ? 'text-primario font-medium' : 'text-secundario hover:text-primario'}`}
+                      >
+                        <span className="w-4 shrink-0 text-azul-600 mt-px">{on && <Icone nome="check" className="w-4 h-4" traco={2.2} />}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block leading-snug break-words">
+                            <Realce texto={r} termo={termo.trim()} />
+                          </span>
+                          {extra?.detalhe && (
+                            <span className="block text-[12px] text-tenue font-normal leading-snug mt-0.5">
+                              <Realce texto={extra.detalhe} termo={termo.trim()} />
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

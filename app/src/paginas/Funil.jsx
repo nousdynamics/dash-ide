@@ -96,10 +96,13 @@ function Variacao({ pct, abs }) {
   );
 }
 
-function FiltroBloco({ titulo, children }) {
+function FiltroBloco({ titulo, dica, children }) {
   return (
     <div className="min-w-0 flex flex-col gap-1">
-      <div className="text-[12px] font-medium text-secundario">{titulo}</div>
+      <div className="text-[12.5px] font-medium text-secundario flex items-center gap-1">
+        {titulo}
+        <InfoDica texto={dica} tamanho="w-[13px] h-[13px]" />
+      </div>
       {children}
     </div>
   );
@@ -752,65 +755,114 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
  */
 function FiltrosCrm({ filtrosCrm, aoTrocar, categorias, ofertas, opcoesFiltro }) {
   const funis = opcoesFiltro?.funis ?? [];
+  const rotuloCategoria = Object.fromEntries(categorias.map((c) => [c.id, c.rotulo]));
+
+  /*
+   * Oferta é a lista longa — centenas de turmas com nome quase igual
+   * ("2023.2 | Graduação Psicologia", "2024.1 | Graduação Psicologia"). O que
+   * a torna usável:
+   *   - agrupada pela categoria; sem categoria cadastrada, pelo nível de ensino
+   *     que o Rubeus manda — boa parte das ofertas ainda não tem categoria, e
+   *     um grupo único "Sem categoria" com tudo dentro não separa nada;
+   *   - semestre mais recente primeiro dentro do grupo: é a turma que se procura;
+   *   - modalidade e código como linha de detalhe, e ambos entram na busca;
+   *   - com Categoria escolhida, só as ofertas dela. Se nenhuma oferta casar
+   *     (categoria ainda não atribuída), a lista não some — mostra todas.
+   *     Oferta já marcada fica sempre, para poder desmarcar.
+   */
+  const catSel = new Set(filtrosCrm.categoria ?? []);
+  const ofertaSel = new Set((filtrosCrm.oferta ?? []).map(String));
+  const comCodigo = ofertas.filter((o) => o.codigo);
+  const daCategoria = catSel.size ? comCodigo.filter((o) => catSel.has(o.categoria)) : [];
+  const recortouPorCategoria = daCategoria.length > 0;
+  const grupoDe = (o) => rotuloCategoria[o.categoria] || o.nivel_ensino || 'Outras';
+  const opcoesOferta = comCodigo
+    .filter((o) => !recortouPorCategoria || catSel.has(o.categoria) || ofertaSel.has(String(o.codigo)))
+    .sort(
+      (x, y) =>
+        grupoDe(x).localeCompare(grupoDe(y), 'pt-BR') ||
+        String(y.nome || '').localeCompare(String(x.nome || ''), 'pt-BR'),
+    )
+    .map((o) => [
+      String(o.codigo),
+      o.nome || o.codigo,
+      {
+        grupo: grupoDe(o),
+        detalhe: [o.modalidade, `cód. ${o.codigo}`].filter(Boolean).join(' · '),
+        busca: `${o.curso_codigo ?? ''} ${o.nivel_ensino ?? ''}`,
+      },
+    ]);
+
+  const opcoesProcesso = funis.map((f) => [
+    String(f.id),
+    f.nome,
+    { detalhe: `${fmtInt(f.leads)} leads no período`, busca: f.processo_id },
+  ]);
+
+  const campos = [
+    { campo: 'categoria', titulo: 'Categoria', vazio: 'Todas', opcoes: categorias.map((c) => [c.id, c.rotulo]) },
+    {
+      campo: 'oferta',
+      titulo: 'Oferta',
+      rotulo: 'Oferta de curso',
+      vazio: recortouPorCategoria ? 'Todas da categoria' : 'Todas',
+      opcoes: opcoesOferta,
+      busca: 'Curso, semestre, código…',
+      dica: 'Com uma categoria escolhida, a lista mostra só as ofertas dela. Digite parte do nome, o semestre (2024.1) ou o código.',
+    },
+    { campo: 'modalidade', titulo: 'Modalidade', vazio: 'Todas', opcoes: (opcoesFiltro?.modalidades ?? []).map((m) => [m, m]) },
+    { campo: 'unidade', titulo: 'Unidade', vazio: 'Todas', opcoes: (opcoesFiltro?.unidades ?? []).map((u) => [u, u]) },
+    { campo: 'origem', titulo: 'Origem', vazio: 'Todas', opcoes: (opcoesFiltro?.origens ?? []).map((o) => [o, o]) },
+    { campo: 'funilId', titulo: 'Processo / funil', vazio: 'Todos', opcoes: opcoesProcesso, busca: 'Nome do processo…' },
+  ];
+
+  // Cada valor marcado vira um chip removível — o recorte inteiro legível numa linha.
+  const chips = campos.flatMap(({ campo, titulo, opcoes }) => {
+    const nomes = new Map(opcoes.map(([v, r]) => [String(v), r]));
+    return (filtrosCrm[campo] ?? []).map((v) => ({ campo, titulo, v: String(v), nome: nomes.get(String(v)) ?? v }));
+  });
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-      <FiltroBloco titulo="Categoria">
-        <MultiSelect
-          rotulo="Categoria"
-          rotuloVazio="Todas"
-          valores={filtrosCrm.categoria}
-          aoTrocar={(v) => aoTrocar('categoria', v)}
-          opcoes={categorias.map((c) => [c.id, c.rotulo])}
-        />
-      </FiltroBloco>
-      <FiltroBloco titulo="Oferta">
-        <MultiSelect
-          rotulo="Oferta de curso"
-          rotuloVazio="Todas"
-          valores={filtrosCrm.oferta}
-          aoTrocar={(v) => aoTrocar('oferta', v)}
-          opcoes={ofertas
-            .filter((o) => o.codigo)
-            .slice(0, 400)
-            .map((o) => [String(o.codigo), o.nome || o.codigo])}
-        />
-      </FiltroBloco>
-      <FiltroBloco titulo="Modalidade">
-        <MultiSelect
-          rotulo="Modalidade"
-          rotuloVazio="Todas"
-          valores={filtrosCrm.modalidade}
-          aoTrocar={(v) => aoTrocar('modalidade', v)}
-          opcoes={(opcoesFiltro?.modalidades ?? []).map((m) => [m, m])}
-        />
-      </FiltroBloco>
-      <FiltroBloco titulo="Unidade">
-        <MultiSelect
-          rotulo="Unidade"
-          rotuloVazio="Todas"
-          valores={filtrosCrm.unidade}
-          aoTrocar={(v) => aoTrocar('unidade', v)}
-          opcoes={(opcoesFiltro?.unidades ?? []).map((u) => [u, u])}
-        />
-      </FiltroBloco>
-      <FiltroBloco titulo="Origem">
-        <MultiSelect
-          rotulo="Origem"
-          rotuloVazio="Todas"
-          valores={filtrosCrm.origem}
-          aoTrocar={(v) => aoTrocar('origem', v)}
-          opcoes={(opcoesFiltro?.origens ?? []).map((o) => [o, o])}
-        />
-      </FiltroBloco>
-      <FiltroBloco titulo="Processo / funil">
-        <MultiSelect
-          rotulo="Processo / funil"
-          rotuloVazio="Todos"
-          valores={filtrosCrm.funilId}
-          aoTrocar={(v) => aoTrocar('funilId', v)}
-          opcoes={funis.map((f) => [String(f.id), `${f.nome} (${fmtInt(f.leads)})`])}
-        />
-      </FiltroBloco>
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+        {campos.map((c) => (
+          <FiltroBloco key={c.campo} titulo={c.titulo} dica={c.dica}>
+            <MultiSelect
+              rotulo={c.rotulo || c.titulo}
+              rotuloVazio={c.vazio}
+              valores={filtrosCrm[c.campo]}
+              aoTrocar={(v) => aoTrocar(c.campo, v)}
+              opcoes={c.opcoes}
+              placeholderBusca={c.busca}
+            />
+          </FiltroBloco>
+        ))}
+      </div>
+
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 animate-surgir">
+          <span className="text-[12.5px] text-secundario mr-1">Filtrando por</span>
+          {chips.map((c) => (
+            <span
+              key={`${c.campo}-${c.v}`}
+              className="inline-flex items-center gap-1 max-w-full pl-2.5 pr-1 py-[3px] rounded-full bg-azul-50 border border-azul-400/30 text-[12.5px] text-azul-700 animate-escala"
+            >
+              <span className="text-azul-700/70">{c.titulo}:</span>
+              <Dica conteudo={c.nome} className="min-w-0">
+                <span className="truncate max-w-[220px] font-medium">{c.nome}</span>
+              </Dica>
+              <button
+                type="button"
+                aria-label={`Remover ${c.titulo}: ${c.nome}`}
+                onClick={() => aoTrocar(c.campo, (filtrosCrm[c.campo] ?? []).filter((x) => String(x) !== c.v))}
+                className="w-5 h-5 shrink-0 rounded-full border-0 bg-transparent text-azul-700/70 hover:bg-azul-400/20 hover:text-azul-700 flex items-center justify-center cursor-pointer"
+              >
+                <Icone nome="x" className="w-3 h-3" traco={2.4} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
