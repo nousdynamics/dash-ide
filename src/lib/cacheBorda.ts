@@ -25,15 +25,41 @@ import type { AppEnv } from './tipos';
  */
 const HOST_INTERNO = 'https://cache-borda.painel.interno';
 
-function chaveDe(url: string, prefixo = ''): string {
+function chaveDe(url: string, geracao: string): string {
   const u = new URL(url);
-  return `${HOST_INTERNO}/${prefixo}${u.pathname}${u.search}`;
+  return `${HOST_INTERNO}/g${geracao}${u.pathname}${u.search}`;
+}
+
+/*
+ * Geração do cache: entra na chave de toda resposta guardada.
+ *
+ * Ocultar ou reativar uma etapa muda a esteira do Funil, mas a resposta antiga
+ * ficava guardada por cinco minutos — quem reativava uma etapa e abria o Funil
+ * não a via voltar. Trocar a geração torna todas as chaves antigas
+ * inalcançáveis de uma vez, sem precisar saber quais combinações de período e
+ * filtro estão guardadas. As entradas velhas expiram sozinhas.
+ */
+const CHAVE_GERACAO = `${HOST_INTERNO}/geracao`;
+
+async function geracaoAtual(): Promise<string> {
+  const r = await caches.default.match(CHAVE_GERACAO);
+  return r ? await r.text() : '0';
+}
+
+/** Descarta tudo o que o cache de borda guardou — chame depois de gravar o que as telas agregam. */
+export function invalidarCacheDeBorda(c: Context<AppEnv>): Promise<void> {
+  const nova = caches.default.put(
+    CHAVE_GERACAO,
+    new Response(String(Date.now()), { headers: { 'Cache-Control': 'max-age=31536000' } }),
+  );
+  c.executionCtx.waitUntil(nova);
+  return nova;
 }
 
 export function cacheDeBorda(segundos: number): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (c.req.method !== 'GET') return next();
-    const chave = chaveDe(c.req.url);
+    const chave = chaveDe(c.req.url, await geracaoAtual());
     const cache = caches.default;
 
     if (c.req.header('X-Sem-Cache') !== '1') {

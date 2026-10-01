@@ -22,7 +22,7 @@ import {
   reordenarEtapasSchema,
 } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
-import { cacheDeBorda } from '../lib/cacheBorda';
+import { cacheDeBorda, invalidarCacheDeBorda } from '../lib/cacheBorda';
 
 /**
  * Agregados do D1 — funil Rubeus / Macro (planilha) e conversas Evolution.
@@ -1840,6 +1840,8 @@ api.patch('/catalogo/etapas', exigirAdmin, async (c) => {
   ).bind(...binds).run();
 
   if (!meta.changes) return c.json({ erro: 'etapa_nao_encontrada' }, 404);
+  // Visibilidade e macro mudam a esteira do Funil: a resposta guardada fica velha.
+  await invalidarCacheDeBorda(c);
   return c.json({ ok: true });
 });
 
@@ -1856,6 +1858,7 @@ api.put('/catalogo/etapas/ordem', exigirAdmin, async (c) => {
     ).bind(item.ordem, r.data.processo_id, item.etapa_nome),
   );
   await c.env.DB.batch(stmts);
+  await invalidarCacheDeBorda(c);
   return c.json({ ok: true, atualizados: stmts.length });
 });
 
@@ -1875,6 +1878,7 @@ api.post('/admin/rubeus/sync', exigirAdmin, async (c) => {
      */
     const limite = Math.min(200, Math.max(1, Number(c.req.query('limite')) || 60));
     const enriquecidos = await enriquecerCursoDosLeads(c.env, c.env.DB, limite);
+    await invalidarCacheDeBorda(c);
     return c.json({ ok: true, cursos, etapas, enriquecidos });
   } catch (e) {
     const status = e instanceof ErroRubeus ? e.status : 502;
@@ -1908,6 +1912,7 @@ api.post('/admin/rubeus/resgatar-cursos', exigirAdmin, async (c) => {
           AND curso_consultado_em IS NULL
           AND contato_id IS NOT NULL AND contato_id != ''`,
     ).first();
+    await invalidarCacheDeBorda(c);
     return c.json({ ok: true, ...resultado, restantes: num(restam?.n) });
   } catch (e) {
     const status = e instanceof ErroRubeus ? e.status : 502;
