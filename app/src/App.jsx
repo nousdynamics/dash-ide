@@ -1,8 +1,8 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { buscar } from './lib/api';
+import { buscar, useCarregandoGlobal } from './lib/api';
 import { iniciais } from './lib/formato';
 import { filtroPadrao } from './lib/periodo';
-import { Esqueleto } from './componentes/base';
+import { Dica, EsqueletoPagina, Icone } from './componentes/base';
 
 /*
  * Uma tela por chunk. O peso está concentrado na Visão geral, que é a única
@@ -77,18 +77,18 @@ const ICONES = {
 };
 
 const PAGINAS = [
-  { id: 'overview', nome: 'Visão geral', curto: 'Visão' },
-  { id: 'funil', nome: 'Funil de vendas', curto: 'Funil' },
-  { id: 'campanhas', nome: 'Campanhas', curto: 'Camp.' },
-  { id: 'conversas', nome: 'Conversas', curto: 'Chat' },
+  { id: 'overview', nome: 'Visão geral', curto: 'Visão', dica: 'Investimento, conversões e custo do Google Ads, lado a lado com os leads do Rubeus' },
+  { id: 'funil', nome: 'Funil de vendas', curto: 'Funil', dica: 'Quantos leads chegam a cada etapa do processo seletivo e onde eles param' },
+  { id: 'campanhas', nome: 'Campanhas', curto: 'Camp.', dica: 'Desempenho de cada campanha, conjunto e anúncio' },
+  { id: 'conversas', nome: 'Conversas', curto: 'Chat', dica: 'Conversas de WhatsApp e tempo de resposta do atendimento' },
   // Emite credencial de webhook: só aparece para quem administra. Esconder o
   // item é conveniência — quem digitar #/webhooks na mão continua batendo no
   // 403 do servidor, que é onde a permissão de verdade mora.
-  { id: 'webhooks', nome: 'Funis e webhooks', curto: 'Funis', admin: true },
+  { id: 'webhooks', nome: 'Funis e webhooks', curto: 'Funis', admin: true, dica: 'Endereços que recebem eventos do Rubeus e o estado de cada funil' },
   // Decide o que o Google Ads recebe, e o que ele recebe muda o lance das
   // campanhas. Mesmo segundo nível de acesso dos webhooks, pelo mesmo motivo:
   // ver o resultado não é a mesma autorização que mexer no que o gera.
-  { id: 'conversoes', nome: 'Conversões Ads', curto: 'Conv.', admin: true },
+  { id: 'conversoes', nome: 'Conversões Ads', curto: 'Conv.', admin: true, dica: 'Regras que decidem quais eventos viram conversão no Google Ads' },
   /*
    * Subpágina de Conversões Ads: o resultado, não a configuração.
    *
@@ -96,10 +96,42 @@ const PAGINAS = [
    * rota é de primeiro nível como as outras, porque hash aninhado obrigaria o
    * roteador a entender caminho, e ele existe justamente para não precisar.
    */
-  { id: 'conversoes-google', nome: 'Google Conversões', curto: 'Envios', admin: true, pai: 'conversoes' },
+  { id: 'conversoes-google', nome: 'Google Conversões', curto: 'Envios', admin: true, pai: 'conversoes', dica: 'O que foi enviado ao Google Ads e o que ele aceitou' },
   // Mapa macro + ordem + ocultar etapas ruidosas — alimenta Macro e Detalhe.
-  { id: 'etapas', nome: 'Etapas do processo', curto: 'Etapas', admin: true },
+  { id: 'etapas', nome: 'Etapas do processo', curto: 'Etapas', admin: true, dica: 'Ordem e agrupamento das etapas que alimentam o funil' },
 ];
+
+/*
+ * Grupos do menu. Separar o que se lê do que se configura: quem abre o painel
+ * para ver número não precisa atravessar a lista de ajustes para achar a tela.
+ */
+const GRUPOS = [
+  { id: 'analise', nome: 'Análise', ids: ['overview', 'funil', 'campanhas', 'conversas'] },
+  { id: 'config', nome: 'Configuração', ids: ['webhooks', 'conversoes', 'conversoes-google', 'etapas'] },
+];
+
+/** Fio no topo da janela enquanto há busca em andamento — aparece só depois de 250ms. */
+function BarraProgresso() {
+  const ativo = useCarregandoGlobal();
+  const [visivel, setVisivel] = useState(false);
+  useEffect(() => {
+    if (!ativo) {
+      setVisivel(false);
+      return undefined;
+    }
+    const t = setTimeout(() => setVisivel(true), 250);
+    return () => clearTimeout(t);
+  }, [ativo]);
+  return (
+    <div
+      aria-hidden="true"
+      className={`fixed top-0 inset-x-0 h-[3px] z-[90] overflow-hidden pointer-events-none transition-opacity duration-300
+        ${visivel ? 'opacity-100' : 'opacity-0'}`}
+    >
+      <div className="h-full w-full bg-gradient-to-r from-transparent via-azul-400 to-transparent animate-[progresso_1.1s_ease-in-out_infinite]" />
+    </div>
+  );
+}
 
 const CHAVE_RETRAIDA = 'painel-ide:sidebar-retraida';
 
@@ -120,6 +152,76 @@ function useRota() {
     return () => window.removeEventListener('hashchange', aoMudar);
   }, []);
   return rota;
+}
+
+/**
+ * Barra inferior do celular.
+ *
+ * Oito ícones não cabem em 390px sem virar alvo de toque de 40px. As telas de
+ * análise ficam fixas; as de configuração moram atrás de "Mais", que é o que
+ * se abre de vez em quando.
+ */
+function NavMobile({ visiveis, rota }) {
+  const [mais, setMais] = useState(false);
+  const fixas = visiveis.filter((p) => GRUPOS[0].ids.includes(p.id));
+  const extras = visiveis.filter((p) => !GRUPOS[0].ids.includes(p.id));
+  const extraAtiva = extras.some((p) => p.id === rota);
+  const ir = (id) => {
+    location.hash = `#/${id}`;
+    setMais(false);
+  };
+  const item = (ativo) =>
+    `relative flex-1 flex flex-col items-center gap-1 bg-transparent border-0 cursor-pointer text-[11px] font-medium py-1 transition-colors
+     ${ativo ? 'text-azul-600' : 'text-tenue'}`;
+  return (
+    <>
+      {mais && (
+        <div className="md:hidden fixed inset-0 z-20 bg-primario/30 backdrop-blur-[2px] animate-aparecer" onClick={() => setMais(false)}>
+          <div
+            className="absolute bottom-[calc(72px+env(safe-area-inset-bottom))] inset-x-3 rounded-[16px] bg-superficie border border-borda shadow-[var(--shadow-flutuante)] p-2 animate-escala origin-bottom"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-3 pt-1 pb-2 text-[11.5px] font-semibold uppercase tracking-[0.08em] text-tenue">Configuração</div>
+            {extras.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => ir(p.id)}
+                aria-current={p.id === rota ? 'page' : 'false'}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-[10px] border-0 text-left text-[14px] font-medium cursor-pointer
+                  ${p.id === rota ? 'bg-azul-50 text-azul-700' : 'bg-transparent text-primario hover:bg-superficie-hover'}`}
+              >
+                {ICONES[p.id]}
+                <span className="flex-1">{p.nome}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <nav
+        className="md:hidden fixed bottom-0 inset-x-0 z-30 flex bg-superficie/90 backdrop-blur-md border-t border-borda px-2 pt-2 pb-[calc(10px+env(safe-area-inset-bottom))]"
+        aria-label="Navegação"
+      >
+        {fixas.map((p) => {
+          const ativo = p.id === rota;
+          return (
+            <button key={p.id} type="button" aria-current={ativo ? 'page' : 'false'} onClick={() => ir(p.id)} className={item(ativo)}>
+              {ativo && <span aria-hidden="true" className="absolute -top-2 w-8 h-[3px] rounded-full bg-azul-600 animate-aparecer" />}
+              {ICONES[p.id]}
+              {p.curto}
+            </button>
+          );
+        })}
+        {extras.length > 0 && (
+          <button type="button" aria-expanded={mais} onClick={() => setMais((m) => !m)} className={item(extraAtiva || mais)}>
+            {extraAtiva && <span aria-hidden="true" className="absolute -top-2 w-8 h-[3px] rounded-full bg-azul-600" />}
+            <Icone nome="engrenagem" className="w-[18px] h-[18px]" />
+            Mais
+          </button>
+        )}
+      </nav>
+    </>
+  );
 }
 
 export default function App() {
@@ -159,17 +261,18 @@ export default function App() {
   // O menu mostra só o que a pessoa pode abrir. A rota em si continua existindo:
   // quem digitar #/webhooks vê a tela pedir permissão, não um menu mentiroso.
   const visiveis = PAGINAS.filter((p) => !p.admin || admin);
-  const atual = PAGINAS.find((p) => p.id === rota);
   const props = { filtro, setFiltro };
 
   return (
+    <>
+    <BarraProgresso />
     <div
-      className={`min-h-screen md:grid ${retraida ? 'md:grid-cols-[72px_1fr]' : 'md:grid-cols-[208px_1fr]'} transition-[grid-template-columns] duration-200 motion-reduce:transition-none`}
+      className={`min-h-screen md:grid ${retraida ? 'md:grid-cols-[72px_1fr]' : 'md:grid-cols-[232px_1fr]'} transition-[grid-template-columns] duration-200 motion-reduce:transition-none`}
     >
-      <aside className="hidden md:flex sticky top-0 h-screen flex-col gap-6 bg-elevado border-r border-borda px-3 py-5">
+      <aside className="hidden md:flex sticky top-0 h-screen flex-col gap-7 bg-elevado border-r border-borda px-3 py-5 overflow-y-auto">
         <div className={`flex items-center gap-2 ${retraida ? 'flex-col' : 'justify-between'}`}>
           {retraida ? (
-            <div className="w-8 h-8 rounded-[8px] bg-azul-600 text-white flex items-center justify-center font-bold text-[13px]">
+            <div className="w-9 h-9 rounded-[10px] bg-gradient-to-br from-azul-600 to-azul-400 text-white flex items-center justify-center font-bold text-[12px] shadow-[0_4px_12px_rgba(43,87,151,0.3)]">
               IDE
             </div>
           ) : (
@@ -179,58 +282,100 @@ export default function App() {
             type="button"
             onClick={alternar}
             aria-expanded={!retraida}
-            title={retraida ? 'Expandir menu' : 'Retrair menu'}
             aria-label={retraida ? 'Expandir menu' : 'Retrair menu'}
             className="w-7 h-7 shrink-0 rounded-[8px] border border-borda bg-superficie text-secundario
-                       flex items-center justify-center cursor-pointer text-[13px] hover:bg-superficie-hover hover:text-primario"
+                       flex items-center justify-center cursor-pointer hover:bg-superficie-hover hover:text-primario transition-colors"
           >
-            {retraida ? '»' : '«'}
+            <Icone nome={retraida ? 'chevronDireita' : 'chevronEsquerda'} className="w-4 h-4" />
           </button>
         </div>
 
-        <nav className="flex flex-col gap-1" aria-label="Navegação principal">
-          {visiveis.map((p) => {
-            const ativo = p.id === rota;
+        <nav className="flex flex-col gap-5" aria-label="Navegação principal">
+          {GRUPOS.map((g) => {
+            const itens = visiveis.filter((p) => g.ids.includes(p.id));
+            if (!itens.length) return null;
             return (
-              <button
-                key={p.id}
-                type="button"
-                title={p.nome}
-                aria-current={ativo ? 'page' : 'false'}
-                onClick={() => {
-                  location.hash = `#/${p.id}`;
-                }}
-                className={`flex items-center rounded-[8px] py-[7px] text-[13px] font-medium cursor-pointer border-0 w-full text-left
-                  ${retraida ? 'justify-center px-0' : p.pai ? 'pl-8 pr-3' : 'px-3'}
-                  ${ativo ? 'bg-azul-600 text-white' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
-              >
-                <span className={`flex items-center ${retraida ? 'gap-0' : 'gap-[10px]'} min-w-0`}>
-                  {ICONES[p.id]}
-                  {!retraida && <span className="truncate">{p.nome}</span>}
-                </span>
-              </button>
+              <div key={g.id} className="flex flex-col gap-1">
+                {retraida ? (
+                  <span aria-hidden="true" className="h-px bg-borda mx-2 mb-1 first:hidden" />
+                ) : (
+                  <span className="px-3 mb-1 text-[11.5px] font-semibold uppercase tracking-[0.08em] text-tenue">
+                    {g.nome}
+                  </span>
+                )}
+                {itens.map((p) => {
+                  const ativo = p.id === rota;
+                  const botao = (
+                    <button
+                      key={p.id}
+                      type="button"
+                      aria-label={retraida ? p.nome : undefined}
+                      aria-current={ativo ? 'page' : 'false'}
+                      onClick={() => {
+                        location.hash = `#/${p.id}`;
+                      }}
+                      className={`group relative flex items-center rounded-[10px] py-[8px] text-[13.5px] font-medium cursor-pointer border-0 w-full text-left
+                        transition-[background-color,color,box-shadow] duration-200
+                        ${retraida ? 'justify-center px-0' : p.pai ? 'pl-8 pr-3' : 'px-3'}
+                        ${ativo
+                          ? 'bg-gradient-to-r from-azul-600 to-azul-500 text-white shadow-[0_4px_14px_rgba(43,87,151,0.3)]'
+                          : 'bg-transparent text-secundario hover:bg-superficie hover:text-primario hover:shadow-[0_1px_3px_rgba(10,14,20,0.06)]'}`}
+                    >
+                      {p.pai && !retraida && (
+                        <span
+                          aria-hidden="true"
+                          className={`absolute left-[19px] top-1 bottom-1 w-px ${ativo ? 'bg-white/40' : 'bg-borda-forte'}`}
+                        />
+                      )}
+                      <span className={`flex items-center ${retraida ? 'gap-0' : 'gap-[10px]'} min-w-0`}>
+                        <span className={`transition-transform duration-200 ${ativo ? '' : 'group-hover:scale-110'}`}>
+                          {ICONES[p.id]}
+                        </span>
+                        {!retraida && <span className="truncate">{p.nome}</span>}
+                      </span>
+                    </button>
+                  );
+                  // Retraído, o nome só existe na dica; aberto, a dica explica a tela.
+                  return (
+                    <Dica
+                      key={p.id}
+                      className="w-full"
+                      conteudo={retraida ? <><strong className="block">{p.nome}</strong>{p.dica}</> : p.dica}
+                      atraso={retraida ? 80 : 600}
+                    >
+                      {botao}
+                    </Dica>
+                  );
+                })}
+              </div>
             );
           })}
         </nav>
       </aside>
 
-      <main className="flex flex-col gap-4 px-4 md:px-6 pt-5 pb-24 md:pb-10">
+      <main className="flex flex-col gap-5 px-4 md:px-8 pt-5 pb-28 md:pb-12 min-w-0 max-w-[1600px] w-full mx-auto">
         {/* Sem campo de busca: era placeholder, nunca chegou a buscar nada. */}
         <div className="flex items-center justify-between gap-4">
-          <div className="md:hidden font-semibold text-[15px]">{atual?.nome}</div>
-          <div className="hidden md:block" />
-          <div className="flex items-center gap-3">
-            <div className="w-[30px] h-[30px] rounded-full bg-azul-700 text-white flex items-center justify-center font-semibold text-[13px] shrink-0">
-              {email ? iniciais(email.split('@')[0].replace(/[._-]/g, ' ')) : 'ID'}
-            </div>
-            <div className="hidden md:block">
-              <div className="font-semibold text-[13px]">{email || 'Sessão local'}</div>
-              <div className="text-tenue text-xs">Faculdade IDE</div>
-            </div>
+          <div className="md:hidden flex items-center gap-2">
+            <img src="/logo-IDE-faculdade.svg" alt="Faculdade IDE" className="h-[22px] w-auto" />
           </div>
+          <div className="hidden md:block" />
+          <Dica conteudo={email ? `Conectado como ${email}` : 'Sem identificação do Access — sessão local'}>
+            <div className="flex items-center gap-3 rounded-full pl-1 pr-1 md:pr-3 py-1 border border-borda bg-superficie shadow-[var(--shadow-cartao)]">
+              <div className="w-[30px] h-[30px] rounded-full bg-gradient-to-br from-azul-700 to-azul-500 text-white flex items-center justify-center font-semibold text-[12px] shrink-0">
+                {email ? iniciais(email.split('@')[0].replace(/[._-]/g, ' ')) : 'ID'}
+              </div>
+              <div className="hidden md:block leading-tight">
+                <div className="font-semibold text-[13px] max-w-[220px] truncate">{email || 'Sessão local'}</div>
+                <div className="text-tenue text-[12px]">{admin ? 'Administrador' : 'Faculdade IDE'}</div>
+              </div>
+            </div>
+          </Dica>
         </div>
 
-        <Suspense fallback={<Esqueleto linhas={5} />}>
+        {/* `key` remonta o invólucro a cada troca de tela, e a animação de entrada roda de novo. */}
+        <Suspense fallback={<EsqueletoPagina />}>
+          <div key={rota} className="tela flex flex-col gap-4">
           {rota === 'overview' && <VisaoGeral {...props} />}
           {rota === 'funil' && <Funil {...props} />}
           {rota === 'campanhas' && <Campanhas {...props} />}
@@ -239,32 +384,12 @@ export default function App() {
           {rota === 'conversoes' && <Conversoes />}
           {rota === 'conversoes-google' && <GoogleConversoes />}
           {rota === 'etapas' && <Etapas />}
+          </div>
         </Suspense>
       </main>
 
-      <nav
-        className="md:hidden fixed bottom-0 inset-x-0 z-10 flex bg-elevado border-t border-borda px-2 pt-[10px] pb-[calc(14px+env(safe-area-inset-bottom))]"
-        aria-label="Navegação"
-      >
-        {visiveis.map((p) => {
-          const ativo = p.id === rota;
-          return (
-            <button
-              key={p.id}
-              type="button"
-              aria-current={ativo ? 'page' : 'false'}
-              onClick={() => {
-                location.hash = `#/${p.id}`;
-              }}
-              className={`flex-1 flex flex-col items-center gap-1 bg-transparent border-0 cursor-pointer text-[10px] font-medium
-                ${ativo ? 'text-azul-400' : 'text-tenue'}`}
-            >
-              {ICONES[p.id]}
-              {p.curto}
-            </button>
-          );
-        })}
-      </nav>
+      <NavMobile visiveis={visiveis} rota={rota} />
     </div>
+    </>
   );
 }

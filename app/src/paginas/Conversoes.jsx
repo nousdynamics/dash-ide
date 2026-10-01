@@ -1,6 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BotaoIcone, Cartao, Estado, Esqueleto, Modal, Pill, Select, Switch } from '../componentes/base';
-import { useApi } from '../lib/api';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Abas,
+  Botao,
+  BotaoIcone,
+  CabecalhoPagina,
+  Cartao,
+  Dica,
+  Estado,
+  EsqueletoPagina,
+  Icone,
+  InfoDica,
+  Modal,
+  Pill,
+  Select,
+  SetaSanfona,
+  Switch,
+  TituloSecao,
+} from '../componentes/base';
+import { invalidar, useApi } from '../lib/api';
 import { ROTULO_STATUS, TOM_STATUS } from '../lib/conversao';
 import { fmtInt } from '../lib/formato';
 
@@ -11,6 +28,10 @@ import { fmtInt } from '../lib/formato';
  * ação por evento × nível. O resultado — registro, veredito do Google, captura
  * do clique e planilha — mora em "Google Conversões", porque é pergunta de todo
  * dia e esta tela é decisão que se toma uma vez.
+ *
+ * Os passos 1 e 2 são abas, não blocos empilhados: os dois dependem do processo
+ * escolhido na coluna da esquerda, e empilhados obrigavam a rolar a lista de
+ * etapas inteira para chegar ao ctId de quem já tinha terminado o passo 1.
  */
 
 async function enviar(rota, corpo, metodo = 'POST') {
@@ -21,10 +42,27 @@ async function enviar(rota, corpo, metodo = 'POST') {
   });
   const dados = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(dados.detalhe || dados.erro || `servidor respondeu ${r.status}`);
+  // Toda chamada daqui grava: o cache das telas guarda o estado de antes.
+  invalidar();
   return dados;
 }
 
-function Acao({ children, aoClicar, tom = 'neutro', titulo }) {
+/** Campo de texto no mesmo desenho do `Select` da base — altura e borda iguais na linha. */
+const CAMPO =
+  'bg-superficie text-primario border border-borda-forte rounded-[9px] px-2.5 py-[6px] text-[13px] '
+  + 'hover:border-azul-400/50 focus:border-azul-500 focus:outline-none transition-colors disabled:opacity-55';
+
+/** Rótulo de campo de formulário — legível, sem caixa alta miúda. */
+function Rotulo({ children, dica }) {
+  return (
+    <span className="flex items-center gap-1 text-[12.5px] font-medium text-secundario">
+      {children}
+      <InfoDica texto={dica} tamanho="w-[13px] h-[13px]" />
+    </span>
+  );
+}
+
+function Acao({ children, aoClicar, variante = 'secundario', titulo, icone }) {
   const [estado, setEstado] = useState('pronto');
   const [msg, setMsg] = useState('');
 
@@ -42,28 +80,28 @@ function Acao({ children, aoClicar, tom = 'neutro', titulo }) {
     }
   };
 
-  const cor = estado === 'erro'
-    ? 'border-perigo/40 bg-perigo/12 text-perigo'
-    : estado === 'ok'
-      ? 'border-sucesso/40 bg-sucesso/12 text-sucesso'
-      : tom === 'primario'
-        ? 'border-azul-500 bg-azul-600 text-white hover:bg-azul-500'
-        : 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario';
+  // O resultado fica no próprio botão por alguns segundos: verde deu certo, vermelho não.
+  const realce = estado === 'ok'
+    ? '!bg-sucesso/12 !text-sucesso !border-sucesso/40 !shadow-none'
+    : '';
 
   return (
     <span className="inline-flex flex-col items-start gap-1">
-      <button
-        type="button"
-        title={titulo}
-        onClick={rodar}
-        disabled={estado === 'rodando'}
-        className={`text-[11px] px-2 py-[5px] rounded-[8px] border cursor-pointer shrink-0
-                    disabled:opacity-50 disabled:cursor-not-allowed ${cor}`}
-      >
-        {estado === 'rodando' ? 'Aguarde…' : estado === 'ok' ? 'Feito' : children}
-      </button>
+      <Dica conteudo={titulo}>
+        <Botao
+          variante={estado === 'erro' ? 'perigo' : variante}
+          icone={estado === 'ok' ? 'check' : estado === 'erro' ? 'alerta' : icone}
+          carregando={estado === 'rodando'}
+          onClick={rodar}
+          className={realce}
+        >
+          {estado === 'rodando' ? 'Aguarde…' : estado === 'ok' ? 'Feito' : children}
+        </Botao>
+      </Dica>
       {msg && (
-        <span className={`text-[10px] max-w-[320px] ${estado === 'erro' ? 'text-perigo' : 'text-tenue'}`}>
+        <span
+          className={`text-[12px] max-w-[320px] leading-snug animate-aparecer ${estado === 'erro' ? 'text-perigo' : 'text-secundario'}`}
+        >
           {msg}
         </span>
       )}
@@ -77,6 +115,10 @@ function nomeProcesso(id, nome) {
   return fixos[String(id)] || `Processo ${id}`;
 }
 
+const DESCRICAO_TELA =
+  'Mapeia etapa do Rubeus → evento → ação do Google Ads (ctId). Quando o lead muda de etapa, '
+  + 'o painel envia a conversão com o identificador do clique (ou e-mail/telefone em hash).';
+
 export function Conversoes() {
   const [versao, setVersao] = useState(0);
   const recarregar = useCallback(() => setVersao((v) => v + 1), []);
@@ -84,6 +126,8 @@ export function Conversoes() {
   const [processoAtivo, setProcessoAtivo] = useState(null);
   /** Qual painel auxiliar está aberto: 'checklist', 'envio' ou nenhum. */
   const [modal, setModal] = useState(null);
+  /** Passo à mostra: 'gatilhos' (etapa → evento) ou 'acoes' (evento → ctId). */
+  const [aba, setAba] = useState('gatilhos');
 
   const pipelinesOrd = useMemo(() => {
     const lista = (dados?.pipelines ?? []).map((p) => ({
@@ -104,14 +148,70 @@ export function Conversoes() {
     setProcessoAtivo(preferido.processo_id);
   }, [pipelinesOrd, processoAtivo]);
 
+  /*
+   * Quanto do volume real ficaria sem destino com o mapa de hoje.
+   *
+   * Mesma regra do envio: a ação do nível exato, senão a curinga do evento. É o
+   * número que separa "configurado" de "configurado e cobrindo o que chega".
+   *
+   * Calculado antes dos retornos antecipados de erro/carregamento: hook depois
+   * de `return` muda a quantidade de hooks entre um render e outro, e o React
+   * derruba a tela na hora em que os dados chegam.
+   */
+  const acoesDados = dados?.acoes;
+  const coberturaDados = dados?.cobertura;
+  const { volumeTotal, descobertoTotal } = useMemo(() => {
+    let total = 0;
+    let descoberto = 0;
+    const curingaDe = new Map(
+      (acoesDados ?? [])
+        .filter((a) => a.ativo && a.escopo === 'geral' && a.conversion_action_id)
+        .map((a) => [a.evento, true]),
+    );
+    for (const c of coberturaDados ?? []) {
+      const n = Number(c.leads) || 0;
+      total += n;
+      if (curingaDe.has(c.evento)) continue;
+      const temRegra = (acoesDados ?? []).some(
+        (a) => a.ativo && a.conversion_action_id && a.evento === c.evento
+          && a.escopo === 'nivel' && a.alvo === c.nivel,
+      );
+      if (!temRegra) descoberto += n;
+    }
+    return { volumeTotal: total, descobertoTotal: descoberto };
+  }, [coberturaDados, acoesDados]);
+
+  /*
+   * Captura do clique, planilha e monitor saíram daqui.
+   *
+   * Foram para "Google Conversões". O que sobra nesta tela é decisão de
+   * instalação — qual etapa vira evento, e para qual ação do Google cada
+   * nível manda —, mexida raramente. Misturada com o resultado, obrigava
+   * quem só queria conferir o envio de ontem a rolar por escolhas que não
+   * ia tomar naquele momento. O atalho mora no cabeçalho, sempre à mão.
+   */
   const cabecalho = (
-    <div>
-      <div className="text-[19px] font-semibold tracking-tight">Conversões Ads</div>
-      <div className="text-tenue text-xs mt-[2px] max-w-[720px] leading-relaxed">
-        Mapeia etapa do Rubeus → evento → ação do Google Ads (ctId). Quando o lead muda de etapa,
-        o painel envia a conversão com o identificador do clique (ou e-mail/telefone em hash).
-      </div>
-    </div>
+    <CabecalhoPagina
+      titulo="Conversões Ads"
+      icone="alvo"
+      descricao={DESCRICAO_TELA}
+      acoes={
+        <Dica
+          conteudo="O registro das conversões, o veredito do Google, a captura do gclid no site e a cópia na planilha ficam em Google Conversões."
+        >
+          <a
+            href="#/conversoes-google"
+            className="inline-flex items-center gap-2 text-[13px] font-medium px-3.5 py-[7px] rounded-[10px]
+                       border border-borda-forte bg-superficie text-primario no-underline whitespace-nowrap
+                       hover:bg-superficie-hover hover:border-azul-400/40 transition-colors"
+          >
+            <Icone nome="olho" className="w-4 h-4" />
+            Conferir o que foi enviado
+            <Icone nome="setaDireita" className="w-4 h-4 text-tenue" />
+          </a>
+        </Dica>
+      }
+    />
   );
 
   if (erro?.includes('403') || erro?.includes('sem_permissao')) {
@@ -120,6 +220,7 @@ export function Conversoes() {
         {cabecalho}
         <Cartao>
           <Estado
+            icone="cadeado"
             titulo="Esta tela é restrita"
             mensagem="Ela decide o que o Google Ads recebe. Fica com quem administra a conta de anúncios."
           />
@@ -137,7 +238,14 @@ export function Conversoes() {
       </>
     );
   }
-  if (carregando || !dados) return <>{cabecalho}<Esqueleto linhas={8} /></>;
+  if (carregando || !dados) {
+    return (
+      <>
+        {cabecalho}
+        <EsqueletoPagina kpis={0} graficos={0} tabela />
+      </>
+    );
+  }
 
   const {
     config, eventos, gatilhos, acoes, resumo, niveis, cobertura,
@@ -150,33 +258,6 @@ export function Conversoes() {
     await enviar('/api/conversoes/config', mudanca, 'PUT');
     recarregar();
   };
-
-  /*
-   * Quanto do volume real ficaria sem destino com o mapa de hoje.
-   *
-   * Mesma regra do envio: a ação do nível exato, senão a curinga do evento. É o
-   * número que separa "configurado" de "configurado e cobrindo o que chega".
-   */
-  const { volumeTotal, descobertoTotal } = useMemo(() => {
-    let total = 0;
-    let descoberto = 0;
-    const curingaDe = new Map(
-      (acoes ?? [])
-        .filter((a) => a.ativo && a.escopo === 'geral' && a.conversion_action_id)
-        .map((a) => [a.evento, true]),
-    );
-    for (const c of cobertura ?? []) {
-      const n = Number(c.leads) || 0;
-      total += n;
-      if (curingaDe.has(c.evento)) continue;
-      const temRegra = (acoes ?? []).some(
-        (a) => a.ativo && a.conversion_action_id && a.evento === c.evento
-          && a.escopo === 'nivel' && a.alvo === c.nivel,
-      );
-      if (!temRegra) descoberto += n;
-    }
-    return { volumeTotal: total, descobertoTotal: descoberto };
-  }, [cobertura, acoes]);
 
   const checklist = [
     {
@@ -191,7 +272,7 @@ export function Conversoes() {
     {
       ok: (gatilhos ?? []).some((g) => g.ativo),
       rotulo: 'Pelo menos 1 gatilho ativo (etapa → evento)',
-      falta: 'Ligar gatilho na seção 1',
+      falta: 'Ligar gatilho na aba “1 · Gatilhos”',
     },
     {
       /*
@@ -209,8 +290,8 @@ export function Conversoes() {
         ? `ctId mapeado para 100% dos leads (${fmtInt(volumeTotal)} em 60 d)`
         : 'ctId / ação de conversão mapeada',
       falta: descobertoTotal > 0
-        ? `${fmtInt(descobertoTotal)} lead(s) sem ação — mapeie o nível “qualquer” na seção 2`
-        : 'Colar ou criar ctId na seção 2',
+        ? `${fmtInt(descobertoTotal)} lead(s) sem ação — mapeie o nível “qualquer” na aba “2 · Ações do Google”`
+        : 'Colar ou criar ctId na aba “2 · Ações do Google”',
     },
     {
       /*
@@ -231,6 +312,20 @@ export function Conversoes() {
 
   const pendencias = checklist.filter((c) => !c.ok).length;
 
+  const gatilhosLigados = (processoId) => (gatilhos ?? []).filter(
+    (g) => String(g.processo_id) === String(processoId) && g.ativo,
+  ).length;
+
+  const abas = [
+    {
+      id: 'gatilhos',
+      nome: '1 · Gatilhos',
+      icone: 'raio',
+      contagem: pipeline ? gatilhosLigados(pipeline.processo_id) : undefined,
+    },
+    { id: 'acoes', nome: '2 · Ações do Google', icone: 'alvo' },
+  ];
+
   return (
     <>
       {cabecalho}
@@ -248,7 +343,7 @@ export function Conversoes() {
         * dessa consequência é o oposto do que ele pede: quem abre a tela precisa
         * ver, sem procurar, se está mandando conversão de verdade.
         */}
-      <Cartao>
+      <Cartao className="animate-surgir">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
             <Switch
@@ -257,30 +352,46 @@ export function Conversoes() {
             >
               <span className="sr-only">Enviar conversões reais ao Google Ads</span>
             </Switch>
-            <div className="min-w-0">
-              <div className={`text-[13px] font-semibold ${config.modo === 'real' ? 'text-sucesso' : 'text-secundario'}`}>
+            <div className="min-w-0 flex items-center gap-2 flex-wrap">
+              <span
+                className={`text-[14px] font-semibold ${config.modo === 'real' ? 'text-sucesso' : 'text-primario'}`}
+              >
                 {config.modo === 'real' ? 'Enviando conversões reais' : 'Somente teste'}
-              </div>
-              <div className="text-[11px] text-tenue leading-relaxed">
-                {config.modo === 'real'
+              </span>
+              <InfoDica
+                texto={config.modo === 'real'
                   ? 'Cada conversão conta na conta de anúncios e influencia o lance das campanhas.'
                   : 'O Google valida cada envio e descarta — nada é contabilizado.'}
-              </div>
+              />
+              {!config.ligado && (
+                <Pill
+                  tom="perigo"
+                  ponto
+                  dica="A chave geral está desligada: nenhuma conversa com o Google, nem as validações do modo teste. Religue em “Ajustes do envio”."
+                >
+                  Pausado
+                </Pill>
+              )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 flex-wrap">
             {resumo.map((r) => (
-              <Pill key={r.status} tom={TOM_STATUS[r.status] ?? 'neutro'}>
-                {fmtInt(r.total)} {ROTULO_STATUS[r.status] ?? r.status}
+              <Pill
+                key={r.status}
+                tom={TOM_STATUS[r.status] ?? 'neutro'}
+                dica="Conversões dos últimos 30 dias, pelo que o painel fez com cada uma."
+              >
+                <span className="tnum">{fmtInt(r.total)}</span> {ROTULO_STATUS[r.status] ?? r.status}
               </Pill>
             ))}
             {resumo.length === 0 && (
-              <span className="text-[11px] text-tenue">Nenhuma conversão em 30 dias</span>
+              <Pill tom="neutro">Nenhuma conversão em 30 dias</Pill>
             )}
 
             <Acao
-              tom="primario"
+              variante="primario"
+              icone="enviar"
               titulo="Processa a fila agora"
               aoClicar={async () => {
                 const r = await enviar('/api/conversoes/processar');
@@ -301,14 +412,11 @@ export function Conversoes() {
             <BotaoIcone
               titulo={pendencias ? `Configuração: ${pendencias} item(ns) pendente(s)` : 'Configuração do envio'}
               tom={pendencias ? 'atencao' : 'neutro'}
+              icone={pendencias ? 'alerta' : 'checkCirculo'}
               aoClicar={() => setModal('checklist')}
-            >
-              {pendencias ? '!' : '✓'}
-            </BotaoIcone>
+            />
 
-            <BotaoIcone titulo="Ajustes do envio" aoClicar={() => setModal('envio')}>
-              ⚙
-            </BotaoIcone>
+            <BotaoIcone titulo="Ajustes do envio" icone="engrenagem" aoClicar={() => setModal('envio')} />
           </div>
         </div>
       </Cartao>
@@ -319,35 +427,43 @@ export function Conversoes() {
         titulo="Para o Google receber o evento"
         descricao="O que precisa estar de pé para uma conversão sair daqui e chegar lá."
       >
-        <ul className="flex flex-col gap-1.5">
+        <ul className="flex flex-col gap-2 m-0 p-0 list-none">
           {checklist.map((c) => (
-            <li key={c.rotulo} className="flex items-start gap-2 text-xs">
-              <span className={c.ok ? 'text-sucesso' : 'text-atencao'} aria-hidden="true">
-                {c.ok ? '✓' : '○'}
+            <li
+              key={c.rotulo}
+              className={`flex items-start gap-2.5 text-[13.5px] rounded-[10px] px-3 py-2.5 border
+                ${c.ok ? 'border-borda bg-elevado' : 'border-atencao/30 bg-atencao/8'}`}
+            >
+              <span className={`mt-px shrink-0 ${c.ok ? 'text-sucesso' : 'text-atencao'}`} aria-hidden="true">
+                <Icone nome={c.ok ? 'checkCirculo' : 'alerta'} className="w-[18px] h-[18px]" />
               </span>
-              <span className={c.ok ? 'text-secundario' : 'text-primario'}>
-                {c.ok ? c.rotulo : <><strong>{c.falta}</strong></>}
+              <span className={c.ok ? 'text-secundario' : 'text-primario font-semibold'}>
+                {c.ok ? c.rotulo : c.falta}
               </span>
             </li>
           ))}
         </ul>
 
-        <div className="text-[11px] text-tenue mt-3 pt-3 border-t border-borda leading-relaxed">
-          Em cada envio o Google exige ainda: <strong className="text-secundario">identificador</strong>{' '}
-          (gclid/gbraid/wbraid <em>ou</em> e-mail/telefone em hash) +{' '}
-          <strong className="text-secundario">timestamp</strong> +{' '}
-          <strong className="text-secundario">ctId</strong> da ação. Valor (R$) é opcional no protocolo,
-          mas necessário para Smart Bidding.
+        <div className="flex items-start gap-2 text-[13px] text-secundario mt-4 pt-3 border-t border-borda leading-relaxed">
+          <Icone nome="info" className="w-4 h-4 mt-0.5 shrink-0 text-azul-600" />
+          <span>
+            Em cada envio o Google exige ainda: <strong className="text-primario">identificador</strong>{' '}
+            (gclid/gbraid/wbraid <em>ou</em> e-mail/telefone em hash) +{' '}
+            <strong className="text-primario">timestamp</strong> +{' '}
+            <strong className="text-primario">ctId</strong> da ação. Valor (R$) é opcional no protocolo,
+            mas necessário para Smart Bidding.
+          </span>
         </div>
 
         {!google.tem_datamanager && (
-          <div className="mt-3 pt-3 border-t border-borda">
-            <div className="text-[12px] font-semibold text-atencao">
+          <div className="mt-4 rounded-[10px] border border-atencao/30 bg-atencao/8 p-3">
+            <div className="text-[13.5px] font-semibold text-atencao flex items-center gap-2">
+              <Icone nome="chave" className="w-4 h-4" />
               {google.conectado
                 ? 'A conta Google conectada não tem o escopo Data Manager'
                 : 'Nenhuma conta Google conectada'}
             </div>
-            <div className="text-[11px] text-tenue mt-1 leading-relaxed">
+            <div className="text-[13px] text-secundario mt-1.5 leading-relaxed">
               Upload offline de integração nova só entra pela Data Manager API, que exige o escopo{' '}
               <span className="font-mono">datamanager</span>. Sem ele, todo envio volta 403.
               {google.erro && <> <span className="text-atencao">{google.erro}</span>.</>}
@@ -362,7 +478,7 @@ export function Conversoes() {
               * e o refresh token vai para secret do Worker. `/oauth/google/*` só
               * responde em desenvolvimento — ver `src/routes/oauth.ts`.
               */}
-            <div className="text-[11px] text-tenue mt-2 leading-relaxed">
+            <div className="text-[13px] text-secundario mt-2 leading-relaxed">
               A credencial é publicada como secret do Worker
               (<span className="font-mono">GOOGLE_ADS_REFRESH_TOKEN</span>), a partir do
               consentimento feito localmente. Ver a seção “Conversão offline” no README.
@@ -377,53 +493,62 @@ export function Conversoes() {
         titulo="Ajustes do envio"
         descricao="Declarações e a chave geral. O modo teste/real fica no interruptor da tela."
       >
-        {/*
-          * Consentimento é declaração, não ajuste técnico.
-          *
-          * Marcar "concedido" afirma ao Google, em nome da faculdade, que o
-          * titular consentiu com o uso dos dados para anúncios. O padrão não
-          * afirma nada — e não afirmar é diferente de negar: omitido, o Google
-          * aplica a regra da conta; negado, ele descarta o identificador e a
-          * conversão aprimorada para de casar.
-          */}
-        <div className="text-[12px] font-semibold">Consentimento declarado ao Google</div>
-        <div className="text-[11px] text-tenue mt-1 leading-relaxed">
-          Só marque <strong className="text-secundario">concedido</strong> se a captação de
-          leads de fato coleta esse consentimento — é uma declaração em nome da faculdade.
-          O padrão não afirma nada e deixa o Google aplicar a regra da conta;{' '}
-          <strong className="text-secundario">negado</strong> faz o Google descartar
-          e-mail e telefone, e a conversão aprimorada para de casar.
-        </div>
-        <div className="mt-2 max-w-[260px]">
-          <Select
-            rotulo="Consentimento de dados do usuário"
-            valor={config.consentimento ?? 'nao_informado'}
-            aoTrocar={(v) => trocarConfig({ consentimento: v })}
-            opcoes={[
-              ['nao_informado', 'Não informar (padrão)'],
-              ['concedido', 'Concedido'],
-              ['negado', 'Negado'],
-            ]}
-            className="w-full"
-          />
-        </div>
-
-        {/*
-          * A chave geral sobrevive à fusão do interruptor.
-          *
-          * O interruptor da tela escolhe entre teste e real, e nas duas posições
-          * o painel conversa com o Google. Quando algo está errado de verdade —
-          * mapa de etapas trocado, Google recusando tudo — é preciso poder parar
-          * de conversar, e não só parar de contabilizar. Fica aqui porque é
-          * manobra de exceção, não ajuste do dia a dia.
-          */}
-        <div className="mt-3 pt-3 border-t border-borda">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex flex-col divide-y divide-borda">
+          {/*
+            * Consentimento é declaração, não ajuste técnico.
+            *
+            * Marcar "concedido" afirma ao Google, em nome da faculdade, que o
+            * titular consentiu com o uso dos dados para anúncios. O padrão não
+            * afirma nada — e não afirmar é diferente de negar: omitido, o Google
+            * aplica a regra da conta; negado, ele descarta o identificador e a
+            * conversão aprimorada para de casar.
+            */}
+          <div className="flex items-center justify-between gap-4 flex-wrap pb-4">
             <div className="min-w-0">
-              <div className="text-[12px] font-semibold">Pausar tudo</div>
-              <div className="text-[11px] text-tenue mt-1 leading-relaxed max-w-[360px]">
-                Interrompe qualquer conversa com o Google, inclusive as validações do
-                modo teste. Os eventos continuam sendo registrados e ficam na fila.
+              <div className="text-[14px] font-semibold flex items-center gap-1.5">
+                Consentimento declarado ao Google
+                <InfoDica
+                  largura={340}
+                  texto="O padrão não afirma nada e deixa o Google aplicar a regra da conta; “negado” faz o Google descartar e-mail e telefone, e a conversão aprimorada para de casar."
+                />
+              </div>
+              <div className="text-[13px] text-secundario mt-0.5 max-w-[360px] leading-snug">
+                Só marque <strong className="text-primario">concedido</strong> se a captação de leads de
+                fato coleta esse consentimento — é uma declaração em nome da faculdade.
+              </div>
+            </div>
+            <Select
+              rotulo="Consentimento de dados do usuário"
+              valor={config.consentimento ?? 'nao_informado'}
+              aoTrocar={(v) => trocarConfig({ consentimento: v })}
+              opcoes={[
+                ['nao_informado', 'Não informar (padrão)'],
+                ['concedido', 'Concedido'],
+                ['negado', 'Negado'],
+              ]}
+              className="w-full sm:w-[220px]"
+            />
+          </div>
+
+          {/*
+            * A chave geral sobrevive à fusão do interruptor.
+            *
+            * O interruptor da tela escolhe entre teste e real, e nas duas posições
+            * o painel conversa com o Google. Quando algo está errado de verdade —
+            * mapa de etapas trocado, Google recusando tudo — é preciso poder parar
+            * de conversar, e não só parar de contabilizar. Fica aqui porque é
+            * manobra de exceção, não ajuste do dia a dia.
+            */}
+          <div className="flex items-center justify-between gap-4 flex-wrap pt-4">
+            <div className="min-w-0">
+              <div className="text-[14px] font-semibold flex items-center gap-1.5">
+                Pausar tudo
+                <InfoDica texto="Interrompe qualquer conversa com o Google, inclusive as validações do modo teste. Os eventos continuam sendo registrados e ficam na fila." />
+              </div>
+              <div className="mt-1">
+                <Pill tom={config.ligado ? 'sucesso' : 'perigo'} ponto>
+                  {config.ligado ? 'Em operação' : 'Pausado'}
+                </Pill>
               </div>
             </div>
             <Switch
@@ -436,149 +561,143 @@ export function Conversoes() {
         </div>
       </Modal>
 
-      {/* 1. Gatilhos por processo */}
-      <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)] gap-3 items-start">
-        <Cartao className="!p-2 sticky top-3">
-          <div className="text-[10px] font-semibold uppercase tracking-wide text-tenue px-2 py-1.5">
-            1 · Processos
+      {/*
+        * Processo à esquerda, passos à direita.
+        *
+        * O processo escolhido vale para as duas abas — o ctId da aba 2 é o dos
+        * gatilhos ligados na aba 1 —, então a lista fica fora delas e continua
+        * visível ao trocar de passo.
+        */}
+      <div className="grid grid-cols-1 lg:grid-cols-[230px_minmax(0,1fr)] gap-4 items-start">
+        <Cartao className="!p-2 lg:sticky lg:top-3">
+          <div className="text-[12.5px] font-semibold text-secundario px-2.5 pt-1.5 pb-2 flex items-center gap-1.5">
+            <Icone nome="camadas" className="w-4 h-4 text-azul-600" />
+            Processos
+            <InfoDica texto="Cada processo do Rubeus tem suas próprias etapas. Escolha um para configurar os gatilhos e as ações dele." />
           </div>
-          <nav className="flex flex-col gap-0.5" aria-label="Processos para gatilho">
+          <nav className="flex flex-col gap-0.5 max-h-[60vh] lg:max-h-none overflow-y-auto" aria-label="Processos para gatilho">
             {pipelinesOrd.map((p) => {
               const ativo = p.processo_id === processoAtivo;
-              const ligados = (gatilhos ?? []).filter(
-                (g) => String(g.processo_id) === String(p.processo_id) && g.ativo,
-              ).length;
+              const ligados = gatilhosLigados(p.processo_id);
               return (
                 <button
                   key={p.processo_id}
                   type="button"
+                  aria-current={ativo ? 'true' : undefined}
                   onClick={() => setProcessoAtivo(p.processo_id)}
-                  className={`text-left rounded-[8px] px-2.5 py-2 border-0 cursor-pointer
+                  className={`text-left rounded-[9px] px-2.5 py-2 border-0 cursor-pointer transition-colors
                     ${ativo
-                      ? 'bg-azul-600 text-white'
+                      ? 'bg-azul-600 text-white shadow-[0_2px_8px_rgba(43,87,151,0.25)]'
                       : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
                 >
-                  <div className="text-xs font-semibold truncate">{p.processo_nome}</div>
-                  <div className={`text-[10px] mt-0.5 ${ativo ? 'text-white/70' : 'text-tenue'}`}>
+                  <Dica conteudo={p.processo_nome} className="w-full">
+                    <span className="block text-[13px] font-semibold truncate">{p.processo_nome}</span>
+                  </Dica>
+                  <span className={`flex items-center gap-1.5 text-[12px] mt-0.5 tnum ${ativo ? 'text-white/80' : 'text-tenue'}`}>
                     {p.etapas.length} etapa{p.etapas.length === 1 ? '' : 's'}
-                    {ligados ? ` · ${ligados} gatilho${ligados === 1 ? '' : 's'}` : ''}
-                  </div>
+                    {ligados > 0 && (
+                      <span className={`inline-flex items-center gap-0.5 ${ativo ? 'text-white' : 'text-azul-600'}`}>
+                        · <Icone nome="raio" className="w-3 h-3" /> {ligados}
+                      </span>
+                    )}
+                  </span>
                 </button>
               );
             })}
           </nav>
         </Cartao>
 
-        <Cartao>
-          {!pipeline ? (
-            <Estado
-              titulo="Nenhuma etapa no catálogo"
-              mensagem="As etapas aparecem quando o Rubeus dispara eventos ou o sync roda."
-            />
-          ) : (
-            <>
-              <div className="mb-3">
-                <div className="text-[13px] font-semibold">
-                  Gatilhos · {pipeline.processo_nome}
-                </div>
-                <div className="text-[11px] text-tenue mt-1 leading-relaxed max-w-[640px]">
-                  Cada linha é uma etapa <strong className="text-secundario">deste</strong> processo
-                  no Rubeus. Escolha qual evento do Google ela dispara. A regra fica ligada a este
-                  processo (ID <span className="font-mono">{pipeline.processo_id}</span>).
-                </div>
-              </div>
+        <div className="flex flex-col gap-3 min-w-0">
+          <Abas abas={abas} ativa={aba} aoTrocar={setAba} rotulo="Passos da configuração" className="self-start" />
 
-              <div
-                className="hidden md:grid gap-3 px-1 pb-2 mb-1 border-b border-borda
-                           text-[10px] font-semibold uppercase tracking-wide text-tenue
-                           grid-cols-[minmax(0,1.2fr)_minmax(180px,1fr)_88px]"
-              >
-                <div>Etapa no Rubeus</div>
-                <div>Evento (Google)</div>
-                <div className="text-center">Ativo</div>
-              </div>
+          {aba === 'gatilhos' && (
+            <Cartao key={`g-${processoAtivo}`} className="animate-surgir">
+              {!pipeline ? (
+                <Estado
+                  titulo="Nenhuma etapa no catálogo"
+                  mensagem="As etapas aparecem quando o Rubeus dispara eventos ou o sync roda."
+                />
+              ) : (
+                <>
+                  <TituloSecao
+                    titulo={`Gatilhos · ${pipeline.processo_nome}`}
+                    icone="raio"
+                    dica={`Cada linha é uma etapa deste processo no Rubeus. Escolha qual evento do Google ela dispara. A regra fica ligada a este processo (ID ${pipeline.processo_id}).`}
+                    extra={<Pill tom="neutro">ID <span className="font-mono">{pipeline.processo_id}</span></Pill>}
+                  />
 
-              <ul className="flex flex-col">
-                {pipeline.etapas.map((e) => {
-                  const atual = (gatilhos ?? []).find(
-                    (g) =>
-                      String(g.processo_id) === String(pipeline.processo_id)
-                      && g.etapa_nome === e.nome,
-                  ) ?? (gatilhos ?? []).find(
-                    (g) => !g.processo_id && g.etapa_nome === e.nome,
-                  );
-                  return (
-                    <LinhaGatilho
-                      key={`${pipeline.processo_id}::${e.nome}`}
-                      processoId={pipeline.processo_id}
-                      etapa={e.nome}
-                      atual={atual}
-                      eventos={eventos}
-                      aoSalvar={recarregar}
-                    />
-                  );
-                })}
-              </ul>
-            </>
+                  <div className="overflow-x-auto -mx-[18px]">
+                    <table className="tabela min-w-[520px]">
+                      <thead>
+                        <tr>
+                          <th>Etapa no Rubeus</th>
+                          <th className="w-[260px]">Evento (Google)</th>
+                          <th className="w-[110px] !text-center">Ativo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pipeline.etapas.map((e) => {
+                          const atual = (gatilhos ?? []).find(
+                            (g) =>
+                              String(g.processo_id) === String(pipeline.processo_id)
+                              && g.etapa_nome === e.nome,
+                          ) ?? (gatilhos ?? []).find(
+                            (g) => !g.processo_id && g.etapa_nome === e.nome,
+                          );
+                          return (
+                            <LinhaGatilho
+                              key={`${pipeline.processo_id}::${e.nome}`}
+                              processoId={pipeline.processo_id}
+                              etapa={e.nome}
+                              atual={atual}
+                              eventos={eventos}
+                              aoSalvar={recarregar}
+                            />
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </Cartao>
           )}
-        </Cartao>
+
+          {/* 2. ctId — um bloco por gatilho ativo do processo selecionado na aba 1 */}
+          {aba === 'acoes' && (
+            <Cartao key={`a-${processoAtivo}`} className="animate-surgir">
+              <TituloSecao
+                titulo={`ctId do Google · ${pipeline?.processo_nome || 'escolha o processo'}`}
+                icone="alvo"
+                dica="Um bloco por gatilho que você ligou na aba 1, e dentro dele uma linha por nível de ensino. Escolher a ação da conta é o caminho seguro — ctId digitado à mão é aceito aqui e só falha na hora do envio. O nível “qualquer” recebe quem chegou sem curso identificado."
+                extra={descobertoTotal > 0 && (
+                  <Pill
+                    tom="atencao"
+                    ponto
+                    dica="Leads dos últimos 60 dias, em todos os processos, que hoje não teriam ação de conversão para onde ir."
+                  >
+                    {fmtInt(descobertoTotal)} sem destino
+                  </Pill>
+                )}
+              />
+              <TabelaAcoes
+                eventos={eventos}
+                metas={metas_google ?? []}
+                bases={bases_valor ?? []}
+                niveis={[nivel_padrao, ...(niveis ?? []).map((n) => n.nivel)]}
+                acoes={acoes}
+                gatilhos={gatilhos}
+                processoId={processoAtivo}
+                processoNome={pipeline?.processo_nome}
+                nivelPadrao={nivel_padrao}
+                cobertura={cobertura ?? []}
+                aoSalvar={recarregar}
+                aoIrGatilhos={() => setAba('gatilhos')}
+              />
+            </Cartao>
+          )}
+        </div>
       </div>
-
-      {/* 2. ctId — um bloco por gatilho ativo do processo selecionado na etapa 1 */}
-      <Cartao>
-        <div className="mb-3">
-          <div className="text-[13px] font-semibold">
-            2. ctId do Google · {pipeline?.processo_nome || 'escolha o processo acima'}
-          </div>
-          <div className="text-[11px] text-tenue mt-1 leading-relaxed max-w-[720px]">
-            Um bloco por gatilho que você ligou na etapa 1, e dentro dele uma linha por nível
-            de ensino. Escolher a ação da conta é o caminho seguro — ctId digitado à mão é aceito
-            aqui e só falha na hora do envio. O nível{' '}
-            <em className="text-secundario">qualquer</em> recebe quem chegou sem curso identificado.
-          </div>
-        </div>
-        <TabelaAcoes
-          eventos={eventos}
-          metas={metas_google ?? []}
-          bases={bases_valor ?? []}
-          niveis={[nivel_padrao, ...(niveis ?? []).map((n) => n.nivel)]}
-          acoes={acoes}
-          gatilhos={gatilhos}
-          processoId={processoAtivo}
-          processoNome={pipeline?.processo_nome}
-          nivelPadrao={nivel_padrao}
-          cobertura={cobertura ?? []}
-          aoSalvar={recarregar}
-        />
-      </Cartao>
-
-      {/*
-        * Captura do clique, planilha e monitor saíram daqui.
-        *
-        * Foram para "Google Conversões". O que sobra nesta tela é decisão de
-        * instalação — qual etapa vira evento, e para qual ação do Google cada
-        * nível manda —, mexida raramente. Misturada com o resultado, obrigava
-        * quem só queria conferir o envio de ontem a rolar por escolhas que não
-        * ia tomar naquele momento.
-        */}
-      <Cartao>
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="min-w-0">
-            <div className="text-[13px] font-semibold">Conferir o que foi enviado</div>
-            <div className="text-[11px] text-tenue mt-1 max-w-[620px] leading-relaxed">
-              O registro das conversões, o veredito do Google, a captura do gclid no site e a
-              cópia na planilha ficam em Google Conversões.
-            </div>
-          </div>
-          <a
-            href="#/conversoes-google"
-            className="text-[11px] px-3 py-[6px] rounded-[8px] border border-borda-forte bg-superficie
-                       text-secundario no-underline shrink-0 hover:bg-superficie-hover hover:text-primario"
-          >
-            Abrir Google Conversões →
-          </a>
-        </div>
-      </Cartao>
     </>
   );
 }
@@ -604,35 +723,44 @@ function LinhaGatilho({ processoId, etapa, atual, eventos, aoSalvar }) {
   };
 
   return (
-    <li
-      className="grid gap-2 md:gap-3 items-center py-2.5 border-b border-borda/70 last:border-b-0
-                 grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(180px,1fr)_88px]"
-    >
-      <div className="min-w-0">
-        <div className="text-[13px] font-semibold truncate">{etapa}</div>
+    <tr>
+      <td className="max-w-0 w-full">
+        <Dica conteudo={etapa} className="w-full">
+          <span className="block text-[13.5px] font-semibold truncate">{etapa}</span>
+        </Dica>
         {atual?.processo_id == null && evento && (
-          <div className="text-[10px] text-atencao mt-0.5">regra global antiga — salve de novo neste processo</div>
+          <span className="inline-flex items-center gap-1 text-[12px] text-atencao mt-0.5">
+            <Icone nome="alerta" className="w-3.5 h-3.5" />
+            regra global antiga — salve de novo neste processo
+          </span>
         )}
-      </div>
-      <div className="min-w-0">
+      </td>
+      <td>
         <Select
           rotulo={`Evento para ${etapa}`}
           valor={evento}
           aoTrocar={(v) => (v ? salvar({ evento: v, ativo: true }) : null)}
           opcoes={[['', 'Não dispara'], ...eventos.map((e) => [e.id, e.rotulo])]}
-          className="w-full"
+          className="w-full min-w-[200px]"
         />
-      </div>
-      <div className="flex md:justify-center">
-        {evento ? (
-          <Switch ligado={ativo} aoTrocar={(v) => salvar({ ativo: v })}>
-            <span className="md:sr-only">{salvando ? '…' : ativo ? 'ativo' : 'inativo'}</span>
-          </Switch>
-        ) : (
-          <span className="text-[10px] text-tenue">—</span>
-        )}
-      </div>
-    </li>
+      </td>
+      <td>
+        <div className="flex justify-center">
+          {evento ? (
+            <Switch
+              ligado={ativo}
+              desativado={salvando}
+              aoTrocar={(v) => salvar({ ativo: v })}
+              dica={salvando ? 'Salvando…' : ativo ? 'Dispara o evento quando o lead chega nesta etapa' : 'Gatilho desligado'}
+            >
+              <span className="sr-only">{salvando ? 'salvando' : ativo ? 'ativo' : 'inativo'}</span>
+            </Switch>
+          ) : (
+            <span className="text-[13px] text-tenue">—</span>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -661,6 +789,19 @@ function familiaNivel(nivel) {
   return { id: 'outros', rotulo: 'Outros' };
 }
 
+/** Aviso que pede ação — fica na tela, com ícone, em vez de linha miúda colorida. */
+function Aviso({ children }) {
+  return (
+    <div
+      className="flex items-start gap-2 text-[13px] text-primario leading-relaxed rounded-[10px]
+                 border border-atencao/30 bg-atencao/8 px-3 py-2 animate-aparecer"
+    >
+      <Icone nome="alerta" className="w-4 h-4 mt-0.5 shrink-0 text-atencao" />
+      <span>{children}</span>
+    </div>
+  );
+}
+
 /**
  * Etapa 2: um bloco por gatilho ativo do processo (Oportunidade, Oportunidade paga…).
  * Dentro de cada bloco, ctId por modalidade do curso.
@@ -681,6 +822,7 @@ function familiaNivel(nivel) {
  */
 function TabelaAcoes({
   eventos, metas, bases, niveis, acoes, gatilhos, processoId, processoNome, aoSalvar, nivelPadrao, cobertura,
+  aoIrGatilhos,
 }) {
   const { dados: doGoogle, erro } = useApi('/api/conversoes/acoes-google', 'acoes-google');
   const { dados: catalogo } = useApi('/api/catalogo/cursos', 'catalogo-cursos');
@@ -753,27 +895,29 @@ function TabelaAcoes({
       });
   }, [volumePorEvento, niveis, familia, nivelPadrao]);
 
-  if (!processoId) return <Estado mensagem="Selecione um processo na etapa 1." />;
+  if (!processoId) return <Estado mensagem="Selecione um processo na lista ao lado." />;
 
   if (!gatilhosDoProcesso.length) {
     return (
       <Estado
+        icone="raio"
         titulo="Nenhum gatilho ativo neste processo"
-        mensagem="Na etapa 1, ligue pelo menos uma etapa (ex.: Oportunidade → Inscrição concluída). Só então aparece o campo de ctId aqui."
+        mensagem="Na aba “1 · Gatilhos”, ligue pelo menos uma etapa (ex.: Oportunidade → Inscrição concluída). Só então aparece o campo de ctId aqui."
+        acao={aoIrGatilhos && (
+          <Botao icone="raio" onClick={aoIrGatilhos}>Ir para Gatilhos</Botao>
+        )}
       />
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      {erro && (
-        <div className="text-[11px] text-atencao">Não listou ações do Google Ads: {erro}</div>
-      )}
+    <div className="flex flex-col gap-4">
+      {erro && <Aviso>Não listou ações do Google Ads: {erro}</Aviso>}
       {!erro && disponiveis.length === 0 && (
-        <div className="text-[11px] text-atencao leading-relaxed">
+        <Aviso>
           Nenhuma ação <span className="font-mono">UPLOAD_CLICKS</span> na conta. Use
           “Criar ação” em cada linha, ou crie no Google Ads.
-        </div>
+        </Aviso>
       )}
 
       {gatilhosDoProcesso.map((g) => {
@@ -816,59 +960,75 @@ function TabelaAcoes({
         return (
           <div
             key={`${g.processo_id ?? 'g'}::${g.etapa_nome}::${g.evento}`}
-            className="rounded-[10px] border border-borda overflow-hidden"
+            className="rounded-[12px] border border-borda overflow-hidden"
           >
             {/* Cabeçalho do gatilho: a etapa, o evento que ela dispara, e o progresso. */}
-            <div className="flex items-center justify-between gap-3 flex-wrap px-3 py-2 bg-elevado border-b border-borda">
-              <div className="flex items-center gap-2 min-w-0 text-xs">
+            <div className="flex items-center justify-between gap-3 flex-wrap px-3.5 py-2.5 bg-elevado border-b border-borda">
+              <div className="flex items-center gap-2 min-w-0 text-[13.5px]">
                 <span className="font-semibold truncate">{g.etapa_nome}</span>
-                <span className="text-tenue" aria-hidden="true">→</span>
-                <Pill tom="neutro">{ev.rotulo}</Pill>
+                <Icone nome="setaDireita" className="w-4 h-4 text-tenue shrink-0" />
+                <Pill tom="azul">{ev.rotulo}</Pill>
               </div>
-              <span className="text-[11px] tnum shrink-0 text-right">
+              <span className="flex items-center gap-1.5 flex-wrap shrink-0">
                 {pctCoberto === null ? (
-                  <span className="text-tenue">sem lead nesta etapa em 60 d</span>
+                  <Pill tom="neutro">sem lead nesta etapa em 60 d</Pill>
                 ) : (
-                  <span className={pctCoberto === 100 ? 'text-sucesso' : 'text-atencao'}>
-                    cobre {pctCoberto}% dos leads
+                  <>
+                    <Pill
+                      tom={pctCoberto === 100 ? 'sucesso' : 'atencao'}
+                      ponto
+                      dica={`${fmtInt(leadsCobertos)} de ${fmtInt(totalLeads)} leads dos últimos 60 dias têm ação de conversão para onde ir.`}
+                    >
+                      cobre {pctCoberto}% dos leads
+                    </Pill>
                     {descobertos > 0 && (
-                      <span className="text-perigo"> · {fmtInt(descobertos)} sem destino</span>
+                      <Pill tom="perigo" dica="Leads que hoje ficariam em “sem ação cadastrada”. Mapear o nível “qualquer” cobre todos.">
+                        {fmtInt(descobertos)} sem destino
+                      </Pill>
                     )}
-                  </span>
+                  </>
                 )}
               </span>
             </div>
 
-            {/* Cabeçalho das colunas — some no mobile, onde a linha vira bloco. */}
-            <div
-              className="hidden md:grid gap-3 px-3 py-1.5 border-b border-borda
-                         text-[10px] font-semibold uppercase tracking-wide text-tenue
-                         grid-cols-[minmax(150px,0.9fr)_minmax(0,1.6fr)_96px_auto]"
-            >
-              <div>Nível de ensino</div>
-              <div>Ação de conversão (ctId)</div>
-              <div className="text-right">Valor</div>
-              <div />
-            </div>
-
-            <div className="flex flex-col">
-              {doEvento.map(({ nivel, leads, atual }) => (
-                <LinhaAcao
-                  key={nivel}
-                  evento={ev}
-                  escopo={nivel === nivelPadrao ? 'geral' : 'nivel'}
-                  alvo={nivel === nivelPadrao ? null : nivel}
-                  rotulo={nivel === nivelPadrao
-                    ? <em className="text-tenue font-normal">qualquer / não identificado</em>
-                    : nivel}
-                  leads={leads}
-                  metas={metas}
-                  bases={bases}
-                  atual={atual}
-                  disponiveis={disponiveis}
-                  aoSalvar={aoSalvar}
-                />
-              ))}
+            <div className="overflow-x-auto">
+              <table className="tabela min-w-[720px]">
+                <thead>
+                  <tr>
+                    <th className="w-[200px]">Nível de ensino</th>
+                    <th>Ação de conversão (ctId)</th>
+                    <th className="w-[190px]">
+                      <span className="inline-flex items-center gap-1">
+                        Valor
+                        <InfoDica texto="Qual preço vai ao Google: o total do curso, a inscrição (os dois vêm da oferta que o lead escolheu) ou um valor fixo desta regra." />
+                      </span>
+                    </th>
+                    <th className="w-[1%]"><span className="sr-only">Ações</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {doEvento.map(({ nivel, leads, atual }) => (
+                    <LinhaAcao
+                      key={nivel}
+                      evento={ev}
+                      escopo={nivel === nivelPadrao ? 'geral' : 'nivel'}
+                      alvo={nivel === nivelPadrao ? null : nivel}
+                      rotulo={nivel === nivelPadrao
+                        ? <em className="text-secundario font-medium">qualquer / não identificado</em>
+                        : nivel}
+                      dicaRotulo={nivel === nivelPadrao
+                        ? 'Recebe quem chegou sem curso identificado — e todo nível que não tem regra própria.'
+                        : nivel}
+                      leads={leads}
+                      metas={metas}
+                      bases={bases}
+                      atual={atual}
+                      disponiveis={disponiveis}
+                      aoSalvar={aoSalvar}
+                    />
+                  ))}
+                </tbody>
+              </table>
             </div>
 
             {/*
@@ -934,7 +1094,9 @@ const BASES_PADRAO = [
   { id: 'fixo', rotulo: 'Valor fixo desta regra' },
 ];
 
-function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atual, disponiveis, aoSalvar }) {
+function LinhaAcao({
+  evento, escopo, alvo, rotulo, dicaRotulo, leads = 0, metas, bases, atual, disponiveis, aoSalvar,
+}) {
   const [valor, setValor] = useState(atual?.valor ?? 0);
   const [base, setBase] = useState(atual?.base_valor ?? evento.base_valor ?? 'total');
   const [modo, setModo] = useState(null); // 'colar' | 'criar' | null
@@ -1018,47 +1180,53 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atua
     }
   };
 
+  const nomeAcao = mapeada
+    ? (disponiveis.find((d) => d.id === atual.conversion_action_id)?.nome
+      || atual.conversion_action_nome
+      || 'ação sem nome na conta')
+    : '';
+
   return (
-    <div className="border-t border-borda/60 first:border-t-0">
-      <div
-        className="grid gap-2 md:gap-3 items-center px-3 py-2
-                   grid-cols-1 md:grid-cols-[minmax(150px,0.9fr)_minmax(0,1.6fr)_96px_auto]"
-      >
-        <div className="min-w-0">
-          <div className="text-xs font-semibold truncate">{rotulo}</div>
+    <Fragment>
+      <tr className={ocupado ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
+        <td className="align-top">
+          <Dica conteudo={dicaRotulo} className="w-full">
+            <span className="block text-[13.5px] font-semibold truncate max-w-[200px]">{rotulo}</span>
+          </Dica>
           {/*
             * O volume ao lado do nome: é o que separa a linha que precisa ser
             * mapeada hoje da que só existe no catálogo.
             */}
-          <div className={`text-[10px] ${leads > 0 && !atual?.conversion_action_id ? 'text-atencao' : 'text-tenue'}`}>
+          <span
+            className={`flex items-center gap-1 text-[12px] mt-0.5 tnum ${leads > 0 && !atual?.conversion_action_id ? 'text-atencao font-medium' : 'text-tenue'}`}
+          >
+            {leads > 0 && !atual?.conversion_action_id && <Icone nome="alerta" className="w-3.5 h-3.5" />}
             {leads > 0 ? `${fmtInt(leads)} lead(s) / 60d` : 'sem lead em 60 d'}
-          </div>
-        </div>
+          </span>
+        </td>
 
         {/* Coluna da ação: o valor mapeado, ou os caminhos para mapear. */}
-        <div className="min-w-0">
+        <td className="align-top max-w-0">
           {mapeada ? (
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sucesso shrink-0" aria-hidden="true">✓</span>
-              <span className="min-w-0">
+              <Icone nome="checkCirculo" className="w-[18px] h-[18px] text-sucesso shrink-0" />
+              <span className="min-w-0 flex-1">
                 {/*
                   * O nome guardado pode estar vazio — regras criadas antes de a
                   * lista da conta terminar de carregar gravaram `null`. A conta
                   * é a fonte da verdade e já está em mãos aqui, então vale mais
                   * do que a cópia velha do banco.
                   */}
-                <span className="block text-xs truncate">
-                  {disponiveis.find((d) => d.id === atual.conversion_action_id)?.nome
-                    || atual.conversion_action_nome
-                    || 'ação sem nome na conta'}
-                </span>
-                <span className="block text-[10px] text-tenue font-mono">
+                <Dica conteudo={nomeAcao} className="w-full">
+                  <span className="block text-[13px] truncate">{nomeAcao}</span>
+                </Dica>
+                <span className="block text-[12px] text-tenue font-mono">
                   {atual.conversion_action_id}
                 </span>
               </span>
             </div>
           ) : modo === 'colar' ? (
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-1.5 animate-aparecer">
               <input
                 type="text"
                 inputMode="numeric"
@@ -1067,13 +1235,20 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atua
                 value={ctIdManual}
                 onChange={(e) => setCtIdManual(e.target.value.replace(/\D/g, ''))}
                 aria-label={`ctId de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
-                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                           px-2 py-[5px] text-[11px] font-mono min-w-0 flex-1"
+                className={`${CAMPO} font-mono min-w-0 flex-1`}
               />
-              <BotaoMini onClick={() => salvar({ acaoId: ctIdManual })} disabled={!ctIdManual || ocupado}>
+              <Botao
+                variante="primario"
+                tamanho="sm"
+                carregando={ocupado}
+                onClick={() => salvar({ acaoId: ctIdManual })}
+                disabled={!ctIdManual}
+              >
                 Salvar
-              </BotaoMini>
-              <BotaoMini onClick={() => setModo(null)} disabled={ocupado}>Cancelar</BotaoMini>
+              </Botao>
+              <Botao variante="fantasma" tamanho="sm" onClick={() => setModo(null)} disabled={ocupado}>
+                Cancelar
+              </Botao>
             </span>
           ) : (
             <Select
@@ -1087,7 +1262,7 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atua
               className="w-full"
             />
           )}
-        </div>
+        </td>
 
         {/*
           * Qual preço vai ao Google — não quanto.
@@ -1101,15 +1276,15 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atua
           * O campo de reais sobrevive como "fixo", para o caso de o catálogo não
           * ter preço — e é o que as regras antigas continuam usando.
           */}
-        <div className="min-w-0">
+        <td className="align-top">
           {mapeada ? (
-            <div className="flex flex-col gap-1 md:items-end">
+            <div className="flex flex-col gap-1.5">
               <Select
                 rotulo={`Base do valor de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
                 valor={base}
                 aoTrocar={(v) => { setBase(v); salvar({ base_valor: v }); }}
                 opcoes={(bases?.length ? bases : BASES_PADRAO).map((b) => [b.id, b.rotulo])}
-                className="w-full md:w-[152px]"
+                className="w-full"
               />
               {/*
                 * Divergir da recomendação é permitido e às vezes certo — mas
@@ -1118,13 +1293,17 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atua
                 * perceber multiplica ou divide o retorno da campanha.
                 */}
               {evento.base_valor && base !== evento.base_valor && (
-                <span className="text-[10px] text-atencao md:text-right leading-snug">
-                  {ROTULO_EVENTO_BASE[evento.base_valor] ?? evento.base_valor} é o recomendado
-                  para “{evento.rotulo}”
-                </span>
+                <Dica
+                  conteudo={`${ROTULO_EVENTO_BASE[evento.base_valor] ?? evento.base_valor} é o recomendado para “${evento.rotulo}”.`}
+                >
+                  <span className="inline-flex items-center gap-1 text-[12px] text-atencao font-medium cursor-help">
+                    <Icone nome="alerta" className="w-3.5 h-3.5" />
+                    fora do recomendado
+                  </span>
+                </Dica>
               )}
               {base === 'fixo' && (
-                <label className="inline-flex items-center gap-1 text-[11px] text-tenue">
+                <label className="inline-flex items-center gap-1.5 text-[13px] text-secundario">
                   R$
                   <input
                     type="number"
@@ -1135,88 +1314,102 @@ function LinhaAcao({ evento, escopo, alvo, rotulo, leads = 0, metas, bases, atua
                     onChange={(e) => setValor(e.target.value)}
                     onBlur={() => Number(valor) !== Number(atual?.valor) && salvar()}
                     aria-label={`Valor fixo de ${evento.rotulo} para ${alvo ?? 'qualquer nível'}`}
-                    className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                               px-2 py-[3px] text-[11px] w-[84px] tnum text-right"
+                    className={`${CAMPO} w-full tnum text-right`}
                   />
                 </label>
               )}
             </div>
           ) : (
-            <span className="text-[11px] text-tenue md:block md:text-right">—</span>
+            <span className="text-[13px] text-tenue">—</span>
           )}
-        </div>
+        </td>
 
         {/* Ações da linha, sempre no mesmo canto. */}
-        <div className="flex items-center gap-1 justify-start md:justify-end">
-          {mapeada ? (
-            <BotaoMini onClick={remover} disabled={ocupado} titulo="Desfaz o mapeamento deste nível">
-              Remover
-            </BotaoMini>
-          ) : (
-            <>
-              {modo !== 'colar' && (
-                <BotaoMini onClick={() => setModo('colar')} disabled={ocupado}>colar ctId</BotaoMini>
-              )}
+        <td className="align-top">
+          <div className="flex items-center gap-1 justify-end">
+            {mapeada ? (
               <BotaoMini
-                onClick={() => setModo(modo === 'criar' ? null : 'criar')}
+                onClick={remover}
                 disabled={ocupado}
-                titulo="Cria a ação de conversão na conta do Google Ads"
+                titulo="Desfaz o mapeamento deste nível"
+                icone="lixeira"
+                variante="perigo"
               >
-                {modo === 'criar' ? 'Cancelar' : 'Criar ação'}
+                Remover
               </BotaoMini>
-            </>
-          )}
-        </div>
-      </div>
+            ) : (
+              <>
+                {modo !== 'colar' && (
+                  <BotaoMini
+                    onClick={() => setModo('colar')}
+                    disabled={ocupado}
+                    icone="copiar"
+                    titulo="Digitar o ctId à mão — só falha na hora do envio se estiver errado"
+                  >
+                    colar ctId
+                  </BotaoMini>
+                )}
+                <BotaoMini
+                  onClick={() => setModo(modo === 'criar' ? null : 'criar')}
+                  disabled={ocupado}
+                  icone={modo === 'criar' ? 'x' : 'mais'}
+                  titulo="Cria a ação de conversão na conta do Google Ads"
+                >
+                  {modo === 'criar' ? 'Cancelar' : 'Criar ação'}
+                </BotaoMini>
+              </>
+            )}
+          </div>
+        </td>
+      </tr>
 
       {/* Criar no Google Ads: escrita real na conta, então abre por clique explícito. */}
       {modo === 'criar' && !mapeada && (
-        <div className="px-3 pb-3 -mt-1">
-          <div className="rounded-[8px] border border-borda-forte bg-elevado p-2.5 flex flex-wrap items-end gap-2">
-            <label className="flex flex-col gap-0.5 flex-1 min-w-[200px]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
-                Nome na conta do Google Ads
-              </span>
-              <input
-                type="text"
-                value={nomeNovo}
-                maxLength={80}
-                onChange={(e) => setNomeNovo(e.target.value)}
-                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                           px-2 py-[5px] text-[11px] w-full"
-              />
-            </label>
-            <label className="flex flex-col gap-0.5 min-w-[170px]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
-                Meta (categoria)
-              </span>
-              <Select
-                rotulo="Meta da conversão no Google Ads"
-                valor={metaNova}
-                aoTrocar={setMetaNova}
-                opcoes={(metas?.length
-                  ? metas
-                  : [{ id: evento.categoria || 'DEFAULT', rotulo: evento.categoria || 'padrão' }]
-                ).map((m) => [m.id, m.rotulo])}
-                className="w-full"
-              />
-            </label>
-            <button
-              type="button"
-              disabled={ocupado}
-              onClick={criarNoGoogle}
-              className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500
-                         bg-azul-600 text-white hover:bg-azul-500 cursor-pointer
-                         disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {ocupado ? 'Criando…' : 'Criar e mapear'}
-            </button>
-          </div>
-        </div>
+        <tr>
+          <td colSpan={4} className="!pt-0">
+            <div className="rounded-[10px] border border-azul-400/30 bg-azul-50 p-3 flex flex-wrap items-end gap-3 animate-surgir">
+              <label className="flex flex-col gap-1 flex-1 min-w-[220px]">
+                <Rotulo>Nome na conta do Google Ads</Rotulo>
+                <input
+                  type="text"
+                  value={nomeNovo}
+                  maxLength={80}
+                  onChange={(e) => setNomeNovo(e.target.value)}
+                  className={`${CAMPO} w-full`}
+                />
+              </label>
+              <label className="flex flex-col gap-1 min-w-[180px]">
+                <Rotulo>Meta (categoria)</Rotulo>
+                <Select
+                  rotulo="Meta da conversão no Google Ads"
+                  valor={metaNova}
+                  aoTrocar={setMetaNova}
+                  opcoes={(metas?.length
+                    ? metas
+                    : [{ id: evento.categoria || 'DEFAULT', rotulo: evento.categoria || 'padrão' }]
+                  ).map((m) => [m.id, m.rotulo])}
+                  className="w-full"
+                />
+              </label>
+              <Botao variante="primario" icone="mais" carregando={ocupado} onClick={criarNoGoogle}>
+                {ocupado ? 'Criando…' : 'Criar e mapear'}
+              </Botao>
+            </div>
+          </td>
+        </tr>
       )}
 
-      {erro && <div className="px-3 pb-2 text-[10px] text-perigo">{erro}</div>}
-    </div>
+      {erro && (
+        <tr>
+          <td colSpan={4} className="!pt-0">
+            <span className="flex items-center gap-1.5 text-[12.5px] text-perigo animate-aparecer">
+              <Icone nome="alerta" className="w-4 h-4" />
+              {erro}
+            </span>
+          </td>
+        </tr>
+      )}
+    </Fragment>
   );
 }
 
@@ -1353,60 +1546,87 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
 
   return (
     <div className="border-t border-borda bg-elevado/40">
-      <button
-        type="button"
-        aria-expanded={aberto}
-        onClick={() => setAberto((a) => !a)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-transparent border-0 cursor-pointer
-                   text-left hover:bg-superficie-hover"
-      >
-        <span
-          aria-hidden="true"
-          className={`text-tenue text-[9px] transition-transform motion-reduce:transition-none ${aberto ? 'rotate-90' : ''}`}
+      {/*
+        * A explicação da ordem de resolução mora no "?" do cabeçalho, fora do
+        * botão de abrir: botão dentro de botão é HTML inválido, e o toque no
+        * "?" abriria a sanfona junto.
+        */}
+      <div className="flex items-center gap-2 pr-3.5">
+        <button
+          type="button"
+          aria-expanded={aberto}
+          onClick={() => setAberto((a) => !a)}
+          className="flex-1 min-w-0 flex items-center gap-2 pl-3.5 py-2.5 bg-transparent border-0 cursor-pointer
+                     text-left transition-colors hover:text-primario text-secundario"
         >
-          ▶
-        </span>
-        <span className="text-[11px] font-semibold text-secundario">
-          Metas específicas por curso ou oferta
-        </span>
-        {regras.length > 0 && <Pill tom="sucesso">{regras.length}</Pill>}
-        <span className="text-[10px] text-tenue ml-auto">
-          vencem a regra do nível
-        </span>
-      </button>
+          <SetaSanfona aberta={aberto} />
+          <span className="text-[13px] font-semibold truncate">
+            Metas específicas por curso ou oferta
+          </span>
+          {regras.length > 0 && <Pill tom="sucesso">{regras.length}</Pill>}
+        </button>
+        <InfoDica
+          largura={360}
+          titulo="Vencem a regra do nível"
+          texto="A ordem de resolução é oferta → curso → nível → geral: a primeira regra que casar vence. O valor daqui só entra quando o webhook não trouxer o preço real da matrícula. Uma meta específica só separa alguma coisa no Google Ads se tiver ação própria — apontar para a mesma ação da regra de nível cria uma linha aqui que não muda nada lá."
+        />
+      </div>
 
       {aberto && (
-        <div className="px-3 pb-3">
+        <div className="px-3.5 pb-3.5 flex flex-col gap-3 animate-surgir">
           {regras.length > 0 && (
-            <div className="flex flex-col mb-2">
-              {regras.map((r) => (
-                <div
-                  key={r.id}
-                  className="grid gap-2 items-center py-1.5 border-b border-borda/60 last:border-b-0
-                             grid-cols-1 md:grid-cols-[76px_minmax(0,1.2fr)_minmax(0,1fr)_86px_auto]"
-                >
-                  <Pill tom="neutro">{r.escopo === 'oferta' ? 'oferta' : 'curso'}</Pill>
-                  <span className="text-xs truncate" title={r.alvo_rotulo || r.alvo}>
-                    {r.alvo_rotulo || r.alvo}
-                  </span>
-                  <span className="text-[11px] text-tenue truncate">
-                    {r.conversion_action_nome || r.conversion_action_id}
-                  </span>
-                  <span className="text-[11px] tnum md:text-right">
-                    {r.valor ? `R$ ${Number(r.valor).toFixed(2)}` : '—'}
-                  </span>
-                  <span className="md:text-right">
-                    <BotaoMini onClick={() => remover(r.id)} disabled={ocupado}>Remover</BotaoMini>
-                  </span>
-                </div>
-              ))}
+            <div className="overflow-x-auto rounded-[10px] border border-borda bg-superficie">
+              <table className="tabela min-w-[600px]">
+                <thead>
+                  <tr>
+                    <th className="w-[90px]">Escopo</th>
+                    <th>Curso / oferta</th>
+                    <th>Ação de conversão</th>
+                    <th className="w-[110px] !text-right">Valor fixo</th>
+                    <th className="w-[1%]"><span className="sr-only">Ações</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {regras.map((r) => (
+                    <tr key={r.id}>
+                      <td>
+                        <Pill tom="azul">{r.escopo === 'oferta' ? 'oferta' : 'curso'}</Pill>
+                      </td>
+                      <td className="max-w-0">
+                        <Dica conteudo={r.alvo_rotulo || r.alvo} className="w-full">
+                          <span className="block truncate">{r.alvo_rotulo || r.alvo}</span>
+                        </Dica>
+                      </td>
+                      <td className="max-w-0">
+                        <Dica conteudo={r.conversion_action_nome || r.conversion_action_id} className="w-full">
+                          <span className="block text-secundario truncate">
+                            {r.conversion_action_nome || r.conversion_action_id}
+                          </span>
+                        </Dica>
+                      </td>
+                      <td className="tnum text-right">
+                        {r.valor ? `R$ ${Number(r.valor).toFixed(2)}` : '—'}
+                      </td>
+                      <td>
+                        <BotaoMini
+                          onClick={() => remover(r.id)}
+                          disabled={ocupado}
+                          icone="lixeira"
+                          variante="perigo"
+                        >
+                          Remover
+                        </BotaoMini>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
 
-          <div className="rounded-[8px] border border-borda-forte bg-superficie p-2.5
-                          flex flex-wrap items-end gap-2">
-            <label className="flex flex-col gap-0.5 min-w-[110px]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Escopo</span>
+          <div className="rounded-[10px] border border-borda-forte bg-superficie p-3 flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 min-w-[120px]">
+              <Rotulo>Escopo</Rotulo>
               <Select
                 rotulo="Escopo da regra"
                 valor={escopo}
@@ -1421,25 +1641,36 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
               * desse tamanho para achar uma é pior do que digitar três letras.
               * O campo aceita o código direto, para quem já o conhece.
               */}
-            <label className="flex flex-col gap-0.5 flex-1 min-w-[220px]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
-                {escopo === 'oferta' ? 'Oferta' : 'Curso'} — digite para buscar
+            {/*
+              * `div` e não `label`: o "?" do rótulo é um <button>, e dentro de
+              * <label> ele viraria o controle rotulado — o clique no texto
+              * acionaria a dica em vez de focar o campo. O campo leva `aria-label`.
+              */}
+            <div className="flex flex-col gap-1 flex-1 min-w-[220px]">
+              <Rotulo dica="Digite para buscar pelo nome, ou cole o código direto.">
+                {escopo === 'oferta' ? 'Oferta' : 'Curso'}
+              </Rotulo>
+              <span className="relative">
+                <Icone
+                  nome="busca"
+                  className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-tenue pointer-events-none"
+                />
+                <input
+                  type="text"
+                  list={`alvos-${evento.id}-${escopo}`}
+                  value={alvo}
+                  onChange={(e) => setAlvo(e.target.value)}
+                  placeholder={escopo === 'oferta' ? 'nome ou código da oferta' : 'nome ou código do curso'}
+                  aria-label={`${escopo === 'oferta' ? 'Oferta' : 'Curso'} — digite para buscar`}
+                  className={`${CAMPO} w-full !pl-8`}
+                />
               </span>
-              <input
-                type="text"
-                list={`alvos-${evento.id}-${escopo}`}
-                value={alvo}
-                onChange={(e) => setAlvo(e.target.value)}
-                placeholder={escopo === 'oferta' ? 'nome ou código da oferta' : 'nome ou código do curso'}
-                className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                           px-2 py-[5px] text-[11px] w-full"
-              />
               <datalist id={`alvos-${evento.id}-${escopo}`}>
                 {opcoesAlvo.slice(0, 500).map((o) => (
                   <option key={o.v} value={o.v}>{o.r}</option>
                 ))}
               </datalist>
-            </label>
+            </div>
 
             {/*
               * `div` e não `label`: o alternador é um <button>, e conteúdo
@@ -1447,7 +1678,7 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
               * escaparia para o controle rotulado e o focaria junto. Os dois
               * campos abaixo têm `aria-label` próprio, então nada se perde.
               */}
-            <div className="flex flex-col gap-0.5 min-w-[190px] flex-1">
+            <div className="flex flex-col gap-1 min-w-[200px] flex-1">
               {/*
                 * O alternador fica NA LINHA DO RÓTULO, acima do campo.
                 *
@@ -1455,17 +1686,16 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
                 * o contrário: é a escolha entre dois caminhos, que precisa ser
                 * vista antes de mexer no campo, não depois.
                 */}
-              <span className="flex items-baseline justify-between gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
-                  Ação de conversão
-                </span>
+              <span className="flex items-center justify-between gap-2">
+                <Rotulo>Ação de conversão</Rotulo>
                 <button
                   type="button"
                   onClick={() => { setCriando((v) => !v); setErro(''); }}
-                  className="text-[10px] text-azul-600 bg-transparent border-0 p-0 cursor-pointer
-                             whitespace-nowrap hover:underline"
+                  className="inline-flex items-center gap-1 text-[12.5px] font-medium text-azul-600 bg-transparent
+                             border-0 p-0 cursor-pointer whitespace-nowrap hover:underline"
                 >
-                  {criando ? 'escolher uma que já existe' : '+ criar uma nova'}
+                  <Icone nome={criando ? 'lista' : 'mais'} className="w-3.5 h-3.5" />
+                  {criando ? 'escolher uma que já existe' : 'criar uma nova'}
                 </button>
               </span>
               {criando ? (
@@ -1475,8 +1705,7 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
                   maxLength={80}
                   onChange={(e) => setNomeNovo(e.target.value)}
                   aria-label="Nome da nova ação no Google Ads"
-                  className="bg-superficie text-primario border border-azul-500 rounded-[8px]
-                             px-2 py-[5px] text-[11px] w-full"
+                  className={`${CAMPO} w-full !border-azul-500`}
                 />
               ) : (
                 <Select
@@ -1494,8 +1723,8 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
 
             {/* A meta só é escolhida ao criar — ação existente já tem a sua. */}
             {criando && (
-              <label className="flex flex-col gap-0.5 min-w-[150px]">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">Meta</span>
+              <label className="flex flex-col gap-1 min-w-[160px] animate-aparecer">
+                <Rotulo>Meta</Rotulo>
                 <Select
                   rotulo="Meta da nova ação no Google Ads"
                   valor={metaNova}
@@ -1517,10 +1746,8 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
               * dois, então escolher a FONTE evita digitar cifra que envelhece no
               * dia em que o curso reajusta.
               */}
-            <label className="flex flex-col gap-0.5 min-w-[150px]">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">
-                Valor enviado
-              </span>
+            <label className="flex flex-col gap-1 min-w-[170px]">
+              <Rotulo>Valor enviado</Rotulo>
               <Select
                 rotulo="Base do valor desta regra"
                 valor={base}
@@ -1531,8 +1758,8 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
             </label>
 
             {base === 'fixo' && (
-              <label className="flex flex-col gap-0.5 w-[92px]">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-tenue">R$</span>
+              <label className="flex flex-col gap-1 w-[110px] animate-aparecer">
+                <Rotulo>R$</Rotulo>
                 <input
                   type="number"
                   min="0"
@@ -1540,55 +1767,42 @@ function Especificas({ evento, regras, catalogo, metas, bases, disponiveis, aoSa
                   value={valor}
                   onChange={(e) => setValor(e.target.value)}
                   placeholder="0,00"
-                  className="bg-superficie text-primario border border-borda-forte rounded-[8px]
-                             px-2 py-[5px] text-[11px] w-full tnum text-right"
+                  className={`${CAMPO} w-full tnum text-right`}
                 />
               </label>
             )}
 
-            <button
-              type="button"
-              disabled={ocupado}
+            <Botao
+              variante="primario"
+              icone="mais"
+              carregando={ocupado}
               onClick={() => (criando ? criarEAdicionar() : salvar())}
-              className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500
-                         bg-azul-600 text-white hover:bg-azul-500 cursor-pointer
-                         disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
             >
               {ocupado
                 ? (criando ? 'Criando…' : 'Salvando…')
                 : (criando ? 'Criar e adicionar' : 'Adicionar')}
-            </button>
+            </Botao>
           </div>
 
-          {erro && <div className="text-[10px] text-perigo mt-1">{erro}</div>}
-
-          <div className="text-[10px] text-tenue mt-2 leading-relaxed">
-            A ordem de resolução é <strong className="text-secundario">oferta → curso → nível → geral</strong>:
-            a primeira regra que casar vence. O valor daqui só entra quando o webhook não trouxer
-            o preço real da matrícula.
-            {' '}Uma meta específica só separa alguma coisa no Google Ads se tiver{' '}
-            <strong className="text-secundario">ação própria</strong> — apontar para a mesma ação da
-            regra de nível cria uma linha aqui que não muda nada lá.
-          </div>
+          {erro && (
+            <span className="flex items-center gap-1.5 text-[12.5px] text-perigo animate-aparecer">
+              <Icone nome="alerta" className="w-4 h-4" />
+              {erro}
+            </span>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-/** Botão de texto pequeno, o mesmo em toda linha da tabela. */
-function BotaoMini({ children, onClick, disabled, titulo }) {
+/** Botão pequeno, o mesmo em toda linha da tabela — a explicação vai na dica. */
+function BotaoMini({ children, onClick, disabled, titulo, icone, variante = 'secundario' }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={titulo}
-      className="text-[11px] px-2 py-[4px] rounded-[7px] border border-borda-forte bg-superficie
-                 text-secundario hover:bg-superficie-hover hover:text-primario cursor-pointer
-                 whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-    >
-      {children}
-    </button>
+    <Dica conteudo={titulo}>
+      <Botao tamanho="sm" variante={variante} icone={icone} onClick={onClick} disabled={disabled}>
+        {children}
+      </Botao>
+    </Dica>
   );
 }

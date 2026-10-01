@@ -1,6 +1,20 @@
-import { useState } from 'react';
-import { Cartao, Estado, Esqueleto, Pill } from '../componentes/base';
-import { useApi } from '../lib/api';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Atualizando,
+  Botao,
+  BotaoIcone,
+  CabecalhoPagina,
+  Cartao,
+  Dica,
+  Estado,
+  EsqueletoPagina,
+  Icone,
+  InfoDica,
+  Pill,
+  Secao,
+  TituloSecao,
+} from '../componentes/base';
+import { invalidar, useApi } from '../lib/api';
 import { fmtDataHora, fmtInt } from '../lib/formato';
 
 const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n' };
@@ -15,12 +29,110 @@ const ROTULO_EVENTO = {
   atividade_edicao: 'Edição de atividade',
 };
 
+const DESCRICAO_TELA =
+  'Um link por funil e por canal. O banco guarda só o hash do token, então o link aparece uma única vez, ao ser gerado. Os leads recebidos ficam em Funil de vendas.';
+
+const DICA_NOVO_FUNIL =
+  'O funil nasce com os três canais e sem link: clique em gerar no canal que for usar. As etapas não são cadastradas aqui — são descobertas a partir dos eventos que o Rubeus enviar. Um link por funil, usado em todas as etapas dele: nos gatilhos que permitem escolher o processo — novo registro de processo e ocorrência de um evento — use o link do funil correspondente. Evento que chegar sem etapa é gravado assim mesmo e aparece marcado no histórico do lead, para nenhum se perder.';
+
+const DICA_POR_EVENTO =
+  'Para os gatilhos que NÃO deixam escolher o processo. Os que deixam — novo registro de processo e ocorrência de um evento — usam o link do funil, mais abaixo. O "Geral" aceita qualquer payload e nunca recusa: o que ele não souber interpretar fica guardado cru no histórico do lead, para ser tratado depois. Use enquanto o formato de um gatilho ainda não é conhecido.';
+
+/** Onde o cache de leitura desta tela mora — esquecido depois de cada gravação. */
+const ROTA_FUNIS = '/api/funis';
+
+/**
+ * Situação de um webhook numa pílula com ponto: sem link, esperando o
+ * primeiro evento, ou já recebendo. O detalhe (quando foi o último) vai na
+ * dica para a pílula caber ao lado do nome.
+ */
+function StatusWebhook({ w }) {
+  if (!w.tem_link) {
+    return (
+      <Pill ponto tom="atencao" dica="Nenhum link gerado para este canal ainda. Gere e cole no sistema de origem.">
+        Sem link
+      </Pill>
+    );
+  }
+  if (w.total_recebido > 0) {
+    return (
+      <Pill
+        ponto
+        tom="sucesso"
+        dica={w.ultimo_uso_em ? `Último evento: ${fmtDataHora(w.ultimo_uso_em)}` : 'Recebendo eventos'}
+      >
+        <span className="tnum">{fmtInt(w.total_recebido)}</span> evento{w.total_recebido === 1 ? '' : 's'}
+      </Pill>
+    );
+  }
+  return (
+    <Pill ponto tom="neutro" dica="O link existe, mas nenhum evento chegou por ele ainda.">
+      Aguardando 1º evento
+    </Pill>
+  );
+}
+
+/**
+ * Caminho do webhook em campo monoespaçado, com botão de copiar.
+ *
+ * Copia só o caminho — o token não existe em claro no banco, então não há
+ * como reexibi-lo. O link completo vai para a área de transferência uma única
+ * vez, no botão de gerar; este aqui serve para conferir qual rota é qual.
+ */
+function CampoCaminho({ caminho }) {
+  const [copiado, setCopiado] = useState(false);
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  const copiar = async () => {
+    try {
+      await navigator.clipboard.writeText(caminho);
+      setCopiado(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopiado(false), 1800);
+    } catch {
+      /* Sem permissão de área de transferência: o caminho continua visível para copiar à mão. */
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <Dica conteudo={caminho} className="flex-1 min-w-0">
+        <code
+          tabIndex={0}
+          className="block w-full min-w-0 truncate font-mono text-[12.5px] text-secundario
+                     bg-elevado border border-borda rounded-[9px] px-2.5 py-[7px]"
+        >
+          {caminho}
+        </code>
+      </Dica>
+      <span className="relative shrink-0">
+        <BotaoIcone
+          aoClicar={copiar}
+          icone={copiado ? 'check' : 'copiar'}
+          titulo={copiado ? 'Copiado' : 'Copiar caminho (sem o token — o link completo só aparece ao gerar)'}
+        />
+        {copiado && (
+          <span
+            role="status"
+            className="absolute -top-7 left-1/2 -translate-x-1/2 animate-escala pointer-events-none
+                       px-2 py-0.5 rounded-full bg-sucesso text-white text-[12px] font-semibold whitespace-nowrap"
+          >
+            Copiado
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
 /**
  * Botão de gerar link.
  *
- * Não existe mais "copiar": o banco guarda só o hash do token, então não há
- * valor a reexibir. Quem gera recebe a URL uma vez, na resposta, e ela vai
- * direto para a área de transferência — nunca chega a ser desenhada na tela.
+ * Não existe "copiar" o link completo: o banco guarda só o hash do token,
+ * então não há valor a reexibir. Quem gera recebe a URL uma vez, na resposta,
+ * e ela vai direto para a área de transferência — nunca chega a ser desenhada
+ * na tela.
  *
  * Trocar de link exige confirmação porque invalida o anterior na hora: o que
  * estiver colado no Rubeus para de funcionar até ser substituído.
@@ -36,6 +148,7 @@ function BotaoGerar({ rota, jaTemLink, aoGerar }) {
       const r = await fetch(rota, { method: 'POST' });
       if (!r.ok) throw new Error(String(r.status));
       const { url } = await r.json();
+      invalidar(ROTA_FUNIS);
       await navigator.clipboard.writeText(url);
       setEstado('copiado');
       aoGerar?.();
@@ -48,89 +161,105 @@ function BotaoGerar({ rota, jaTemLink, aoGerar }) {
 
   if (confirmando) {
     return (
-      <span className="flex items-center gap-2 text-[11px] shrink-0">
-        <span className="text-atencao">Invalida o link atual.</span>
-        <button
-          type="button"
-          onClick={gerar}
-          className="px-2 py-[5px] rounded-[8px] border border-perigo/40 bg-perigo/12 text-perigo cursor-pointer"
-        >
+      <span className="flex items-center gap-2 flex-wrap shrink-0 animate-escala">
+        <span className="text-atencao text-[12.5px] font-medium flex items-center gap-1">
+          <Icone nome="alerta" className="w-4 h-4" />
+          Invalida o link atual
+        </span>
+        <Botao variante="perigo" tamanho="sm" onClick={gerar}>
           Gerar mesmo assim
-        </button>
-        <button
-          type="button"
-          onClick={() => setConfirmando(false)}
-          className="px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie text-secundario cursor-pointer"
-        >
+        </Botao>
+        <Botao variante="fantasma" tamanho="sm" onClick={() => setConfirmando(false)}>
           Cancelar
-        </button>
+        </Botao>
       </span>
     );
   }
 
-  const rotulo = {
-    pronto: jaTemLink ? 'Gerar novo link' : 'Gerar link',
-    gerando: 'Gerando…',
-    copiado: 'Copiado para a área de transferência',
-    erro: 'Falhou',
-  }[estado];
+  if (estado === 'copiado') {
+    return (
+      <span className="shrink-0 animate-escala">
+        <Pill
+          tom="sucesso"
+          dica="A URL completa foi para a área de transferência. Cole no sistema de origem agora — ela não será exibida de novo."
+        >
+          <Icone nome="check" className="w-3.5 h-3.5" traco={2.4} />
+          URL copiada
+        </Pill>
+      </span>
+    );
+  }
+
+  if (estado === 'erro') {
+    return (
+      <span className="shrink-0 animate-escala">
+        <Pill tom="perigo" dica="O servidor recusou ou a área de transferência não estava disponível. Tente de novo.">
+          <Icone nome="x" className="w-3.5 h-3.5" traco={2.4} />
+          Falhou
+        </Pill>
+      </span>
+    );
+  }
 
   return (
-    <button
-      type="button"
+    <Botao
+      variante={jaTemLink ? 'secundario' : 'primario'}
+      tamanho="sm"
+      icone={jaTemLink ? 'atualizar' : 'link'}
+      carregando={estado === 'gerando'}
       onClick={() => (jaTemLink ? setConfirmando(true) : gerar())}
-      disabled={estado === 'gerando'}
-      className={`inline-flex items-center gap-[6px] text-[11px] px-2 py-[5px] rounded-[8px] border cursor-pointer shrink-0
-        ${estado === 'copiado'
-          ? 'border-sucesso/40 bg-sucesso/12 text-sucesso'
-          : estado === 'erro'
-            ? 'border-perigo/40 bg-perigo/12 text-perigo'
-            : jaTemLink
-              ? 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario'
-              : 'border-azul-500 bg-azul-600 text-white hover:bg-azul-500'}`}
+      className="shrink-0"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-[13px] h-[13px]" aria-hidden="true">
-        {estado === 'copiado' ? (
-          <path d="M20 6 9 17l-5-5" />
-        ) : (
-          <>
-            <rect x="9" y="9" width="11" height="11" rx="2" />
-            <path d="M5 15V5a2 2 0 0 1 2-2h8" />
-          </>
-        )}
-      </svg>
-      {rotulo}
-    </button>
+      {estado === 'gerando' ? 'Gerando…' : jaTemLink ? 'Gerar novo link' : 'Gerar link'}
+    </Botao>
   );
 }
 
-/** Estado do link, no lugar dos bullets que antes fingiam mostrar o token. */
-function LinhaWebhook({ funilId, w, aoGerar }) {
+/** Um canal de um funil: nome, situação, caminho e o botão de gerar. */
+function LinhaWebhook({ titulo, destaque, w, rota, aoGerar }) {
   return (
-    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 py-2 border-t border-borda first:border-t-0">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold">{ROTULO_CANAL[w.canal] || w.canal}</span>
-          {!w.tem_link ? (
-            <Pill tom="atencao">sem link gerado</Pill>
-          ) : w.total_recebido > 0 ? (
-            <Pill tom="sucesso">{fmtInt(w.total_recebido)} evento(s)</Pill>
-          ) : (
-            <Pill tom="neutro">sem evento ainda</Pill>
-          )}
-        </div>
-        <div className="text-[11px] text-tenue mt-1 font-mono break-all">{w.caminho}</div>
-        {w.ultimo_uso_em && (
-          <div className="text-[11px] text-tenue mt-px">Último evento: {fmtDataHora(w.ultimo_uso_em)}</div>
-        )}
+    <div className="flex flex-col gap-2 py-3 border-t border-borda first:border-t-0 first:pt-0 last:pb-0">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className={`text-[13.5px] font-semibold flex items-center gap-1.5 min-w-0 ${destaque ? 'text-azul-600' : ''}`}>
+          {destaque && <Icone nome="estrela" className="w-4 h-4" />}
+          <span className="truncate">{titulo}</span>
+        </span>
+        <StatusWebhook w={w} />
       </div>
-
-      <BotaoGerar
-        rota={`/api/funis/${funilId}/regerar/${w.canal}`}
-        jaTemLink={w.tem_link}
-        aoGerar={aoGerar}
-      />
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <CampoCaminho caminho={w.caminho} />
+        </div>
+        <BotaoGerar rota={rota} jaTemLink={w.tem_link} aoGerar={aoGerar} />
+      </div>
     </div>
+  );
+}
+
+/** Resumo do funil no cabeçalho do cartão: quantos canais já têm link. */
+function StatusFunil({ webhooks }) {
+  const total = webhooks.length;
+  const comLink = webhooks.filter((w) => w.tem_link).length;
+  const recebendo = webhooks.some((w) => w.total_recebido > 0);
+  if (!total) return <Pill ponto tom="neutro">Sem canais</Pill>;
+  if (!comLink) {
+    return (
+      <Pill ponto tom="atencao" dica="Nenhum canal tem link gerado — o funil ainda não recebe nada.">
+        Sem links
+      </Pill>
+    );
+  }
+  return (
+    <Pill
+      ponto
+      tom={recebendo ? 'sucesso' : 'azul'}
+      dica={`${comLink} de ${total} canais com link gerado${recebendo ? ', já recebendo eventos' : ', nenhum evento ainda'}.`}
+    >
+      <span className="tnum">
+        {comLink}/{total}
+      </span>{' '}
+      ativos
+    </Pill>
   );
 }
 
@@ -138,31 +267,45 @@ export function Webhooks() {
   const [versao, setVersao] = useState(0);
   const [nome, setNome] = useState('');
   const [erroForm, setErroForm] = useState(null);
-  const [syncMsg, setSyncMsg] = useState(null);
-  const { dados, carregando, erro } = useApi('/api/funis', `funis-${versao}`);
+  const [criando, setCriando] = useState(false);
+  const [removendo, setRemovendo] = useState(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [sync, setSync] = useState(null);
+  // `manter`: depois de gerar um link o formato da resposta é o mesmo — não há por que piscar o esqueleto.
+  const { dados, carregando, atualizando, erro } = useApi(ROTA_FUNIS, `funis-${versao}`, { manter: true });
 
-  const recarregar = () => setVersao((v) => v + 1);
+  const recarregar = () => {
+    invalidar(ROTA_FUNIS);
+    setVersao((v) => v + 1);
+  };
 
   const syncRubeus = async () => {
-    setSyncMsg('Sincronizando…');
+    setSincronizando(true);
+    setSync(null);
     try {
       const r = await fetch('/api/admin/rubeus/sync', { method: 'POST' });
       const c = await r.json().catch(() => ({}));
+      // A sincronização mexe em cursos, ofertas e etapas — dado que várias telas leem.
+      invalidar();
       if (!r.ok) {
-        setSyncMsg(c.detalhe || 'Falha na sincronização');
+        setSync({ ok: false, msg: c.detalhe || 'Falha na sincronização' });
         return;
       }
-      setSyncMsg(
-        `OK: ${c.cursos?.cursos ?? 0} cursos, ${c.cursos?.ofertas ?? 0} ofertas, ${c.etapas?.etapas ?? 0} etapas.`,
-      );
+      setSync({
+        ok: true,
+        msg: `${c.cursos?.cursos ?? 0} cursos, ${c.cursos?.ofertas ?? 0} ofertas e ${c.etapas?.etapas ?? 0} etapas sincronizados.`,
+      });
     } catch {
-      setSyncMsg('Não foi possível falar com o servidor.');
+      setSync({ ok: false, msg: 'Não foi possível falar com o servidor.' });
+    } finally {
+      setSincronizando(false);
     }
   };
 
   const criar = async (e) => {
     e.preventDefault();
     setErroForm(null);
+    setCriando(true);
     try {
       const r = await fetch('/api/funis', {
         method: 'POST',
@@ -178,35 +321,53 @@ export function Webhooks() {
       recarregar();
     } catch {
       setErroForm('Não foi possível falar com o servidor.');
+    } finally {
+      setCriando(false);
     }
   };
 
   const remover = async (funilId) => {
-    await fetch(`/api/funis/${funilId}`, { method: 'DELETE' });
-    recarregar();
+    setRemovendo(funilId);
+    try {
+      await fetch(`/api/funis/${funilId}`, { method: 'DELETE' });
+    } finally {
+      setRemovendo(null);
+      recarregar();
+    }
   };
 
   const cabecalho = (
-    <div className="flex items-start justify-between gap-3 flex-wrap">
-      <div>
-        <div className="text-[19px] font-semibold tracking-tight">Funis e webhooks</div>
-        <div className="text-tenue text-xs mt-[2px]">
-          Um link por funil e por canal. O banco guarda só o hash do token, então o link aparece
-          uma única vez, ao ser gerado. Os leads recebidos ficam em{' '}
-          <strong className="text-secundario">Funil de vendas</strong>.
-        </div>
-      </div>
-      <div className="flex flex-col items-end gap-1">
-        <button
-          type="button"
-          onClick={syncRubeus}
-          className="text-xs px-3 py-[6px] rounded-[8px] bg-superficie border border-borda-forte
-                     text-secundario cursor-pointer hover:bg-superficie-hover hover:text-primario"
-        >
-          Sincronizar cursos/etapas (Rubeus)
-        </button>
-        {syncMsg && <span className="text-[11px] text-tenue max-w-[280px] text-right">{syncMsg}</span>}
-      </div>
+    <CabecalhoPagina
+      titulo="Funis e webhooks"
+      icone="link"
+      descricao={DESCRICAO_TELA}
+      acoes={
+        <Dica conteudo="Busca no Rubeus a lista atual de cursos, ofertas e etapas e atualiza o catálogo do painel.">
+          <Botao icone="atualizar" carregando={sincronizando} onClick={syncRubeus}>
+            {sincronizando ? 'Sincronizando…' : 'Sincronizar Rubeus'}
+          </Botao>
+        </Dica>
+      }
+    />
+  );
+
+  const avisoSync = sync && (
+    <div
+      role="status"
+      className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-[12px] border text-[13px] animate-surgir
+        ${sync.ok ? 'bg-sucesso/8 border-sucesso/30 text-sucesso' : 'bg-perigo/8 border-perigo/30 text-perigo'}`}
+    >
+      <Icone nome={sync.ok ? 'checkCirculo' : 'alerta'} className="w-[18px] h-[18px]" />
+      <span className="flex-1 min-w-0 font-medium">{sync.msg}</span>
+      <button
+        type="button"
+        onClick={() => setSync(null)}
+        aria-label="Fechar aviso"
+        className="w-7 h-7 rounded-[8px] border-0 bg-transparent text-current opacity-70 hover:opacity-100
+                   flex items-center justify-center cursor-pointer"
+      >
+        <Icone nome="x" className="w-4 h-4" />
+      </button>
     </div>
   );
 
@@ -217,6 +378,7 @@ export function Webhooks() {
         {cabecalho}
         <Cartao>
           <Estado
+            icone="cadeado"
             titulo="Esta tela é restrita"
             mensagem="Ela emite as credenciais que autorizam o Rubeus e a Evolution a gravar no banco, por isso fica com quem administra a integração. As telas de resultado continuam abertas para você."
           />
@@ -225,114 +387,160 @@ export function Webhooks() {
     );
   }
 
-  if (erro) return <>{cabecalho}<Cartao><Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} /></Cartao></>;
-  if (carregando || !dados) return <>{cabecalho}<Esqueleto linhas={5} /></>;
+  if (erro) {
+    return (
+      <>
+        {cabecalho}
+        <Cartao>
+          <Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} />
+        </Cartao>
+      </>
+    );
+  }
+  if (carregando || !dados) {
+    return (
+      <>
+        {cabecalho}
+        <EsqueletoPagina kpis={0} graficos={0} tabela />
+      </>
+    );
+  }
+
+  const porEvento = [...(dados.por_evento ?? [])].sort((a, b) =>
+    a.evento === 'geral' ? -1 : b.evento === 'geral' ? 1 : a.evento.localeCompare(b.evento),
+  );
 
   return (
     <>
       {cabecalho}
+      {avisoSync}
 
-      <Cartao>
-        <form onSubmit={criar} className="flex items-center gap-2 flex-wrap">
-          <input
-            type="text"
-            value={nome}
-            onChange={(e) => setNome(e.target.value)}
-            placeholder="Nome do novo funil…"
-            aria-label="Nome do novo funil"
-            className="bg-superficie text-primario border border-borda-forte rounded-[8px] px-2 py-[5px] text-xs flex-1 min-w-[180px]"
-          />
-          <button
-            type="submit"
-            disabled={nome.trim().length < 2}
-            className="text-xs px-3 py-[6px] rounded-[8px] bg-azul-600 text-white border-0 cursor-pointer
-                       disabled:opacity-40 disabled:cursor-not-allowed hover:bg-azul-500"
-          >
-            Adicionar funil
-          </button>
-          {erroForm && <span className="text-[11px] text-perigo">{erroForm}</span>}
-        </form>
-        <div className="text-[11px] text-tenue mt-2 leading-relaxed">
-          O funil nasce com os três canais e <strong className="text-secundario">sem link</strong>:
-          clique em gerar no canal que for usar. As etapas não são cadastradas aqui — são
-          descobertas a partir dos eventos que o Rubeus enviar.
-          <br />
-          <strong className="text-secundario">Um link por funil, usado em todas as etapas dele.</strong>{' '}
-          Nos gatilhos que permitem escolher o processo — novo registro de processo e ocorrência de
-          um evento — use o link do funil correspondente. Evento que chegar sem etapa é gravado
-          assim mesmo e aparece marcado no histórico do lead, para nenhum se perder.
-        </div>
-      </Cartao>
-
-      {dados.por_evento?.length > 0 && (
+      <Atualizando ativo={atualizando} className="flex flex-col gap-4">
         <Cartao>
-          <div className="text-[13px] font-semibold">Webhooks por tipo de evento</div>
-          <div className="text-[11px] text-tenue mt-1 mb-2 leading-relaxed">
-            Para os gatilhos que <strong className="text-secundario">não</strong> deixam escolher o
-            processo. Os que deixam — novo registro de processo e ocorrência de um evento — usam o
-            link do funil, mais abaixo.
-            <br />
-            <strong className="text-secundario">O "Geral" aceita qualquer payload e nunca recusa</strong>:
-            o que ele não souber interpretar fica guardado cru no histórico do lead, para ser tratado
-            depois. Use enquanto o formato de um gatilho ainda não é conhecido.
-          </div>
-          {[...dados.por_evento].sort((a, b) =>
-            a.evento === 'geral' ? -1 : b.evento === 'geral' ? 1 : a.evento.localeCompare(b.evento),
-          ).map((w) => (
-            <div key={w.id} className="flex flex-col md:flex-row md:items-center md:justify-between
-                                       gap-2 py-2 border-t border-borda">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`text-xs font-semibold ${w.evento === 'geral' ? 'text-azul-300' : ''}`}>
-                    {ROTULO_CANAL[w.canal] || w.canal} · {ROTULO_EVENTO[w.evento] || w.evento}
-                  </span>
-                  {!w.tem_link
-                    ? <Pill tom="atencao">sem link gerado</Pill>
-                    : w.total_recebido > 0
-                      ? <Pill tom="sucesso">{fmtInt(w.total_recebido)} evento(s)</Pill>
-                      : <Pill tom="neutro">sem evento ainda</Pill>}
-                </div>
-                <div className="text-[11px] text-tenue mt-1 font-mono break-all">{w.caminho}</div>
-                {w.ultimo_uso_em && (
-                  <div className="text-[11px] text-tenue mt-px">Último: {fmtDataHora(w.ultimo_uso_em)}</div>
-                )}
-              </div>
-              <BotaoGerar
-                rota={`/api/funis/token-evento/${w.id}`}
-                jaTemLink={w.tem_link}
-                aoGerar={recarregar}
-              />
-            </div>
-          ))}
-        </Cartao>
-      )}
-
-      {dados.itens.map((f) => (
-        <Cartao key={f.id}>
-          <div className="flex items-start justify-between gap-3 mb-2">
-            <div>
-              <div className="text-[13px] font-semibold">{f.nome}</div>
-              <div className="text-[11px] text-tenue font-mono">{f.slug}</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => remover(f.id)}
-              title="Desativa o funil; o histórico de leads é preservado"
-              className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie
-                         text-secundario hover:bg-superficie-hover cursor-pointer shrink-0"
+          <TituloSecao titulo="Novo funil" icone="mais" dica={DICA_NOVO_FUNIL} />
+          <form onSubmit={criar} className="flex items-center gap-2 flex-wrap">
+            <input
+              type="text"
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              placeholder="Nome do novo funil…"
+              aria-label="Nome do novo funil"
+              className="bg-superficie text-primario border border-borda-forte rounded-[10px] px-3 py-[7px] text-[13.5px]
+                         flex-1 min-w-[180px] transition-colors hover:border-azul-400/50
+                         focus:outline-none focus:border-azul-500 focus:ring-2 focus:ring-azul-400/25"
+            />
+            <Botao
+              type="submit"
+              variante="primario"
+              icone="mais"
+              carregando={criando}
+              disabled={nome.trim().length < 2}
             >
-              Desativar
-            </button>
-          </div>
-          {f.webhooks.length ? (
-            f.webhooks.map((w) => (
-              <LinhaWebhook key={w.canal} funilId={f.id} w={w} aoGerar={recarregar} />
-            ))
-          ) : (
-            <div className="text-xs text-tenue py-2">Nenhum webhook gerado para este funil.</div>
+              Adicionar funil
+            </Botao>
+          </form>
+          {erroForm && (
+            <div role="alert" className="mt-2 text-[13px] text-perigo flex items-center gap-1.5 animate-surgir">
+              <Icone nome="alerta" className="w-4 h-4" />
+              {erroForm}
+            </div>
           )}
         </Cartao>
-      ))}
+
+        {porEvento.length > 0 && (
+          <Secao
+            titulo="Webhooks por tipo de evento"
+            icone="raio"
+            dica={DICA_POR_EVENTO}
+            extra={<span className="tnum">{porEvento.length}</span>}
+          >
+            <div className="grid gap-3 lg:grid-cols-2 cascata">
+              {porEvento.map((w) => (
+                <Cartao key={w.id} className={w.evento === 'geral' ? 'lg:col-span-2 border-azul-400/40' : ''}>
+                  <LinhaWebhook
+                    titulo={`${ROTULO_CANAL[w.canal] || w.canal} · ${ROTULO_EVENTO[w.evento] || w.evento}`}
+                    destaque={w.evento === 'geral'}
+                    w={w}
+                    rota={`/api/funis/token-evento/${w.id}`}
+                    aoGerar={recarregar}
+                  />
+                </Cartao>
+              ))}
+            </div>
+          </Secao>
+        )}
+
+        <Secao
+          titulo="Funis"
+          icone="funil"
+          dica="Cada funil tem um link por canal (Rubeus, Evolution API, n8n). Desativar preserva o histórico de leads."
+          extra={<span className="tnum">{dados.itens.length}</span>}
+        >
+          {dados.itens.length === 0 ? (
+            <Cartao>
+              <Estado
+                icone="funil"
+                titulo="Nenhum funil cadastrado"
+                mensagem="Crie o primeiro funil acima para gerar os links de webhook."
+              />
+            </Cartao>
+          ) : (
+            <div className="grid gap-3 xl:grid-cols-2 cascata">
+              {dados.itens.map((f) => (
+                <Cartao key={f.id} className="flex flex-col gap-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex items-center gap-2.5">
+                      <span
+                        aria-hidden="true"
+                        className="w-9 h-9 rounded-[10px] bg-azul-400/14 text-azul-600 flex items-center justify-center shrink-0"
+                      >
+                        <Icone nome="funil" className="w-[18px] h-[18px]" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Dica conteudo={f.nome} className="min-w-0">
+                            <span className="text-[15px] font-semibold truncate">{f.nome}</span>
+                          </Dica>
+                          <StatusFunil webhooks={f.webhooks} />
+                        </div>
+                        <Dica conteudo="Identificador do funil na URL do webhook">
+                          <span className="text-[12px] text-tenue font-mono">{f.slug}</span>
+                        </Dica>
+                      </div>
+                    </div>
+                    <Dica conteudo="Desativa o funil; o histórico de leads é preservado">
+                      <Botao
+                        variante="perigo"
+                        tamanho="sm"
+                        icone="lixeira"
+                        carregando={removendo === f.id}
+                        onClick={() => remover(f.id)}
+                      >
+                        Desativar
+                      </Botao>
+                    </Dica>
+                  </div>
+                  {f.webhooks.length ? (
+                    <div className="flex flex-col">
+                      {f.webhooks.map((w) => (
+                        <LinhaWebhook
+                          key={w.canal}
+                          titulo={ROTULO_CANAL[w.canal] || w.canal}
+                          w={w}
+                          rota={`/api/funis/${f.id}/regerar/${w.canal}`}
+                          aoGerar={recarregar}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <Estado icone="link" titulo="Nenhum webhook gerado para este funil" />
+                  )}
+                </Cartao>
+              ))}
+            </div>
+          )}
+        </Secao>
+      </Atualizando>
     </>
   );
 }

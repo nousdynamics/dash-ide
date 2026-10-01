@@ -1,9 +1,460 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { fmtDec } from '../lib/formato';
+import { Icone } from './icones';
 
-export function Cartao({ children, className = '' }) {
-  return <div className={`cartao ${className}`}>{children}</div>;
+export { Icone } from './icones';
+
+/**
+ * Cartão base.
+ *
+ * `interativo` é só para cartão que responde a clique: ele sobe no hover, e
+ * levantar o que não reage promete uma ação que não existe. O resto das props
+ * passa direto para a `<div>` — `style`, `onClick`, `role`, o que a tela
+ * precisar.
+ */
+export function Cartao({ children, className = '', interativo = false, ...resto }) {
+  return (
+    <div className={`cartao ${interativo ? 'cartao-interativo' : ''} ${className}`} {...resto}>
+      {children}
+    </div>
+  );
 }
+
+/* ------------------------------------------------------------------------ */
+/* Dica (tooltip)                                                           */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Dica flutuante — o lugar da explicação que antes ocupava a tela como texto
+ * miúdo embaixo de cada número.
+ *
+ * Portal no `body` com posição fixa: dentro do cartão ela seria cortada por
+ * qualquer `overflow: hidden` do caminho (tabela rolável, sanfona). Abre por
+ * cima e vira para baixo quando não cabe; encosta nas bordas da janela em vez
+ * de sair dela.
+ *
+ * Abre com o mouse e com o foco do teclado — dica que só o mouse vê some para
+ * quem navega por Tab. `aria-describedby` liga o texto ao elemento para o
+ * leitor de tela.
+ *
+ * Sem `conteudo`, devolve o filho sem embrulho: quem monta a dica condicional
+ * não precisa de um `if` em volta.
+ */
+export function Dica({ conteudo, children, lado = 'cima', atraso = 150, largura = 280, className = '', tocavel = false }) {
+  const id = useId();
+  const ancora = useRef(null);
+  const balao = useRef(null);
+  const timer = useRef(null);
+  const [aberta, setAberta] = useState(false);
+  const [pos, setPos] = useState(null);
+
+  const abrir = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setAberta(true), atraso);
+  }, [atraso]);
+  const fechar = useCallback(() => {
+    clearTimeout(timer.current);
+    setAberta(false);
+    setPos(null);
+  }, []);
+
+  useEffect(() => () => clearTimeout(timer.current), []);
+
+  // Mede depois de montar: a altura do balão depende do texto.
+  useLayoutEffect(() => {
+    if (!aberta || !ancora.current || !balao.current) return;
+    const a = ancora.current.getBoundingClientRect();
+    const b = balao.current.getBoundingClientRect();
+    const margem = 8;
+    let emCima = lado === 'cima';
+    if (emCima && a.top - b.height - margem < 4) emCima = false;
+    if (!emCima && a.bottom + b.height + margem > window.innerHeight - 4 && a.top - b.height - margem > 4) emCima = true;
+    const top = emCima ? a.top - b.height - margem : a.bottom + margem;
+    let left = a.left + a.width / 2 - b.width / 2;
+    left = Math.max(8, Math.min(left, window.innerWidth - b.width - 8));
+    const seta = Math.max(12, Math.min(a.left + a.width / 2 - left, b.width - 12));
+    setPos({ top, left, emCima, seta });
+  }, [aberta, lado, conteudo]);
+
+  // Rolar a página com a dica aberta a deixaria solta no lugar antigo.
+  useEffect(() => {
+    if (!aberta) return undefined;
+    const aoRolar = () => fechar();
+    const aoTeclar = (e) => e.key === 'Escape' && fechar();
+    const aoClicarFora = (e) => {
+      if (ancora.current && !ancora.current.contains(e.target)) fechar();
+    };
+    window.addEventListener('scroll', aoRolar, true);
+    window.addEventListener('keydown', aoTeclar);
+    if (tocavel) document.addEventListener('pointerdown', aoClicarFora);
+    return () => {
+      window.removeEventListener('scroll', aoRolar, true);
+      window.removeEventListener('keydown', aoTeclar);
+      document.removeEventListener('pointerdown', aoClicarFora);
+    };
+  }, [aberta, fechar, tocavel]);
+
+  if (conteudo === null || conteudo === undefined || conteudo === '' || conteudo === false) return children;
+
+  return (
+    <span
+      ref={ancora}
+      className={`inline-flex max-w-full ${className}`}
+      onMouseEnter={abrir}
+      onMouseLeave={fechar}
+      onFocus={abrir}
+      onBlur={fechar}
+      // Toque abre (celular não tem hover); fecha pelo toque fora, Esc ou rolagem.
+      onClick={tocavel ? () => setAberta(true) : undefined}
+      aria-describedby={aberta ? id : undefined}
+    >
+      {children}
+      {aberta &&
+        createPortal(
+          <div
+            ref={balao}
+            id={id}
+            role="tooltip"
+            style={{
+              position: 'fixed',
+              top: pos?.top ?? -9999,
+              left: pos?.left ?? -9999,
+              maxWidth: largura,
+              visibility: pos ? 'visible' : 'hidden',
+            }}
+            className="z-[100] pointer-events-none px-3 py-2 rounded-[10px] bg-azul-900 text-white
+                       text-[12.5px] leading-snug font-normal shadow-[var(--shadow-flutuante)]
+                       animate-escala whitespace-normal text-left"
+          >
+            {conteudo}
+            {pos && (
+              <span
+                aria-hidden="true"
+                className="absolute w-2 h-2 bg-azul-900 rotate-45"
+                style={{ left: pos.seta - 4, [pos.emCima ? 'bottom' : 'top']: -4 }}
+              />
+            )}
+          </div>,
+          document.body,
+        )}
+    </span>
+  );
+}
+
+/**
+ * Ícone de ajuda com dica — o "?" discreto ao lado de um título ou número.
+ *
+ * É um `<button>` para receber foco e abrir no toque: no celular não há hover,
+ * e a explicação precisa continuar alcançável.
+ */
+export function InfoDica({ texto, titulo, className = '', tamanho = 'w-[15px] h-[15px]', largura }) {
+  if (!texto) return null;
+  const conteudo = titulo ? (
+    <>
+      <span className="block font-semibold mb-0.5">{titulo}</span>
+      <span className="block text-white/85">{texto}</span>
+    </>
+  ) : (
+    texto
+  );
+  return (
+    <Dica conteudo={conteudo} tocavel largura={largura}>
+      <button
+        type="button"
+        aria-label={typeof texto === 'string' ? `Ajuda: ${texto}` : 'Ajuda'}
+        className={`inline-flex items-center justify-center p-0 border-0 bg-transparent cursor-help
+                    text-tenue hover:text-azul-600 transition-colors rounded-full align-middle ${className}`}
+      >
+        <Icone nome="ajuda" className={tamanho} traco={2} />
+      </button>
+    </Dica>
+  );
+}
+
+/* ------------------------------------------------------------------------ */
+/* Números                                                                   */
+/* ------------------------------------------------------------------------ */
+
+const semMovimento = () =>
+  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/**
+ * Número que conta até o valor novo em vez de trocar de uma vez.
+ *
+ * Parte do valor anterior, não do zero: ao trocar o período, o KPI desliza de
+ * R$ 12 mil para R$ 15 mil, e o movimento em si já diz "subiu". Valor vazio
+ * (null/NaN) passa direto pelo `fmt`, que desenha o "—".
+ */
+export function NumeroAnimado({ valor, fmt = (n) => String(n), duracao = 700, className = '' }) {
+  const n = Number(valor);
+  const valido = valor !== null && valor !== undefined && Number.isFinite(n);
+  // Começa do zero na primeira montagem: o número "sobe" ao chegar.
+  const [exibido, setExibido] = useState(valido ? (semMovimento() ? n : 0) : null);
+  const anterior = useRef(valido ? 0 : null);
+
+  useEffect(() => {
+    if (!valido) {
+      setExibido(null);
+      return undefined;
+    }
+    const de = anterior.current ?? 0;
+    anterior.current = n;
+    if (semMovimento() || de === n) {
+      setExibido(n);
+      return undefined;
+    }
+    let quadro;
+    const inicio = performance.now();
+    const passo = (agora) => {
+      const t = Math.min(1, (agora - inicio) / duracao);
+      const e = 1 - Math.pow(1 - t, 3);
+      setExibido(de + (n - de) * e);
+      if (t < 1) quadro = requestAnimationFrame(passo);
+    };
+    quadro = requestAnimationFrame(passo);
+    return () => cancelAnimationFrame(quadro);
+  }, [n, valido, duracao]);
+
+  return <span className={`tnum ${className}`}>{fmt(valido ? exibido : valor)}</span>;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Cabeçalhos e agrupamento                                                  */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Título da tela. A explicação do que a tela faz vai na dica, não num
+ * parágrafo abaixo do título — quem abre a tela todo dia já sabe, e quem não
+ * sabe tem o "?" ao lado.
+ */
+export function CabecalhoPagina({ titulo, descricao, subtitulo, acoes, icone }) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 animate-surgir">
+      <div className="min-w-0 flex items-center gap-3">
+        {icone && (
+          <span
+            aria-hidden="true"
+            className="hidden sm:flex w-10 h-10 rounded-[12px] items-center justify-center shrink-0
+                       bg-gradient-to-br from-azul-600 to-azul-400 text-white shadow-[0_6px_16px_rgba(43,87,151,0.28)]"
+          >
+            <Icone nome={icone} className="w-5 h-5" />
+          </span>
+        )}
+        <div className="min-w-0">
+          <h1 className="m-0 text-[22px] font-semibold tracking-tight flex items-center gap-2 leading-tight">
+            {titulo}
+            <InfoDica texto={descricao} tamanho="w-[17px] h-[17px]" largura={340} />
+          </h1>
+          {subtitulo && <div className="text-secundario text-[13px] mt-0.5 tnum">{subtitulo}</div>}
+        </div>
+      </div>
+      {acoes && <div className="flex items-center gap-2 flex-wrap shrink-0">{acoes}</div>}
+    </div>
+  );
+}
+
+/** Título de cartão ou de bloco, com a explicação na dica. */
+export function TituloSecao({ titulo, dica, extra, icone, className = '', como: Tag = 'h2' }) {
+  return (
+    <div className={`flex items-center justify-between gap-3 mb-3 ${className}`}>
+      <Tag className="m-0 text-[14px] font-semibold flex items-center gap-1.5 min-w-0">
+        {icone && (
+          <span className="text-azul-600">
+            <Icone nome={icone} className="w-4 h-4" />
+          </span>
+        )}
+        <span className="truncate">{titulo}</span>
+        <InfoDica texto={dica} />
+      </Tag>
+      {extra && <div className="shrink-0 flex items-center gap-2 text-[13px] text-secundario">{extra}</div>}
+    </div>
+  );
+}
+
+/**
+ * Grupo de conteúdo com rótulo — separa "o que é resultado" de "o que é
+ * alcance" sem precisar de um cartão em volta de cartões.
+ */
+export function Secao({ titulo, dica, extra, icone, children, className = '' }) {
+  return (
+    <section className={`flex flex-col gap-3 ${className}`}>
+      {titulo && (
+        <div className="flex items-center justify-between gap-3 pt-2">
+          <h2 className="m-0 text-[15px] font-semibold flex items-center gap-2 text-primario">
+            {icone && (
+              <span className="w-6 h-6 rounded-[7px] bg-azul-50 text-azul-600 flex items-center justify-center">
+                <Icone nome={icone} className="w-[14px] h-[14px]" />
+              </span>
+            )}
+            {titulo}
+            <InfoDica texto={dica} />
+          </h2>
+          {extra && <div className="flex items-center gap-2 text-[13px] text-secundario">{extra}</div>}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+/**
+ * Cartão de indicador.
+ *
+ * `valor` é número cru + `fmt`, para o número poder contar até o valor novo.
+ * Quem só tem texto pronto passa `texto` no lugar.
+ *
+ * O que antes eram duas linhas de texto miúdo embaixo do número — "antes: X" e
+ * o rodapé explicando a fórmula — vira dica: no chip de variação e no "?" do
+ * rótulo.
+ */
+export function CartaoKpi({
+  rotulo,
+  valor,
+  fmt,
+  texto,
+  delta,
+  inverso,
+  antes,
+  dica,
+  icone,
+  tom = 'azul',
+  aoClicar,
+  compacto = false,
+  children,
+}) {
+  const tons = {
+    azul: 'bg-azul-400/14 text-azul-600',
+    sucesso: 'bg-sucesso/12 text-sucesso',
+    atencao: 'bg-atencao/12 text-atencao',
+    perigo: 'bg-perigo/12 text-perigo',
+    neutro: 'bg-elevado text-secundario',
+  };
+  return (
+    <Cartao
+      interativo={Boolean(aoClicar)}
+      onClick={aoClicar}
+      className={`flex flex-col ${compacto ? 'gap-1.5 !p-4' : 'gap-2'}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[13px] text-secundario font-medium flex items-center gap-1.5 min-w-0">
+          <span className="truncate">{rotulo}</span>
+          <InfoDica texto={dica} />
+        </span>
+        {icone && (
+          <span
+            aria-hidden="true"
+            className={`w-8 h-8 rounded-[10px] flex items-center justify-center shrink-0 ${tons[tom] || tons.azul}`}
+          >
+            <Icone nome={icone} className="w-[17px] h-[17px]" />
+          </span>
+        )}
+      </div>
+      <div className={`${compacto ? 'text-[20px]' : 'text-[26px]'} font-bold tracking-tight leading-none tnum`}>
+        {texto !== undefined ? texto : <NumeroAnimado valor={valor} fmt={fmt} />}
+      </div>
+      {(delta !== undefined || antes) && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {delta !== undefined && <ChipDelta pct={delta} inverso={inverso} antes={antes} />}
+        </div>
+      )}
+      {children}
+    </Cartao>
+  );
+}
+
+/**
+ * Abas em pílula com o indicador deslizando até a aba ativa.
+ *
+ * Para agrupar conteúdo da mesma tela ("Resumo / Por curso / Por origem") em
+ * vez de empilhar tudo numa rolagem sem fim.
+ */
+export function Abas({ abas, ativa, aoTrocar, rotulo = 'Seções', className = '' }) {
+  const refs = useRef({});
+  const [ind, setInd] = useState(null);
+
+  useLayoutEffect(() => {
+    const el = refs.current[ativa];
+    if (el) setInd({ left: el.offsetLeft, width: el.offsetWidth });
+  }, [ativa, abas.length]);
+
+  return (
+    <div
+      role="tablist"
+      aria-label={rotulo}
+      className={`relative inline-flex gap-1 p-1 rounded-[12px] bg-elevado border border-borda max-w-full overflow-x-auto ${className}`}
+    >
+      {ind && (
+        <span
+          aria-hidden="true"
+          className="absolute top-1 bottom-1 rounded-[9px] bg-superficie shadow-[0_1px_3px_rgba(10,14,20,0.12)]
+                     transition-all duration-300 ease-[var(--ease-saida)]"
+          style={{ left: ind.left, width: ind.width }}
+        />
+      )}
+      {abas.map((a) => {
+        const on = a.id === ativa;
+        return (
+          <button
+            key={a.id}
+            ref={(el) => (refs.current[a.id] = el)}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            onClick={() => aoTrocar(a.id)}
+            className={`relative z-[1] flex items-center gap-1.5 whitespace-nowrap px-3 py-1.5 rounded-[9px]
+                        text-[13px] font-medium border-0 bg-transparent cursor-pointer transition-colors
+                        ${on ? 'text-primario' : 'text-secundario hover:text-primario'}`}
+          >
+            {a.icone && <Icone nome={a.icone} className="w-[15px] h-[15px]" />}
+            {a.nome}
+            {a.contagem !== undefined && a.contagem !== null && (
+              <span
+                className={`text-[11.5px] tnum px-1.5 rounded-full ${on ? 'bg-azul-600 text-white' : 'bg-borda text-secundario'}`}
+              >
+                {a.contagem}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Barra proporcional — o traço de ranking, participação e progresso.
+ * Cresce da esquerda ao montar; `dica` explica o número ao passar o mouse.
+ */
+export function BarraProporcao({ pct, tom = 'azul', altura = 'h-2', dica, className = '' }) {
+  const cores = {
+    azul: 'bg-gradient-to-r from-azul-600 to-azul-400',
+    sucesso: 'bg-gradient-to-r from-[#137a47] to-sucesso',
+    atencao: 'bg-gradient-to-r from-[#9c6308] to-atencao',
+    perigo: 'bg-gradient-to-r from-[#a8321f] to-perigo',
+    neutro: 'bg-tenue/60',
+  };
+  const largura = Math.max(0, Math.min(100, Number(pct) || 0));
+  const barra = (
+    <span className={`block w-full ${altura} rounded-full bg-elevado overflow-hidden ${className}`}>
+      <span
+        className={`block h-full rounded-full barra-cresce ${cores[tom] || cores.azul}`}
+        style={{ width: `${largura > 0 ? Math.max(1.5, largura) : 0}%` }}
+      />
+    </span>
+  );
+  return dica ? (
+    <Dica conteudo={dica} className="w-full">
+      {barra}
+    </Dica>
+  ) : (
+    barra
+  );
+}
+
+/* ------------------------------------------------------------------------ */
+/* Controles                                                                 */
+/* ------------------------------------------------------------------------ */
 
 /**
  * Switch — nunca checkbox, por padrão do projeto.
@@ -12,30 +463,32 @@ export function Cartao({ children, className = '' }) {
  * teclado, e o estado em aria-checked é anunciado como ligado/desligado pelo
  * leitor de tela, coisa que um checkbox estilizado com CSS perderia.
  */
-export function Switch({ ligado, aoTrocar, children }) {
-  return (
+export function Switch({ ligado, aoTrocar, children, dica, desativado = false }) {
+  const botao = (
     <button
       type="button"
       role="switch"
       aria-checked={ligado}
+      disabled={desativado}
       onClick={() => aoTrocar(!ligado)}
       className="inline-flex items-center gap-2 bg-transparent border-0 p-0 cursor-pointer
-                 text-xs text-secundario hover:text-primario
+                 text-[13px] text-secundario hover:text-primario disabled:opacity-50 disabled:cursor-not-allowed
                  focus-visible:outline-2 focus-visible:outline-azul-400 focus-visible:outline-offset-4 rounded"
     >
       <span
         aria-hidden="true"
-        className={`relative shrink-0 w-[30px] h-[17px] rounded-full border transition-colors
-          ${ligado ? 'bg-azul-600 border-azul-600' : 'bg-superficie border-borda-forte'}`}
+        className={`relative shrink-0 w-[34px] h-[20px] rounded-full border transition-colors duration-200
+          ${ligado ? 'bg-azul-600 border-azul-600' : 'bg-elevado border-borda-forte'}`}
       >
         <span
-          className={`absolute top-[2px] left-[2px] w-[11px] h-[11px] rounded-full transition-transform
-            ${ligado ? 'translate-x-[13px] bg-white' : 'bg-tenue'}`}
+          className={`absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full shadow-sm transition-transform duration-200 ease-[var(--ease-saida)]
+            ${ligado ? 'translate-x-[14px] bg-white' : 'bg-white border border-borda-forte'}`}
         />
       </span>
       {children}
     </button>
   );
+  return dica ? <Dica conteudo={dica}>{botao}</Dica> : botao;
 }
 
 /**
@@ -52,25 +505,35 @@ export function Switch({ ligado, aoTrocar, children }) {
  */
 export function Select({ valor, aoTrocar, opcoes, rotulo, className = '' }) {
   return (
-    <select
-      aria-label={rotulo}
-      value={valor}
-      onChange={(e) => aoTrocar(e.target.value)}
-      className={`min-w-0 bg-superficie text-primario border border-borda-forte rounded-[8px]
-                 px-2 py-[5px] text-xs font-sans cursor-pointer hover:bg-superficie-hover ${className}`}
-    >
-      {opcoes.map(([v, r]) => (
-        <option key={v} value={v}>
-          {r}
-        </option>
-      ))}
-    </select>
+    <span className={`relative inline-flex min-w-0 ${className}`}>
+      <select
+        aria-label={rotulo}
+        value={valor}
+        onChange={(e) => aoTrocar(e.target.value)}
+        className="w-full min-w-0 appearance-none bg-superficie text-primario border border-borda-forte rounded-[9px]
+                   pl-2.5 pr-7 py-[6px] text-[13px] font-sans cursor-pointer hover:bg-superficie-hover
+                   hover:border-azul-400/50 transition-colors"
+      >
+        {opcoes.map(([v, r]) => (
+          <option key={v} value={v}>
+            {r}
+          </option>
+        ))}
+      </select>
+      <Icone
+        nome="chevronBaixo"
+        className="w-[14px] h-[14px] absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-tenue"
+      />
+    </span>
   );
 }
 
 /**
- * Multi-seleção com checkboxes — um filtro pode somar várias opções (ex.: Pós + Qualificação).
- * `valores` é string[]; vazio = “todas”.
+ * Multi-seleção — um filtro pode somar várias opções (ex.: Pós + Qualificação).
+ * `valores` é string[]; vazio = "todas".
+ *
+ * A marca de selecionado é um ✓ solto, não uma caixinha: caixa com check lê
+ * como checkbox, e o painel não usa checkbox.
  */
 export function MultiSelect({
   valores = [],
@@ -121,6 +584,8 @@ export function MultiSelect({
     aoTrocar([...prox]);
   };
 
+  const ativo = selecionados.size > 0;
+
   return (
     <div ref={raiz} className={`relative min-w-0 ${className}`}>
       <button
@@ -129,22 +594,24 @@ export function MultiSelect({
         aria-expanded={aberto}
         aria-haspopup="listbox"
         onClick={() => setAberto((a) => !a)}
-        className="w-full min-w-0 flex items-center justify-between gap-1 bg-superficie text-primario
-                   border border-borda-forte rounded-[8px] px-2 py-[5px] text-xs font-sans
-                   cursor-pointer hover:bg-superficie-hover text-left"
+        className={`w-full min-w-0 flex items-center justify-between gap-1 text-primario
+                   border rounded-[9px] px-2.5 py-[6px] text-[13px] font-sans
+                   cursor-pointer text-left transition-colors
+                   ${ativo ? 'bg-azul-50 border-azul-400/50' : 'bg-superficie border-borda-forte hover:bg-superficie-hover'}`}
       >
         <span className="truncate">{texto}</span>
-        <span className="text-tenue shrink-0 text-[10px]" aria-hidden="true">
-          {aberto ? '▴' : '▾'}
-        </span>
+        <Icone
+          nome="chevronBaixo"
+          className={`w-[14px] h-[14px] text-tenue transition-transform duration-200 ${aberto ? 'rotate-180' : ''}`}
+        />
       </button>
       {aberto && (
         <div
           role="listbox"
           aria-multiselectable="true"
           aria-label={rotulo}
-          className="absolute z-40 left-0 right-0 mt-1 max-h-56 overflow-auto rounded-[8px]
-                     border border-borda-forte bg-elevado shadow-lg py-1"
+          className="absolute z-40 left-0 min-w-full w-max max-w-[320px] mt-1 max-h-64 overflow-auto rounded-[10px]
+                     border border-borda-forte bg-superficie shadow-[var(--shadow-flutuante)] p-1 animate-escala origin-top"
         >
           <button
             type="button"
@@ -154,9 +621,12 @@ export function MultiSelect({
               aoTrocar([]);
               setAberto(false);
             }}
-            className={`w-full text-left px-2.5 py-1.5 text-xs border-0 cursor-pointer
-              ${selecionados.size === 0 ? 'bg-azul-600/15 text-azul-700' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
+            className={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-[7px] text-[13px] border-0 cursor-pointer
+              ${selecionados.size === 0 ? 'bg-azul-50 text-azul-700 font-medium' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
           >
+            <span className="w-4 shrink-0 text-azul-600">
+              {selecionados.size === 0 && <Icone nome="check" className="w-4 h-4" traco={2.2} />}
+            </span>
             {rotuloVazio}
           </button>
           {opcoes
@@ -170,15 +640,11 @@ export function MultiSelect({
                   role="option"
                   aria-selected={on}
                   onClick={() => alternar(v)}
-                  className={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 text-xs border-0 cursor-pointer
-                    ${on ? 'bg-azul-600/15 text-primario' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
+                  className={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-[7px] text-[13px] border-0 cursor-pointer
+                    ${on ? 'bg-azul-50 text-primario font-medium' : 'bg-transparent text-secundario hover:bg-superficie-hover hover:text-primario'}`}
                 >
-                  <span
-                    aria-hidden="true"
-                    className={`shrink-0 w-3.5 h-3.5 rounded-[4px] border flex items-center justify-center text-[9px]
-                      ${on ? 'bg-azul-600 border-azul-600 text-white' : 'border-borda-forte bg-superficie'}`}
-                  >
-                    {on ? '✓' : ''}
+                  <span className="w-4 shrink-0 text-azul-600">
+                    {on && <Icone nome="check" className="w-4 h-4" traco={2.2} />}
                   </span>
                   <span className="truncate">{r}</span>
                 </button>
@@ -190,61 +656,92 @@ export function MultiSelect({
   );
 }
 
+/* ------------------------------------------------------------------------ */
+/* Pílulas e chips                                                           */
+/* ------------------------------------------------------------------------ */
+
 /**
  * Chip de variação.
  *
  * `inverso` marca métrica em que menor é melhor — custo por resultado e CPC.
  * A seta segue a direção real do número; a cor segue o significado para o
  * negócio, senão uma queda de 25% no custo apareceria em vermelho.
+ *
+ * `antes` (o valor do período anterior, já formatado) vai na dica do chip — a
+ * variação responde "quanto", a dica responde "em relação a quê".
  */
-export function ChipDelta({ pct, inverso = false }) {
+export function ChipDelta({ pct, inverso = false, antes }) {
   if (pct === null || pct === undefined) {
     return (
-      <span
-        title="Sem período anterior para comparar"
-        className="inline-flex items-center gap-[3px] text-[11px] font-semibold px-[6px] py-px
-                   rounded-[8px] bg-superficie text-tenue"
-      >
-        —
-      </span>
+      <Dica conteudo={antes ? `Período anterior: ${antes}` : 'Sem período anterior para comparar'}>
+        <span
+          className="inline-flex items-center gap-[3px] text-[12px] font-semibold px-2 py-0.5
+                     rounded-full bg-elevado text-tenue"
+        >
+          —
+        </span>
+      </Dica>
     );
   }
   const bom = inverso ? pct < 0 : pct > 0;
-  const seta = pct > 0 ? '↑' : pct < 0 ? '↓' : '→';
   const cor =
     pct === 0
-      ? 'bg-superficie text-tenue'
+      ? 'bg-elevado text-tenue'
       : bom
         ? 'bg-sucesso/12 text-sucesso'
         : 'bg-perigo/12 text-perigo';
+  const icone = pct > 0 ? 'tendencia' : pct < 0 ? 'queda' : null;
   return (
-    <span
-      className={`inline-flex items-center gap-[3px] text-[11px] font-semibold px-[6px] py-px rounded-[8px] ${cor}`}
+    <Dica
+      conteudo={
+        <>
+          {pct > 0 ? 'Subiu' : pct < 0 ? 'Caiu' : 'Estável'} {fmtDec(Math.abs(pct))}% em relação ao período anterior
+          {antes && (
+            <>
+              {' '}
+              (<strong className="font-semibold tnum">{antes}</strong>)
+            </>
+          )}
+          {pct !== 0 && <span className="block text-white/70 mt-0.5">{bom ? 'Movimento bom para o negócio' : 'Movimento ruim para o negócio'}</span>}
+        </>
+      }
     >
-      {seta} {fmtDec(Math.abs(pct))}%
-    </span>
+      <span className={`inline-flex items-center gap-1 text-[12px] font-semibold px-2 py-0.5 rounded-full tnum ${cor}`}>
+        {icone ? <Icone nome={icone} className="w-3.5 h-3.5" traco={2.2} /> : '→'}
+        {fmtDec(Math.abs(pct))}%
+      </span>
+    </Dica>
   );
 }
 
-export function Pill({ children, tom = 'neutro' }) {
+export function Pill({ children, tom = 'neutro', dica, ponto = false }) {
   const cores = {
     sucesso: 'bg-sucesso/12 text-sucesso',
     atencao: 'bg-atencao/12 text-atencao',
     perigo: 'bg-perigo/12 text-perigo',
-    neutro: 'bg-superficie text-secundario',
+    azul: 'bg-azul-400/14 text-azul-700',
+    neutro: 'bg-elevado text-secundario',
   };
-  return (
-    <span className={`inline-block px-[10px] py-[3px] rounded-[8px] text-[11px] font-semibold whitespace-nowrap ${cores[tom]}`}>
+  const pill = (
+    <span
+      className={`inline-flex items-center gap-1.5 px-2.5 py-[3px] rounded-full text-[12px] font-semibold whitespace-nowrap ${cores[tom] || cores.neutro}`}
+    >
+      {ponto && <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-current" />}
       {children}
     </span>
   );
+  return dica ? <Dica conteudo={dica}>{pill}</Dica> : pill;
 }
 
 export const PillStatus = ({ status }) => (
-  <Pill tom={status === 'ENABLED' ? 'sucesso' : status === 'PAUSED' ? 'atencao' : 'neutro'}>
+  <Pill ponto tom={status === 'ENABLED' ? 'sucesso' : status === 'PAUSED' ? 'atencao' : 'neutro'}>
     {{ ENABLED: 'Ativa', PAUSED: 'Pausada', REMOVED: 'Excluída' }[status] || status || '—'}
   </Pill>
 );
+
+/* ------------------------------------------------------------------------ */
+/* Sanfona                                                                   */
+/* ------------------------------------------------------------------------ */
 
 /**
  * Seta de abrir/fechar.
@@ -272,7 +769,7 @@ export function SetaSanfona({ aberta, className = '' }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
-      className={`w-[13px] h-[13px] shrink-0 text-tenue transition-transform
+      className={`w-[14px] h-[14px] shrink-0 text-tenue transition-transform duration-200
         motion-reduce:transition-none ${aberta ? 'rotate-90' : ''} ${className}`}
     >
       <path d="m9 6 6 6-6 6" />
@@ -289,13 +786,21 @@ export function SetaSanfona({ aberta, className = '' }) {
  */
 export function Sanfona({ titulo, resumo, aberta, aoAlternar, children, nivel = 1 }) {
   return (
-    <div className={nivel === 1 ? 'border border-borda rounded-[12px] overflow-hidden' : 'border-t border-borda'}>
+    <div
+      className={
+        nivel === 1
+          ? `border rounded-[12px] overflow-hidden transition-[border-color,box-shadow] duration-200
+             ${aberta ? 'border-azul-400/40 shadow-[var(--shadow-cartao)]' : 'border-borda'}`
+          : 'border-t border-borda'
+      }
+    >
       <button
         type="button"
         aria-expanded={aberta}
         onClick={aoAlternar}
         className={`w-full flex flex-col md:flex-row md:items-center md:justify-between gap-1 md:gap-3 text-left cursor-pointer border-0
-          ${nivel === 1 ? 'bg-elevado px-3 py-[10px]' : 'bg-transparent px-0 py-2'}
+          text-[13.5px] transition-colors
+          ${nivel === 1 ? `${aberta ? 'bg-azul-50' : 'bg-elevado'} px-3.5 py-[11px]` : 'bg-transparent px-0 py-2'}
           hover:bg-superficie-hover focus-visible:outline-2 focus-visible:outline-azul-400 focus-visible:-outline-offset-2`}
       >
         <span className="flex items-center gap-2 min-w-0 w-full md:w-auto">
@@ -304,41 +809,132 @@ export function Sanfona({ titulo, resumo, aberta, aoAlternar, children, nivel = 
         </span>
         {/* No mobile o resumo quebra em vez de empurrar a largura da linha. */}
         {resumo && (
-          <span className="text-[11px] text-tenue tnum pl-[18px] md:pl-0 md:text-right md:whitespace-nowrap md:shrink-0">
+          <span className="text-[12.5px] text-secundario tnum pl-[22px] md:pl-0 md:text-right md:whitespace-nowrap md:shrink-0">
             {resumo}
           </span>
         )}
       </button>
-      {aberta && <div className={nivel === 1 ? 'px-3 pb-3' : 'pb-2'}>{children}</div>}
+      {aberta && <div className={`animate-surgir ${nivel === 1 ? 'px-3.5 pb-3.5 pt-1' : 'pb-2'}`}>{children}</div>}
     </div>
   );
 }
 
-export function Estado({ titulo, mensagem, tipo = 'vazio' }) {
+/* ------------------------------------------------------------------------ */
+/* Estados                                                                   */
+/* ------------------------------------------------------------------------ */
+
+export function Estado({ titulo, mensagem, tipo = 'vazio', icone, acao }) {
+  const nome = icone || (tipo === 'erro' ? 'alerta' : 'caixa');
   return (
-    <div className="text-center py-10 px-6 text-secundario">
+    <div className="flex flex-col items-center text-center py-10 px-6 text-secundario animate-aparecer">
+      <span
+        aria-hidden="true"
+        className={`w-11 h-11 rounded-full flex items-center justify-center mb-3
+          ${tipo === 'erro' ? 'bg-perigo/10 text-perigo' : 'bg-elevado text-tenue'}`}
+      >
+        <Icone nome={nome} className="w-5 h-5" />
+      </span>
       {titulo && (
-        <div className={`font-semibold mb-2 text-[15px] ${tipo === 'erro' ? 'text-perigo' : 'text-primario'}`}>
+        <div className={`font-semibold mb-1 text-[15px] ${tipo === 'erro' ? 'text-perigo' : 'text-primario'}`}>
           {titulo}
         </div>
       )}
-      <div className="text-[13px] max-w-[420px] mx-auto">{mensagem}</div>
+      {mensagem && <div className="text-[13.5px] max-w-[440px] mx-auto">{mensagem}</div>}
+      {acao && <div className="mt-4">{acao}</div>}
     </div>
   );
+}
+
+/** Retângulo de esqueleto com brilho — a peça dos esqueletos maiores. */
+export function Bloco({ className = 'h-4 w-full', style }) {
+  return <span aria-hidden="true" style={style} className={`block rounded-[8px] brilho ${className}`} />;
 }
 
 export function Esqueleto({ linhas = 3 }) {
   return (
-    <Cartao>
+    <Cartao aria-busy="true" aria-label="Carregando">
       {Array.from({ length: linhas }, (_, i) => (
-        <div
-          key={i}
-          className="h-4 mb-3 rounded-[8px] bg-superficie-hover animate-pulse motion-reduce:animate-none"
-        />
+        <Bloco key={i} className={`h-4 mb-3 last:mb-0 ${['w-full', 'w-11/12', 'w-4/5', 'w-2/3'][i % 4]}`} />
       ))}
     </Cartao>
   );
 }
+
+/**
+ * Esqueleto no formato da tela — fileira de indicadores e blocos de gráfico.
+ *
+ * O esqueleto genérico de linhas cinzas não parece com nada que vem depois, e
+ * a tela "pula" quando o conteúdo chega. Este tem o desenho aproximado do
+ * painel: a troca vira um preenchimento, não uma mudança de layout.
+ */
+export function EsqueletoPagina({ kpis = 4, graficos = 2, tabela = false }) {
+  return (
+    <div className="flex flex-col gap-4" aria-busy="true" aria-label="Carregando">
+      {kpis > 0 && (
+        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
+          {Array.from({ length: kpis }, (_, i) => (
+            <Cartao key={i} className="flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <Bloco className="h-3.5 w-24" />
+                <Bloco className="h-8 w-8 !rounded-[10px]" />
+              </div>
+              <Bloco className="h-7 w-28" />
+              <Bloco className="h-5 w-16 !rounded-full" />
+            </Cartao>
+          ))}
+        </div>
+      )}
+      {graficos > 0 && (
+        <div className={`grid gap-3 ${graficos > 1 ? 'lg:grid-cols-2' : ''}`}>
+          {Array.from({ length: graficos }, (_, i) => (
+            <Cartao key={i} className="flex flex-col gap-3">
+              <Bloco className="h-4 w-40" />
+              <div className="flex items-end gap-2 h-[170px]">
+                {[45, 70, 55, 85, 60, 95, 50, 75, 65, 80, 40, 70].map((h, j) => (
+                  <Bloco key={j} className="flex-1 !rounded-[4px]" style={{ height: `${h}%` }} />
+                ))}
+              </div>
+            </Cartao>
+          ))}
+        </div>
+      )}
+      {tabela && (
+        <Cartao className="flex flex-col gap-3">
+          <Bloco className="h-4 w-48" />
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="flex items-center gap-3">
+              <Bloco className="h-8 w-8 !rounded-full" />
+              <Bloco className="h-4 flex-1" />
+              <Bloco className="h-4 w-20" />
+            </div>
+          ))}
+        </Cartao>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Véu de "atualizando" sobre conteúdo que já está na tela.
+ *
+ * Ao trocar o filtro, o número antigo fica visível (esmaecido) até o novo
+ * chegar — em vez de a tela inteira virar esqueleto e perder o lugar de quem
+ * estava lendo.
+ */
+export function Atualizando({ ativo, children, className = '' }) {
+  return (
+    <div
+      aria-busy={ativo || undefined}
+      className={`transition-opacity duration-300 ${ativo ? 'opacity-55 pointer-events-none' : 'opacity-100'} ${className}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------------ */
+/* Modal e botões                                                            */
+/* ------------------------------------------------------------------------ */
 
 /**
  * Diálogo modal — usado para tirar da tela o que só se lê de vez em quando.
@@ -353,6 +949,7 @@ export function Esqueleto({ linhas = 3 }) {
  */
 export function Modal({ aberto, aoFechar, titulo, descricao, children, largura = '640px' }) {
   const ref = useRef(null);
+  const idTitulo = useId();
 
   useEffect(() => {
     const d = ref.current;
@@ -378,51 +975,102 @@ export function Modal({ aberto, aoFechar, titulo, descricao, children, largura =
   return (
     <dialog
       ref={ref}
-      aria-labelledby="modal-titulo"
+      aria-labelledby={idTitulo}
       onClick={(e) => {
         // Clique no backdrop: o alvo é o próprio <dialog>, não o conteúdo.
         if (e.target === ref.current) aoFechar();
       }}
-      className="m-auto p-0 border-0 bg-transparent max-h-[85vh] w-[calc(100vw-2rem)]"
+      className="m-auto p-0 border-0 bg-transparent max-h-[85vh] w-[calc(100vw-2rem)] overflow-visible"
       style={{ maxWidth: largura }}
     >
-      <div className="bg-superficie border border-borda rounded-[12px] shadow-xl overflow-hidden">
-        <div className="flex items-start justify-between gap-4 px-4 py-3 border-b border-borda bg-elevado">
+      <div className="bg-superficie border border-borda rounded-[16px] shadow-[var(--shadow-flutuante)] overflow-hidden">
+        <div className="flex items-start justify-between gap-4 px-5 py-4 border-b border-borda bg-elevado">
           <div className="min-w-0">
-            <h2 id="modal-titulo" className="text-[13px] font-semibold m-0">{titulo}</h2>
-            {descricao && <p className="text-[11px] text-tenue mt-1 mb-0 leading-relaxed">{descricao}</p>}
+            <h2 id={idTitulo} className="text-[15px] font-semibold m-0">{titulo}</h2>
+            {descricao && <p className="text-[13px] text-secundario mt-1 mb-0 leading-relaxed">{descricao}</p>}
           </div>
           <button
             type="button"
             onClick={aoFechar}
             aria-label="Fechar"
-            className="w-7 h-7 shrink-0 rounded-[8px] border border-borda bg-superficie text-secundario
-                       flex items-center justify-center cursor-pointer text-[15px] leading-none
-                       hover:bg-superficie-hover hover:text-primario"
+            className="w-8 h-8 shrink-0 rounded-[9px] border border-borda bg-superficie text-secundario
+                       flex items-center justify-center cursor-pointer
+                       hover:bg-superficie-hover hover:text-primario transition-colors"
           >
-            ×
+            <Icone nome="x" className="w-4 h-4" />
           </button>
         </div>
-        <div className="px-4 py-3 overflow-y-auto max-h-[calc(85vh-56px)]">{children}</div>
+        <div className="px-5 py-4 overflow-y-auto max-h-[calc(85vh-64px)]">{children}</div>
       </div>
     </dialog>
   );
 }
 
-/** Botão só de ícone, com rótulo acessível — abre painéis auxiliares. */
-export function BotaoIcone({ aoClicar, titulo, children, tom = 'neutro' }) {
+/** Botão só de ícone, com rótulo acessível e dica — abre painéis auxiliares. */
+export function BotaoIcone({ aoClicar, titulo, children, tom = 'neutro', icone }) {
   const cor = tom === 'atencao'
     ? 'border-atencao/40 bg-atencao/12 text-atencao hover:bg-atencao/20'
-    : 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario';
+    : 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario hover:border-azul-400/40';
+  return (
+    <Dica conteudo={titulo}>
+      <button
+        type="button"
+        onClick={aoClicar}
+        aria-label={titulo}
+        className={`w-9 h-9 shrink-0 rounded-[10px] border flex items-center justify-center
+                    cursor-pointer transition-colors ${cor}`}
+      >
+        {icone ? <Icone nome={icone} className="w-[17px] h-[17px]" /> : children}
+      </button>
+    </Dica>
+  );
+}
+
+/**
+ * Botão padrão do painel. `variante`: primario | secundario | fantasma | perigo.
+ * `carregando` troca o ícone por um giro e desabilita — evita o clique duplo
+ * que manda o mesmo envio duas vezes.
+ */
+export function Botao({
+  children,
+  variante = 'secundario',
+  icone,
+  carregando = false,
+  disabled,
+  className = '',
+  tamanho = 'md',
+  type = 'button',
+  ...resto
+}) {
+  const variantes = {
+    primario:
+      'bg-azul-600 text-white border-azul-600 hover:bg-azul-700 hover:border-azul-700 shadow-[0_2px_8px_rgba(43,87,151,0.25)]',
+    secundario: 'bg-superficie text-primario border-borda-forte hover:bg-superficie-hover hover:border-azul-400/40',
+    fantasma: 'bg-transparent text-secundario border-transparent hover:bg-superficie-hover hover:text-primario',
+    perigo: 'bg-superficie text-perigo border-perigo/30 hover:bg-perigo/8 hover:border-perigo/50',
+  };
+  const tamanhos = {
+    sm: 'text-[12.5px] px-2.5 py-1 gap-1.5 rounded-[8px]',
+    md: 'text-[13px] px-3.5 py-[7px] gap-2 rounded-[10px]',
+  };
   return (
     <button
-      type="button"
-      onClick={aoClicar}
-      title={titulo}
-      aria-label={titulo}
-      className={`w-8 h-8 shrink-0 rounded-[8px] border flex items-center justify-center
-                  cursor-pointer ${cor}`}
+      type={type}
+      disabled={disabled || carregando}
+      className={`inline-flex items-center justify-center font-medium border cursor-pointer whitespace-nowrap
+                  transition-[background-color,border-color,box-shadow,transform] duration-150 active:scale-[0.98]
+                  disabled:opacity-55 disabled:cursor-not-allowed disabled:active:scale-100
+                  ${variantes[variante] || variantes.secundario} ${tamanhos[tamanho] || tamanhos.md} ${className}`}
+      {...resto}
     >
+      {carregando ? (
+        <span
+          aria-hidden="true"
+          className="w-3.5 h-3.5 rounded-full border-2 border-current border-r-transparent animate-spin"
+        />
+      ) : (
+        icone && <Icone nome={icone} className="w-4 h-4" />
+      )}
       {children}
     </button>
   );

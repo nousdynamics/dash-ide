@@ -1,5 +1,19 @@
 import { useState } from 'react';
-import { Cartao, ChipDelta, Estado, Esqueleto } from '../componentes/base';
+import {
+  Abas,
+  Atualizando,
+  BarraProporcao,
+  CabecalhoPagina,
+  Cartao,
+  CartaoKpi,
+  Dica,
+  Estado,
+  EsqueletoPagina,
+  Icone,
+  Pill,
+  Secao,
+  TituloSecao,
+} from '../componentes/base';
 import { BarraFiltros } from '../componentes/BarraFiltros';
 import { GraficoArea, GraficoBarras, GraficoCombinado, Ranking } from '../componentes/Graficos';
 import { CardsPersonalizados, EditorMetricas } from '../componentes/MetricasPersonalizadas';
@@ -16,65 +30,115 @@ import {
   iniciais,
 } from '../lib/formato';
 
-function CartaoKpi({ rotulo, valor, delta, inverso, antes, rodape, icone, tom }) {
-  return (
-    <Cartao>
-      <div
-        className={`w-[26px] h-[26px] rounded-[8px] flex items-center justify-center text-xs mb-2
-          ${tom === 'sucesso' ? 'bg-sucesso/12 text-sucesso' : 'bg-azul-400/14 text-azul-400'}`}
-        aria-hidden="true"
-      >
-        {icone}
-      </div>
-      <div className="text-[11px] text-secundario font-medium">{rotulo}</div>
-      <div className="text-[21px] font-bold tnum my-[2px] mb-[6px] tracking-tight">{valor}</div>
-      <ChipDelta pct={delta} inverso={inverso} />
-      {antes && (
-        <span className="block mt-1 text-[11px] text-tenue">
-          antes: <strong className="text-secundario font-semibold tnum">{antes}</strong>
-        </span>
-      )}
-      <span className="block mt-2 text-[11px] text-tenue">{rodape}</span>
-    </Cartao>
-  );
-}
-
-/** Ranking de ações em barra horizontal: nome longo lê melhor que fatia de rosca. */
+/**
+ * Ranking de ações em barra horizontal: nome longo lê melhor que fatia de rosca.
+ *
+ * Nome e número em cima, barra embaixo — no celular a linha única espremia o
+ * nome da ação em três letras.
+ */
 function BarrasPorAcao({ acoes }) {
   if (!acoes.itens.length) {
     return <Estado mensagem="Nenhuma conversão registrada no período." />;
   }
   const maior = Math.max(...acoes.itens.map((i) => i.resultados));
   return (
-    <>
-      {acoes.itens.slice(0, 12).map((i) => (
-        <div key={i.acao} className="flex items-center gap-3 py-[5px]">
-          <div className="basis-[40%] min-w-0 text-xs truncate" title={i.acao}>
-            {i.acao}
-            <span
-              className={`inline-block text-[9px] px-[5px] py-px rounded-[8px] ml-[6px] align-[1px]
-                ${i.tipo === 'primaria' ? 'bg-azul-400/16 text-azul-300' : 'bg-sucesso/12 text-sucesso'}`}
-            >
-              {i.tipo === 'primaria' ? 'primária' : 'secundária'}
-            </span>
-          </div>
-          <div className="flex-1 h-4 bg-elevado rounded-[8px] overflow-hidden">
-            <div
-              className={`h-full rounded-[8px] ${
-                i.tipo === 'secundaria'
-                  ? 'bg-gradient-to-r from-[#1f5f52] to-sucesso opacity-85'
-                  : 'bg-gradient-to-r from-azul-700 to-azul-400'
-              }`}
-              style={{ width: `${((i.resultados / maior) * 100).toFixed(1)}%` }}
+    <div className="flex flex-col gap-3 cascata">
+      {acoes.itens.slice(0, 12).map((i) => {
+        const primaria = i.tipo === 'primaria';
+        return (
+          <div key={i.acao} className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-3 text-[13px]">
+              <span className="flex items-center gap-2 min-w-0">
+                <Dica conteudo={i.acao} className="min-w-0">
+                  <span className="truncate text-primario" tabIndex={0}>{i.acao}</span>
+                </Dica>
+                <Pill
+                  tom={primaria ? 'azul' : 'sucesso'}
+                  dica={
+                    primaria
+                      ? 'Conversão primária: entra em "Conversões" e no custo por conversão, como no gerenciador do Google.'
+                      : 'Conversão secundária: ação local (rota, visita ao perfil). Soma só em "Todas as conversões".'
+                  }
+                >
+                  {primaria ? 'primária' : 'secundária'}
+                </Pill>
+              </span>
+              <span className="tnum shrink-0 text-secundario">
+                <strong className="text-primario font-semibold">{fmtDec(i.resultados)}</strong>
+                <span className="text-tenue"> · {fmtDec(i.participacao_pct)}%</span>
+              </span>
+            </div>
+            <BarraProporcao
+              pct={(i.resultados / maior) * 100}
+              tom={primaria ? 'azul' : 'sucesso'}
+              altura="h-2.5"
+              dica={`${i.acao}: ${fmtDec(i.resultados)} resultados — ${fmtDec(i.participacao_pct)}% do total do período`}
             />
           </div>
-          <div className="basis-[108px] text-right text-xs text-secundario tnum">
-            <strong className="text-primario font-semibold">{fmtDec(i.resultados)}</strong> ·{' '}
-            {fmtDec(i.participacao_pct)}%
+        );
+      })}
+    </div>
+  );
+}
+
+/** Lista das últimas conversas capturadas pelo WhatsApp. */
+function ConversasRecentes({ conversas }) {
+  if (!conversas.length) {
+    return (
+      <Estado
+        icone="mensagem"
+        mensagem="Nenhuma conversa capturada ainda. Elas chegam pela Evolution API."
+      />
+    );
+  }
+  return (
+    <div className="flex flex-col cascata">
+      {conversas.map((c, i) => {
+        const nome = c.contato_nome || `Contato ${c.contato_id ?? '—'}`;
+        return (
+          <div
+            key={`${c.contato_id}-${c.iniciada_em}`}
+            className={`flex items-center justify-between gap-3 py-2.5 px-2 -mx-2 rounded-[10px]
+                        transition-colors hover:bg-superficie-hover ${i ? 'border-t border-borda' : ''}`}
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div
+                aria-hidden="true"
+                className="w-8 h-8 rounded-full bg-gradient-to-br from-azul-600 to-azul-400 text-white
+                           flex items-center justify-center text-[12px] font-semibold shrink-0"
+              >
+                {iniciais(c.contato_nome)}
+              </div>
+              <div className="min-w-0">
+                <Dica conteudo={nome} className="min-w-0">
+                  <div className="font-semibold text-[13.5px] truncate">{nome}</div>
+                </Dica>
+                <div className="text-[12.5px] text-secundario flex items-center gap-1.5 flex-wrap">
+                  <span>{c.atendente || 'Sem atendente'}</span>
+                  <span className="text-tenue">·</span>
+                  <span className="tnum">{fmtDataHora(c.iniciada_em)}</span>
+                </div>
+              </div>
+            </div>
+            {c.tempo_resposta_min != null ? (
+              <Pill tom="azul" dica="Tempo até a primeira resposta do atendente">
+                <Icone nome="relogio" className="w-3.5 h-3.5" />
+                {fmtDec(c.tempo_resposta_min)} min
+              </Pill>
+            ) : c.respondida ? (
+              <Pill tom="sucesso" dica="Conversa respondida, sem tempo de resposta medido">
+                <Icone nome="check" className="w-3.5 h-3.5" traco={2.2} />
+                respondida
+              </Pill>
+            ) : (
+              <Pill tom="atencao" dica="Ainda sem resposta do atendente">
+                sem resposta
+              </Pill>
+            )}
           </div>
-        </div>
-      ))}
-    </>
+        );
+      })}
+    </div>
   );
 }
 
@@ -82,38 +146,64 @@ export function VisaoGeral({ filtro, setFiltro }) {
   const p = queryPeriodo(filtro);
   // Muda ao criar/editar métrica, para a tela refazer a busca sem F5.
   const [versaoMetricas, setVersaoMetricas] = useState(0);
-  const { dados, carregando, erro } = useApi(
+  // Aba de detalhe aberta; os indicadores do topo ficam fora das abas.
+  const [aba, setAba] = useState('evolucao');
+  // `manter`: ao trocar o período o formato da resposta é o mesmo, então o
+  // número antigo fica esmaecido até o novo chegar em vez de virar esqueleto.
+  const { dados, carregando, atualizando, erro } = useApi(
     [
       `/api/ads/overview?${p}${filtro.comparar ? '&comparar=1' : ''}`,
       `/api/overview?dias=${diasDoPeriodo(filtro)}`,
       `/api/ads/resultados-por-acao?${p}`,
       `/api/metricas`,
     ],
-    `${p}|${filtro.comparar}|${versaoMetricas}`
+    `${p}|${filtro.comparar}|${versaoMetricas}`,
+    { manter: true },
   );
 
   const { de, ate } = resolverPeriodo(filtro);
+  const comparacao = dados?.[0]?.comparacao;
   const cabecalho = (
     <>
-      <div>
-        <div className="text-[19px] font-semibold tracking-tight">Visão geral</div>
-        <div className="text-tenue text-xs mt-[2px]">
-          {fmtDiaMes(de)} a {fmtDiaMes(ate)}
-          {dados?.[0]?.comparacao &&
-            ` · comparado com ${fmtDiaMes(dados[0].comparacao.periodo.de)} a ${fmtDiaMes(dados[0].comparacao.periodo.ate)}`}
-        </div>
-      </div>
+      <CabecalhoPagina
+        titulo="Visão geral"
+        icone="grafico"
+        descricao="Resumo do Google Ads no período — investimento, conversões e custo — conciliado com os leads que entraram no Rubeus e as conversas do WhatsApp."
+        subtitulo={
+          <>
+            {fmtDiaMes(de)} a {fmtDiaMes(ate)}
+            {comparacao &&
+              ` · comparado com ${fmtDiaMes(comparacao.periodo.de)} a ${fmtDiaMes(comparacao.periodo.ate)}`}
+          </>
+        }
+      />
       <BarraFiltros filtro={filtro} aoTrocar={setFiltro} />
     </>
   );
 
-  if (erro) return <>{cabecalho}<Cartao><Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} /></Cartao></>;
-  if (carregando || !dados) return <>{cabecalho}<Esqueleto linhas={5} /></>;
+  if (erro) {
+    return (
+      <>
+        {cabecalho}
+        <Cartao>
+          <Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} />
+        </Cartao>
+      </>
+    );
+  }
+  if (carregando || !dados) {
+    return (
+      <>
+        {cabecalho}
+        <EsqueletoPagina kpis={6} graficos={2} />
+      </>
+    );
+  }
 
   const [ads, base, acoes, metricas] = dados;
   const t = ads.totais;
   const dl = ads.comparacao?.deltas ?? {};
-  // O chip diz "quanto variou"; esta linha diz "variou em relação a quê".
+  // O chip diz "quanto variou"; a dica dele diz "variou em relação a quê".
   const ant = ads.comparacao?.totais ?? null;
 
   const serie = densificarPorDia(ads.serie_diaria, ads.periodo.de, ads.periodo.ate);
@@ -231,174 +321,240 @@ export function VisaoGeral({ filtro, setFiltro }) {
       }
     : null;
 
+  /*
+   * Os textos que antes eram rodapé miúdo embaixo de cada número viraram a
+   * `dica` do "?" do rótulo; o "antes" vai para a dica do chip de variação.
+   */
   const kpis = [
-    { rotulo: 'Investimento', valor: fmtBRL(t.investimento), delta: dl.investimento, antes: ant && fmtBRL(ant.investimento), rodape: 'Google Ads', icone: '💰' },
-    { rotulo: 'Conversões', valor: fmtDec(t.resultados_primarios), delta: dl.resultados_primarios, antes: ant && fmtDec(ant.resultados_primarios), rodape: 'Só as primárias, como no gerenciador', icone: '✓', tom: 'sucesso' },
-    { rotulo: 'Todas as conversões', valor: fmtDec(t.resultados), delta: dl.resultados, antes: ant && fmtDec(ant.resultados), rodape: 'Primárias + secundárias', icone: '◆' },
-    { rotulo: 'Conversões secundárias', valor: fmtDec(t.resultados_secundarios), delta: dl.resultados_secundarios, antes: ant && fmtDec(ant.resultados_secundarios), rodape: 'Ações locais: rota, visita, perfil', icone: '◇' },
-    { rotulo: 'Custo por conversão', valor: fmtBRL(t.custo_por_resultado), delta: dl.custo_por_resultado, inverso: true, antes: ant && fmtBRL(ant.custo_por_resultado), rodape: 'Investimento ÷ conversões', icone: '⊘' },
-    { rotulo: 'Taxa de conversão', valor: fmtPct(t.taxa_conversao), delta: dl.taxa_conversao, antes: ant && fmtPct(ant.taxa_conversao), rodape: 'Conversões ÷ cliques', icone: '◐' },
+    { rotulo: 'Investimento', valor: t.investimento, fmt: fmtBRL, delta: dl.investimento, antes: ant && fmtBRL(ant.investimento), dica: 'Quanto foi gasto no Google Ads no período.', icone: 'dinheiro' },
+    { rotulo: 'Conversões', valor: t.resultados_primarios, fmt: fmtDec, delta: dl.resultados_primarios, antes: ant && fmtDec(ant.resultados_primarios), dica: 'Só as conversões primárias, como no gerenciador do Google.', icone: 'checkCirculo', tom: 'sucesso' },
+    { rotulo: 'Todas as conversões', valor: t.resultados, fmt: fmtDec, delta: dl.resultados, antes: ant && fmtDec(ant.resultados), dica: 'Primárias + secundárias.', icone: 'camadas' },
+    { rotulo: 'Conversões secundárias', valor: t.resultados_secundarios, fmt: fmtDec, delta: dl.resultados_secundarios, antes: ant && fmtDec(ant.resultados_secundarios), dica: 'Ações locais: rota no Maps, visita, perfil da empresa. Servem para ver engajamento, não entram no custo por conversão.', icone: 'mapa' },
+    { rotulo: 'Custo por conversão', valor: t.custo_por_resultado, fmt: fmtBRL, delta: dl.custo_por_resultado, inverso: true, antes: ant && fmtBRL(ant.custo_por_resultado), dica: 'Investimento ÷ conversões primárias. Menor é melhor.', icone: 'etiqueta', tom: 'atencao' },
+    { rotulo: 'Taxa de conversão', valor: t.taxa_conversao, fmt: fmtPct, delta: dl.taxa_conversao, antes: ant && fmtPct(ant.taxa_conversao), dica: 'Conversões primárias ÷ cliques.', icone: 'porcentagem' },
   ];
 
   const secundarios = [
-    ['Impressões', fmtInt(t.impressoes), ant && fmtInt(ant.impressoes)],
-    ['Cliques', fmtInt(t.cliques), ant && fmtInt(ant.cliques)],
-    ['CPC médio', fmtBRL(t.cpc_medio), ant && fmtBRL(ant.cpc_medio)],
-    ['CPM', fmtBRL(t.cpm), ant && fmtBRL(ant.cpm)],
-    ['CTR', fmtPct(t.ctr), ant && fmtPct(ant.ctr)],
+    { rotulo: 'Impressões', valor: t.impressoes, fmt: fmtInt, delta: dl.impressoes, antes: ant && fmtInt(ant.impressoes), dica: 'Quantas vezes os anúncios foram exibidos.', icone: 'olho' },
+    { rotulo: 'Cliques', valor: t.cliques, fmt: fmtInt, delta: dl.cliques, antes: ant && fmtInt(ant.cliques), dica: 'Cliques nos anúncios.', icone: 'clique' },
+    { rotulo: 'CPC médio', valor: t.cpc_medio, fmt: fmtBRL, delta: dl.cpc_medio, inverso: true, antes: ant && fmtBRL(ant.cpc_medio), dica: 'Custo por clique: investimento ÷ cliques. Menor é melhor.', icone: 'dinheiro' },
+    { rotulo: 'CPM', valor: t.cpm, fmt: fmtBRL, delta: dl.cpm, inverso: true, antes: ant && fmtBRL(ant.cpm), dica: 'Custo por mil impressões: investimento ÷ impressões × 1000. Menor é melhor.', icone: 'etiqueta' },
+    { rotulo: 'CTR', valor: t.ctr, fmt: fmtPct, delta: dl.ctr, antes: ant && fmtPct(ant.ctr), dica: 'Taxa de cliques: cliques ÷ impressões.', icone: 'porcentagem' },
+  ];
+
+  const temMetricas = (metricas.itens?.length ?? 0) > 0 || metricas.pode_editar;
+  const conversas = base.conversas_recentes || [];
+
+  const abas = [
+    { id: 'evolucao', nome: 'Evolução', icone: 'tendencia' },
+    { id: 'midia_crm', nome: 'Mídia × CRM', icone: 'camadas' },
+    { id: 'acoes', nome: 'Conversões por ação', icone: 'alvo', contagem: (acoes.itens || []).length },
+    { id: 'conversas', nome: 'Conversas recentes', icone: 'mensagem', contagem: conversas.length },
   ];
 
   return (
     <>
       {cabecalho}
 
-      <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(158px,1fr))]">
-        {kpis.map((k) => (
-          <CartaoKpi key={k.rotulo} {...k} />
-        ))}
-      </div>
-
-      <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(158px,1fr))]">
-        {secundarios.map(([r, v, a]) => (
-          <Cartao key={r}>
-            <div className="text-[11px] text-secundario font-medium">{r}</div>
-            <div className="text-lg font-bold tnum">{v}</div>
-            {a && (
-              <span className="block mt-1 text-[11px] text-tenue">
-                antes: <strong className="text-secundario font-semibold tnum">{a}</strong>
-              </span>
-            )}
-          </Cartao>
-        ))}
-      </div>
-
-      <CardsPersonalizados defs={metricas.itens} ctx={ctxMetricas} ctxAnterior={ctxAnterior} />
-
-      <EditorMetricas
-        dados={{ ...metricas, bases: basesComAcoes }}
-        ctx={ctxMetricas}
-        aoMudar={() => setVersaoMetricas((v) => v + 1)}
-      />
-
-      <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
-        <GraficoBarras
-          titulo="Investimento diário"
-          dados={serie}
-          chave="investimento"
-          fmt={fmtBRL}
-          fmtEixo={fmtBRLCurto}
-          legenda="Gasto médio por dia"
-        />
-        <GraficoArea
-          titulo="Conversões por dia"
-          dados={serie}
-          chave="resultados_primarios"
-          fmt={fmtDec}
-          fmtEixo={fmtInt}
-          legenda="Média por dia"
-        />
-      </div>
-
-      <GraficoCombinado
-        titulo="Investimento e conversões, lado a lado"
-        subtitulo="Se a linha não sobe quando a barra sobe, o dinheiro extra daquele dia não comprou resultado."
-        dados={serie}
-        barra={{ chave: 'investimento', rotulo: 'Investimento', fmt: fmtBRL, fmtEixo: fmtBRLCurto }}
-        linha={{ chave: 'resultados_primarios', rotulo: 'Conversões', fmt: fmtDec, fmtEixo: fmtInt }}
-      />
-
-      <div className="grid gap-3 lg:grid-cols-2">
-        <GraficoArea
-          titulo="Custo por conversão, dia a dia"
-          dados={serieCusto.filter((d) => d.custo_resultado !== null)}
-          chave="custo_resultado"
-          fmt={fmtBRL}
-          fmtEixo={fmtBRLCurto}
-          legenda="Média dos dias com conversão"
-        />
-        <GraficoBarras
-          titulo="Cliques por dia"
-          dados={serie}
-          chave="cliques"
-          fmt={fmtInt}
-          fmtEixo={fmtInt}
-          legenda="Média por dia"
-        />
-      </div>
-
-      <GraficoCombinado
-        titulo="O que o Google contou × quem entrou no Rubeus"
-        subtitulo={`${fmtDec(t.resultados_primarios)} conversões na conta de mídia · ${fmtInt(totalLeadsCrm)} leads no CRM. A diferença é conversão que não virou lead: clique em telefone, conversa iniciada que não avançou, formulário abandonado.`}
-        dados={serieConciliacao}
-        barra={{ chave: 'resultados_primarios', rotulo: 'Conversões (Google)', fmt: fmtDec, fmtEixo: fmtInt }}
-        linha={{ chave: 'leads_crm', rotulo: 'Leads (Rubeus)', fmt: fmtInt, fmtEixo: fmtInt }}
-      />
-
-      <div className="grid gap-3 lg:grid-cols-2">
-        <Ranking
-          titulo="Origem dos leads, segundo o Rubeus"
-          subtitulo="De onde o lead real diz que veio — não a conversão que o Google atribuiu."
-          itens={base.origens || []}
-          rotulo="origem"
-          valor="total"
-          fmt={fmtInt}
-        />
-        <GraficoBarras
-          titulo="A que horas o lead chega"
-          dados={(base.por_hora || []).map((h) => ({ data: `${String(h.hora).padStart(2, '0')}:00`, total: h.total }))}
-          chave="total"
-          fmt={fmtInt}
-          fmtEixo={fmtInt}
-          legenda="Média por hora · horário de Brasília"
-          unidade="horas"
-          fmtRotulo={(v) => v}
-        />
-      </div>
-
-      <Cartao>
-        <div className="flex items-center justify-between gap-3 mb-3">
-          <div className="text-[13px] font-semibold">De onde vêm as conversões</div>
-          <div className="text-[11px] text-tenue tnum">
-            {fmtDec(acoes.total_primarios)} primárias · {fmtDec(acoes.total_secundarios)} secundárias
+      <Atualizando ativo={atualizando} className="flex flex-col gap-5">
+        <Secao
+          titulo="Resultado"
+          icone="alvo"
+          dica="Os números que respondem se a mídia está entregando: quanto custou e quantas conversões trouxe."
+        >
+          <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] cascata">
+            {kpis.map((k) => (
+              <CartaoKpi key={k.rotulo} {...k} />
+            ))}
           </div>
-        </div>
-        <BarrasPorAcao acoes={acoes} />
-      </Cartao>
+        </Secao>
 
-      <Cartao>
-        <div className="text-[13px] font-semibold mb-3">Conversas recentes</div>
-        {base.conversas_recentes.length ? (
-          base.conversas_recentes.map((c, i) => (
-            <div
-              key={`${c.contato_id}-${c.iniciada_em}`}
-              className={`flex items-center justify-between gap-3 py-2 ${i ? 'border-t border-borda' : ''}`}
-            >
-              <div className="flex items-center gap-[10px] min-w-0">
-                <div className="w-6 h-6 rounded-full bg-azul-700 text-white flex items-center justify-center text-[11px] font-semibold shrink-0">
-                  {iniciais(c.contato_nome)}
-                </div>
-                <div className="min-w-0">
-                  <div className="font-semibold text-[13px] truncate">
-                    {c.contato_nome || `Contato ${c.contato_id ?? '—'}`}
-                  </div>
-                  <div className="text-[11px] text-tenue">
-                    {c.atendente || 'Sem atendente'} · {fmtDataHora(c.iniciada_em)}
-                  </div>
-                </div>
+        <Secao
+          titulo="Alcance e custo"
+          icone="olho"
+          dica="Quantas pessoas viram e clicaram nos anúncios, e quanto custou cada clique e cada mil exibições."
+        >
+          <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(160px,1fr))] cascata">
+            {secundarios.map((k) => (
+              <CartaoKpi key={k.rotulo} compacto {...k} />
+            ))}
+          </div>
+        </Secao>
+
+        {temMetricas && (
+          <Secao
+            titulo="Métricas personalizadas"
+            icone="engrenagem"
+            dica="Contas montadas por vocês a partir dos totais do período. O cálculo roda com os mesmos números dos cards acima."
+          >
+            <CardsPersonalizados defs={metricas.itens} ctx={ctxMetricas} ctxAnterior={ctxAnterior} />
+            <EditorMetricas
+              dados={{ ...metricas, bases: basesComAcoes }}
+              ctx={ctxMetricas}
+              aoMudar={() => setVersaoMetricas((v) => v + 1)}
+            />
+          </Secao>
+        )}
+
+        {/*
+          * Detalhe em abas.
+          *
+          * Gráficos, conciliação, ações e conversas empilhados davam uma rolagem
+          * de oito telas; os indicadores acima ficam sempre à vista, e o detalhe
+          * é escolhido pelo assunto.
+          */}
+        <section className="flex flex-col gap-3 pt-2">
+          <Abas abas={abas} ativa={aba} aoTrocar={setAba} rotulo="Detalhes da visão geral" />
+
+          {aba === 'evolucao' && (
+            <div key="evolucao" className="flex flex-col gap-3 animate-aparecer">
+              <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
+                <GraficoBarras
+                  titulo="Investimento diário"
+                  dica="Quanto foi gasto em cada dia do período. A barra mais escura é o pico; a linha tracejada é a média."
+                  dados={serie}
+                  chave="investimento"
+                  fmt={fmtBRL}
+                  fmtEixo={fmtBRLCurto}
+                  legenda="Gasto médio por dia"
+                />
+                <GraficoArea
+                  titulo="Conversões por dia"
+                  dica="Conversões primárias registradas em cada dia."
+                  dados={serie}
+                  chave="resultados_primarios"
+                  fmt={fmtDec}
+                  fmtEixo={fmtInt}
+                  legenda="Média por dia"
+                />
               </div>
-              <div className="text-xs text-secundario tnum whitespace-nowrap">
-                {c.tempo_resposta_min != null
-                  ? `${fmtDec(c.tempo_resposta_min)} min`
-                  : c.respondida
-                    ? 'respondida'
-                    : 'sem resposta'}
+
+              <GraficoCombinado
+                titulo="Investimento e conversões, lado a lado"
+                dica="Se a linha não sobe quando a barra sobe, o dinheiro extra daquele dia não comprou resultado."
+                dados={serie}
+                barra={{ chave: 'investimento', rotulo: 'Investimento', fmt: fmtBRL, fmtEixo: fmtBRLCurto }}
+                linha={{ chave: 'resultados_primarios', rotulo: 'Conversões', fmt: fmtDec, fmtEixo: fmtInt }}
+              />
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                <GraficoArea
+                  titulo="Custo por conversão, dia a dia"
+                  dica="Investimento do dia ÷ conversões do dia. Mostra se está encarecendo — coisa que a média do período esconde. Dias sem conversão ficam de fora."
+                  dados={serieCusto.filter((d) => d.custo_resultado !== null)}
+                  chave="custo_resultado"
+                  fmt={fmtBRL}
+                  fmtEixo={fmtBRLCurto}
+                  legenda="Média dos dias com conversão"
+                />
+                <GraficoBarras
+                  titulo="Cliques por dia"
+                  dica="Cliques nos anúncios em cada dia do período."
+                  dados={serie}
+                  chave="cliques"
+                  fmt={fmtInt}
+                  fmtEixo={fmtInt}
+                  legenda="Média por dia"
+                />
               </div>
             </div>
-          ))
-        ) : (
-          <Estado mensagem="Nenhuma conversa capturada ainda. Elas chegam pela Evolution API." />
-        )}
-      </Cartao>
+          )}
+
+          {aba === 'midia_crm' && (
+            <div key="midia_crm" className="flex flex-col gap-3 animate-aparecer">
+              {/* Os dois totais ficam na tela: são o dado que o gráfico concilia. */}
+              <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] cascata">
+                <CartaoKpi
+                  compacto
+                  rotulo="Conversões (Google)"
+                  valor={t.resultados_primarios}
+                  fmt={fmtDec}
+                  icone="checkCirculo"
+                  tom="sucesso"
+                  dica="Conversões primárias que a conta de mídia contou no período."
+                />
+                <CartaoKpi
+                  compacto
+                  rotulo="Leads (Rubeus)"
+                  valor={totalLeadsCrm}
+                  fmt={fmtInt}
+                  icone="pessoas"
+                  dica="Pessoas que entraram no CRM no período."
+                />
+              </div>
+
+              <GraficoCombinado
+                titulo="O que o Google contou × quem entrou no Rubeus"
+                dica={`${fmtDec(t.resultados_primarios)} conversões na conta de mídia · ${fmtInt(totalLeadsCrm)} leads no CRM. A diferença é conversão que não virou lead: clique em telefone, conversa iniciada que não avançou, formulário abandonado.`}
+                dados={serieConciliacao}
+                barra={{ chave: 'resultados_primarios', rotulo: 'Conversões (Google)', fmt: fmtDec, fmtEixo: fmtInt }}
+                linha={{ chave: 'leads_crm', rotulo: 'Leads (Rubeus)', fmt: fmtInt, fmtEixo: fmtInt }}
+              />
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                <Ranking
+                  titulo="Origem dos leads, segundo o Rubeus"
+                  dica="De onde o lead real diz que veio — não a conversão que o Google atribuiu."
+                  itens={base.origens || []}
+                  rotulo="origem"
+                  valor="total"
+                  fmt={fmtInt}
+                />
+                <GraficoBarras
+                  titulo="A que horas o lead chega"
+                  dica="Leads que entraram no CRM em cada hora do dia, no horário de Brasília."
+                  dados={(base.por_hora || []).map((h) => ({ data: `${String(h.hora).padStart(2, '0')}:00`, total: h.total }))}
+                  chave="total"
+                  fmt={fmtInt}
+                  fmtEixo={fmtInt}
+                  legenda="Média por hora · horário de Brasília"
+                  unidade="horas"
+                  fmtRotulo={(v) => v}
+                />
+              </div>
+            </div>
+          )}
+
+          {aba === 'acoes' && (
+            <Cartao key="acoes" className="animate-aparecer">
+              <TituloSecao
+                titulo="De onde vêm as conversões"
+                icone="alvo"
+                dica="Cada ação de conversão da conta, com o total do período e a participação no todo. Mostra as 12 maiores."
+                className="flex-wrap"
+                extra={
+                  <span className="flex items-center gap-1.5 flex-wrap">
+                    <Pill tom="azul" dica="Soma das conversões primárias do período">
+                      <span className="tnum">{fmtDec(acoes.total_primarios)}</span> primárias
+                    </Pill>
+                    <Pill tom="sucesso" dica="Soma das conversões secundárias do período">
+                      <span className="tnum">{fmtDec(acoes.total_secundarios)}</span> secundárias
+                    </Pill>
+                  </span>
+                }
+              />
+              <BarrasPorAcao acoes={acoes} />
+              {acoes.itens.length > 12 && (
+                <div className="mt-3 pt-3 border-t border-borda text-[13px] text-secundario flex items-center gap-1.5">
+                  <Icone nome="info" className="w-4 h-4 text-tenue" />
+                  Mostrando as 12 maiores de {acoes.itens.length} ações.
+                </div>
+              )}
+            </Cartao>
+          )}
+
+          {aba === 'conversas' && (
+            <Cartao key="conversas" className="animate-aparecer">
+              <TituloSecao
+                titulo="Conversas recentes"
+                icone="mensagem"
+                dica="As últimas conversas de WhatsApp capturadas, com o atendente e o tempo até a primeira resposta."
+              />
+              <ConversasRecentes conversas={conversas} />
+            </Cartao>
+          )}
+        </section>
+      </Atualizando>
     </>
   );
 }
