@@ -257,7 +257,7 @@ export function Campanhas({ filtro, setFiltro }) {
 
       <Atualizando ativo={atualizando} className="flex flex-col gap-4">
         {/* Os totais do período, antes da lista: "quanto" vem antes de "onde". */}
-        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] cascata">
+        <div className="grid gap-3 grade-kpi cascata">
           <CartaoKpi
             rotulo="Investimento"
             valor={totalInv}

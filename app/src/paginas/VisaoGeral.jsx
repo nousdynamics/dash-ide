@@ -362,7 +362,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
           icone="alvo"
           dica="Os números que respondem se a mídia está entregando: quanto custou e quantas conversões trouxe."
         >
-          <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] cascata">
+          <div className="grid gap-3 grade-kpi cascata">
             {kpis.map((k) => (
               <CartaoKpi key={k.rotulo} {...k} />
             ))}
@@ -374,7 +374,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
           icone="olho"
           dica="Quantas pessoas viram e clicaram nos anúncios, e quanto custou cada clique e cada mil exibições."
         >
-          <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(160px,1fr))] cascata">
+          <div className="grid gap-3 grade-kpi cascata">
             {secundarios.map((k) => (
               <CartaoKpi key={k.rotulo} compacto {...k} />
             ))}
@@ -463,7 +463,7 @@ export function VisaoGeral({ filtro, setFiltro }) {
           {aba === 'midia_crm' && (
             <div key="midia_crm" className="flex flex-col gap-3 animate-aparecer">
               {/* Os dois totais ficam na tela: são o dado que o gráfico concilia. */}
-              <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] cascata">
+              <div className="grid gap-3 grade-kpi cascata">
                 <CartaoKpi
                   compacto
                   rotulo="Conversões (Google)"

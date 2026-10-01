@@ -61,7 +61,7 @@ export function Conversas() {
     <>
       {cabecalho}
       <Atualizando ativo={atualizando} className="flex flex-col gap-4">
-        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] cascata">
+        <div className="grid gap-3 grade-kpi cascata">
           <CartaoKpi
             rotulo="Total de conversas"
             valor={r.total}

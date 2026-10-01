@@ -334,11 +334,12 @@ export function CartaoKpi({
     <Cartao
       interativo={Boolean(aoClicar)}
       onClick={aoClicar}
-      className={`flex flex-col ${compacto ? 'gap-1.5 !p-4' : 'gap-2'}`}
+      className={`@container flex flex-col ${compacto ? 'gap-1.5 !p-4' : 'gap-2'}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[13px] text-secundario font-medium flex items-center gap-1.5 min-w-0">
-          <span className="truncate">{rotulo}</span>
+        {/* Quebra em duas linhas em vez de cortar: "Custo por conversão" virava "Custo por …". */}
+        <span className="text-[13px] text-secundario font-medium flex items-center gap-1.5 min-w-0 leading-tight">
+          <span className="line-clamp-2">{rotulo}</span>
           <InfoDica texto={dica} />
         </span>
         {icone && (
@@ -350,7 +351,10 @@ export function CartaoKpi({
           </span>
         )}
       </div>
-      <div className={`${compacto ? 'text-[20px]' : 'text-[26px]'} font-bold tracking-tight leading-none tnum`}>
+      {/* Tamanho pela largura do cartão, não da tela: na fileira de seis o cartão é estreito até no desktop. */}
+      <div
+        className={`${compacto ? 'text-[18px] @[200px]:text-[20px]' : 'text-[19px] @[190px]:text-[22px] @[230px]:text-[26px]'} font-bold tracking-tight leading-none tnum whitespace-nowrap`}
+      >
         {texto !== undefined ? texto : <NumeroAnimado valor={valor} fmt={fmt} />}
       </div>
       {(delta !== undefined || antes) && (
@@ -871,7 +875,7 @@ export function EsqueletoPagina({ kpis = 4, graficos = 2, tabela = false }) {
   return (
     <div className="flex flex-col gap-4" aria-busy="true" aria-label="Carregando">
       {kpis > 0 && (
-        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
+        <div className="grid gap-3 grade-kpi">
           {Array.from({ length: kpis }, (_, i) => (
             <Cartao key={i} className="flex flex-col gap-3">
               <div className="flex items-center justify-between">

@@ -357,7 +357,7 @@ export function CampanhaDetalhe({ id, filtro }) {
         </span>
       </div>
 
-      <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(160px,1fr))] cascata">
+      <div className="grid gap-3 grade-kpi cascata">
         <CartaoKpi compacto rotulo="Investimento" valor={camp.investimento} fmt={fmtBRL} icone="dinheiro" />
         <CartaoKpi
           compacto

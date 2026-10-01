@@ -393,7 +393,7 @@ function Configuracao({ config, captura, script_url, trocarConfig, recarregar })
         icone="clique"
         dica="É o que decide a coluna Atribuição do monitor. Com click id o Google liga a matrícula ao clique exato; sem ele a conversão sobe por e-mail, telefone ou CEP em hash, e o casamento é probabilístico."
       >
-        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(200px,1fr))] cascata">
+        <div className="grid gap-3 grade-kpi cascata">
           <CartaoKpi
             compacto
             rotulo="Cliques capturados"

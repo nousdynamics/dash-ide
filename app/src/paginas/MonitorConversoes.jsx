@@ -398,7 +398,7 @@ export function MonitorConversoes({ configuracao = null }) {
           {/* ------------------------------------------------------------ KPIs */}
           {d && (
             <Atualizando ativo={monitor.atualizando}>
-              <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(180px,1fr))] cascata">
+              <div className="grid gap-3 grade-kpi cascata">
                 <CartaoKpi
                   rotulo="Conversões no período"
                   valor={total}
@@ -714,7 +714,7 @@ function AbaDiagnostico({ d, g, aoConcluir }) {
         dica="Aceitar a requisição não é contabilizar a conversão. O veredito real sai no diagnóstico da Data Manager API, cerca de 30 minutos depois — e é ele que diz se o e-mail em hash casou com alguém. Modo teste não gera diagnóstico: o Google valida e descarta sem processar."
         extra={<AcaoDiagnostico aoConcluir={aoConcluir} />}
       >
-        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(170px,1fr))] cascata">
+        <div className="grid gap-3 grade-kpi cascata">
           <CartaoKpi
             compacto
             rotulo="Processadas"

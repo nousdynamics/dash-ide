@@ -197,6 +197,33 @@
       transform 220ms var(--ease-saida),
       border-color 220ms ease;
   }
+  /*
+   * Item de grade e cartão podem encolher abaixo do conteúdo.
+   *
+   * O mínimo padrão de item de grid/flex é o tamanho do conteúdo: um botão com
+   * `whitespace-nowrap` ou uma tabela larga empurrava o cartão para fora da
+   * coluna e abria rolagem horizontal na página inteira no celular. Com o
+   * mínimo zerado, quem é largo rola dentro do próprio contêiner.
+   */
+  .grid > *,
+  .cartao {
+    min-width: 0;
+  }
+
+  /*
+   * Grade de indicadores. No celular, duas colunas fixas: com `auto-fit` e
+   * mínimo de 180px, 390px de tela davam um cartão por linha, e seis KPIs
+   * viravam uma rolagem inteira antes do primeiro gráfico.
+   */
+  .grade-kpi {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+  @media (max-width: 639px) {
+    .grade-kpi {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
   /* Só cartão clicável sobe no hover — levantar o que não reage mente. */
   .cartao-interativo {
     cursor: pointer;
