@@ -3,7 +3,7 @@ import type { ZodTypeAny, output as ZodOutput } from 'zod';
 import { CorpoInvalido, lerCorpoJson } from '../lib/corpo';
 import { avaliarLead } from '../lib/conversoes';
 import { hashDoToken } from '../lib/credenciais';
-import { aprenderEtapaDoEvento } from '../lib/rubeus';
+import { aprenderEtapaDoEvento, etapaAtualDoRegistro } from '../lib/rubeus';
 import { conversaSchema, etapaSchema, normalizarEtapa } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 
@@ -370,6 +370,24 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
     }
 
     /*
+     * Sem etapa, mas com o registro: pergunta ao Rubeus.
+     *
+     * É o webhook nativo de registro — ele não carrega a coluna do funil, e
+     * nenhuma configuração no Rubeus faz carregar. A API sabe a etapa. Se não
+     * responder a tempo, segue gravando sem etapa e a rodada de 30 minutos
+     * completa depois (completarEtapasDosRegistros).
+     */
+    let etapaDaApi = false;
+    if (semEtapa && r.dados.registro_processo_id) {
+      const atual = await etapaAtualDoRegistro(c.env, String(r.dados.registro_processo_id));
+      if (atual) {
+        r.dados.etapa = atual.etapa;
+        semEtapa = false;
+        etapaDaApi = true;
+      }
+    }
+
+    /*
      * Payload de contato entra por identidade, não por etapa.
      *
      * Criação e edição de cadastro não descrevem movimento no funil. Se a etapa
@@ -386,7 +404,9 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
       cru,
       semEtapa
         ? 'Gravado, mas sem etapa: mapeie um campo de etapa nos parâmetros do fluxo do Rubeus.'
-        : undefined,
+        : etapaDaApi
+          ? 'O payload não trazia a etapa; ela foi consultada na API do Rubeus.'
+          : undefined,
       r.dados as any,
     );
     d = r.dados;
