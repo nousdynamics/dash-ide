@@ -43,9 +43,16 @@
 
   --ease-saida: cubic-bezier(0.22, 1, 0.36, 1);
 
-  --animate-surgir: surgir 420ms var(--ease-saida) both;
-  --animate-aparecer: aparecer 200ms ease-out both;
-  --animate-escala: escala 180ms var(--ease-saida) both;
+  /*
+   * `backwards`, não `both`: com `both` o último quadro (`transform: none`
+   * computado como matriz) fica aplicado para sempre, e elemento com transform
+   * vira o bloco de contenção de todo `position: fixed` dentro dele. A gaveta
+   * do lead abria presa ao topo da tela, centenas de pixels acima de quem
+   * tinha rolado até a lista — e parecia não carregar nada.
+   */
+  --animate-surgir: surgir 420ms var(--ease-saida) backwards;
+  --animate-aparecer: aparecer 200ms ease-out backwards;
+  --animate-escala: escala 180ms var(--ease-saida) backwards;
 }
 
 @keyframes surgir {

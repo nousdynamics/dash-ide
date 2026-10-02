@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Bloco, Botao, BotaoIcone, Dica, Estado, Icone, InfoDica, Pill } from './base';
 import { useApi } from '../lib/api';
 import { fmtDataHora, iniciais } from '../lib/formato';
@@ -86,11 +87,13 @@ function EsqueletoPainel() {
  * quer espiar uma pessoa sem perder o lugar. Fecha no Esc e no clique fora,
  * que é o que se espera de sobreposição.
  */
-export function PainelLead({ contatoId, aoFechar }) {
+export function PainelLead({ contatoId, funilId = '', aoFechar }) {
   // Sem `manter`: a chave troca de pessoa, e o dado anterior é de outro lead.
+  // `funilId`: aberto de um card de funil, o resumo segue esse funil (ver a rota).
   const { dados, carregando, erro } = useApi(
-    `/api/funil/lead/${encodeURIComponent(contatoId)}`,
-    `lead-${contatoId}`,
+    `/api/funil/lead/${encodeURIComponent(contatoId)}` +
+      (funilId ? `?funil_id=${encodeURIComponent(funilId)}` : ''),
+    `lead-${contatoId}-${funilId}`,
   );
 
   useEffect(() => {
@@ -131,7 +134,19 @@ export function PainelLead({ contatoId, aoFechar }) {
 
   const nome = dados?.contato_nome || `Contato ${contatoId}`;
 
-  return (
+  /*
+   * Portal no <body>, não no lugar em que a tela monta o painel.
+   *
+   * O wrapper `.tela` anima a entrada com `transform`. Ancestral com
+   * `transform` vira o bloco de contenção de `position: fixed`: a gaveta deixava
+   * de cobrir a janela e passava a cobrir a página inteira, ancorada no topo
+   * dela. Aberta a partir de "Leads deste funil", lá no fim da página, o conteúdo
+   * ficava centenas de pixels acima da área visível e o painel parecia vazio.
+   * As animações já não deixam o `transform` aplicado (ver estilos.css), mas
+   * qualquer ancestral com transform, filtro ou `contain` traria o bug de volta —
+   * no `body` a gaveta não depende disso.
+   */
+  return createPortal(
     <div className="fixed inset-0 z-50 flex">
       <div
         className="flex-1 bg-azul-900/35 backdrop-blur-[2px] animate-aparecer"
@@ -228,11 +243,20 @@ export function PainelLead({ contatoId, aoFechar }) {
                   sequência. Misturar faria parecer que ele voltou de etapa.
                 */}
                 {funis.length ? funis.map((f) => (
-                  <div key={f.funil} className="rounded-[14px] border border-borda bg-superficie p-4 animate-surgir">
+                  <div
+                    key={f.funil}
+                    className={`rounded-[14px] border bg-superficie p-4 animate-surgir
+                      ${f.em_foco ? 'border-azul-400/50 shadow-[var(--shadow-cartao)]' : 'border-borda'}`}
+                  >
                     <div className="flex items-start justify-between gap-2 mb-3 flex-wrap">
                       <span className="text-[13.5px] font-semibold text-azul-700 flex items-center gap-1.5 min-w-0">
                         <Icone nome="funil" className="w-4 h-4 shrink-0" />
                         <span className="truncate">{f.funil}</span>
+                        {f.em_foco && (
+                          <Pill tom="azul" dica="O card que você abriu é deste funil; o resumo acima segue ele.">
+                            este funil
+                          </Pill>
+                        )}
                       </span>
                       <span className="flex items-center gap-1.5 flex-wrap">
                         <Pill tom="neutro">{f.passos.length} passo(s)</Pill>
@@ -335,6 +359,7 @@ export function PainelLead({ contatoId, aoFechar }) {
           )}
         </div>
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }

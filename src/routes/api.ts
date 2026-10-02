@@ -23,6 +23,7 @@ import {
 } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 import { cacheDeBorda, invalidarCacheDeBorda } from '../lib/cacheBorda';
+import { ETAPA_NAO_INFORMADA, completarEtapasDosRegistros } from '../lib/rubeus';
 
 /**
  * Agregados do D1 — funil Rubeus / Macro (planilha) e conversas Evolution.
@@ -1233,7 +1234,16 @@ api.get('/funil', cacheDeBorda(300), async (c) => {
     for (const l of linhas) {
       const meta = ordemPorNome.get(l.etapa);
       if ((meta?.visivel ?? 1) === 0) continue;
-      const ordem = meta?.ordem ?? 7500;
+      /*
+       * "(etapa não informada)" perde para qualquer etapa de verdade.
+       *
+       * Ela é cadastrada com ordem 9900 (fim da fila), e "maior ordem vence"
+       * fazia um único aviso sem etapa puxar a pessoa para essa coluna, mesmo
+       * com Oportunidade paga no histórico: no Pós de setembro eram 69 pessoas
+       * ali, que o kanban do Rubeus mostrava distribuídas pelas etapas. Ela só
+       * conta para quem não tem nenhuma outra.
+       */
+      const ordem = l.etapa === ETAPA_NAO_INFORMADA ? -1 : (meta?.ordem ?? 7500);
       const atual = topoPorPessoa.get(l.pessoa);
       if (!atual || ordem > atual.ordem || (ordem === atual.ordem && l.registrado_em > atual.em)) {
         topoPorPessoa.set(l.pessoa, { etapa: l.etapa, ordem, em: l.registrado_em });
@@ -1507,6 +1517,24 @@ api.get('/funil/leads', async (c) => {
    * pergunta, e a lista mostraria gente cujo card diz outra etapa.
    */
   const etapas = listaCsv(c.req.query('etapa'));
+
+  /*
+   * Período pela CHEGADA da pessoa ao funil — o primeiro evento dela aqui. É o
+   * que o kanban do Rubeus chama de "Período de criação do registro", e é o
+   * que permite pôr as duas telas lado a lado. A etapa mostrada continua sendo
+   * a atual, mesmo que a pessoa tenha andado depois do período.
+   *
+   * As datas chegam em dia (YYYY-MM-DD, horário de Brasília) e viram instante
+   * UTC: o dia começa às 03:00Z. Fim exclusivo, no começo do dia seguinte.
+   */
+  const diaValido = (v?: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const de = diaValido(c.req.query('de'));
+  const ate = diaValido(c.req.query('ate'));
+  const inicioPeriodo = de ? `${de}T03:00:00.000Z` : null;
+  const fimPeriodo = ate
+    ? new Date(Date.parse(`${ate}T03:00:00.000Z`) + 86_400_000).toISOString()
+    : null;
+  const bindsPeriodo = [inicioPeriodo, inicioPeriodo, fimPeriodo, fimPeriodo];
   const filtroEtapa = etapas.length ? `WHERE ${inSql('u.etapa', etapas.length)}` : '';
 
   /*
@@ -1579,6 +1607,8 @@ api.get('/funil/leads', async (c) => {
               COUNT(DISTINCT curso_codigo)           AS cursos,
               MAX(registrado_em)                     AS ult
        FROM base GROUP BY quem
+      HAVING (? IS NULL OR MIN(registrado_em) >= ?)
+         AND (? IS NULL OR MIN(registrado_em) <  ?)
      ),
      ultimo AS (
        SELECT b.* FROM base b
@@ -1605,7 +1635,7 @@ api.get('/funil/leads', async (c) => {
        ${filtroEtapa}
        ORDER BY a.ult DESC LIMIT ? OFFSET ?`,
     )
-      .bind(...escopoBinds, ...bindsBusca, ...etapas, porPagina, offset)
+      .bind(...escopoBinds, ...bindsBusca, ...bindsPeriodo, ...etapas, porPagina, offset)
       .all(),
 
     /*
@@ -1622,7 +1652,7 @@ api.get('/funil/leads', async (c) => {
         GROUP BY u.etapa
         ORDER BY ordem IS NULL, ordem, etapa`,
     )
-      .bind(...escopoBinds, ...bindsBusca)
+      .bind(...escopoBinds, ...bindsBusca, ...bindsPeriodo)
       .all<{ etapa: string; pessoas: number; ordem: number | null }>(),
   ]);
 
@@ -1640,6 +1670,7 @@ api.get('/funil/leads', async (c) => {
     paginas: Math.max(1, Math.ceil(total / porPagina)),
     busca: busca || null,
     etapas,
+    periodo: { de, ate },
     por_etapa: porEtapa,
     itens: pagRes.results,
   });
@@ -1702,8 +1733,18 @@ api.get('/funil/lead/:contato_id', async (c) => {
   ]);
 
   const linhas = etapas.results as Array<Record<string, any>>;
-  const primeiro = linhas[0] ?? {};
-  const ultimo = linhas[linhas.length - 1] ?? {};
+  /*
+   * Aberto a partir de um card de funil, o resumo conta a história DAQUELE
+   * funil — a mesma do card. Sem isso, o card do Pós dizia "Matrícula
+   * ACADÊMICA concluída" e a gaveta abria com a Qualificação de Leads como
+   * etapa atual e origem "CRM", porque olhava a jornada inteira. A jornada
+   * completa continua em `funis`, com o funil do card primeiro.
+   */
+  const foco = new Set(listaCsv(c.req.query('funil_id')).map(Number).filter((n) => !Number.isNaN(n)));
+  const doFoco = foco.size ? linhas.filter((l) => foco.has(Number(l.funil_id))) : [];
+  const resumo = doFoco.length ? doFoco : linhas;
+  const primeiro = resumo[0] ?? {};
+  const ultimo = resumo[resumo.length - 1] ?? {};
 
   const porFunil = new Map<string, any>();
   for (const l of linhas) {
@@ -1714,12 +1755,17 @@ api.get('/funil/lead/:contato_id', async (c) => {
     porFunil.get(k).passos.push(l);
   }
   const funis = [...porFunil.values()].map((f) => ({
+    em_foco: foco.has(Number(f.funil_id)),
     ...f,
     etapa_atual: f.passos[f.passos.length - 1]?.etapa ?? null,
     ultimo_em: f.passos[f.passos.length - 1]?.registrado_em ?? null,
-  }));
+  }))
+    // Funil do card primeiro; "Sem funil" (webhook sem processo) por último.
+    .sort((x, y) => Number(y.em_foco) - Number(x.em_foco)
+      || Number(x.funil_id == null) - Number(y.funil_id == null));
 
   return c.json({
+    funil_foco: [...foco],
     contato_id: id,
     contato_nome: ultimo.contato_nome || primeiro.contato_nome || null,
     funis,
@@ -1944,6 +1990,23 @@ api.post('/admin/rubeus/resgatar-cursos', exigirAdmin, async (c) => {
   } catch (e) {
     const status = e instanceof ErroRubeus ? e.status : 502;
     return c.json({ erro: 'resgate_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
+  }
+});
+
+/**
+ * POST /api/admin/rubeus/completar-etapas?limite=100 — completa em lote a etapa
+ * de quem ficou em "(etapa não informada)". A rodada de 30 minutos faz o mesmo,
+ * 15 por vez; isto é para zerar um acúmulo sem esperar um dia inteiro.
+ */
+api.post('/admin/rubeus/completar-etapas', exigirAdmin, async (c) => {
+  const limite = Math.min(Math.max(Number(c.req.query('limite') ?? 100) || 100, 1), 200);
+  try {
+    const r = await completarEtapasDosRegistros(c.env, c.env.DB, limite);
+    await invalidarCacheDeBorda(c);
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    const status = e instanceof ErroRubeus ? e.status : 502;
+    return c.json({ erro: 'completar_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
   }
 });
 

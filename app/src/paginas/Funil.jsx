@@ -14,6 +14,7 @@ import {
   Icone,
   InfoDica,
   MultiSelect,
+  Select,
   NumeroAnimado,
   Pill,
   Secao,
@@ -593,10 +594,34 @@ function qsFiltrosCrm({ categoria, oferta, modalidade, unidade, origem, funilId 
   return s;
 }
 
-function LeadsDoFunil({ funilId, aoAbrir }) {
+/** Dia local em YYYY-MM-DD, `n` dias atrás. */
+const diaAtras = (n) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+function LeadsDoFunil({ funilId, aoAbrir, filtroPagina }) {
   const [busca, setBusca] = useState('');
   const [aplicada, setAplicada] = useState('');
   const [etapas, setEtapas] = useState([]);
+
+  /*
+   * Período da lista. Começa no mesmo período do topo da página, para a lista
+   * conferir com a esteira logo acima (os mesmos 69 "sem etapa", por exemplo).
+   * Quem quer a base inteira escolhe "Todo o histórico".
+   */
+  const [modoPeriodo, setModoPeriodo] = useState('pagina');
+  const [deLivre, setDeLivre] = useState('');
+  const [ateLivre, setAteLivre] = useState('');
+  const pag = filtroPagina ? resolverPeriodo(filtroPagina) : null;
+  const periodo = (() => {
+    if (modoPeriodo === 'pagina' && pag) return { de: pag.de, ate: pag.ate };
+    if (['7', '30', '90'].includes(modoPeriodo)) return { de: diaAtras(Number(modoPeriodo) - 1), ate: diaAtras(0) };
+    if (modoPeriodo === 'livre' && deLivre && ateLivre && deLivre <= ateLivre) return { de: deLivre, ate: ateLivre };
+    return { de: null, ate: null };
+  })();
+  const chavePeriodo = `${periodo.de ?? ''}_${periodo.ate ?? ''}`;
   const [pagina, setPagina] = useState(1);
   const chaveEtapas = etapas.join('|');
 
@@ -609,8 +634,9 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
     `/api/funil/leads?pagina=${pagina}&por_pagina=${POR_PAGINA}` +
       (funilId ? `&funil_id=${encodeURIComponent(funilId)}` : '') +
       (aplicada.trim() ? `&busca=${encodeURIComponent(aplicada.trim())}` : '') +
-      (etapas.length ? `&etapa=${etapas.map(encodeURIComponent).join(',')}` : ''),
-    `leads-${funilId}-${pagina}-${aplicada}-${chaveEtapas}`,
+      (etapas.length ? `&etapa=${etapas.map(encodeURIComponent).join(',')}` : '') +
+      (periodo.de ? `&de=${periodo.de}&ate=${periodo.ate}` : ''),
+    `leads-${funilId}-${pagina}-${aplicada}-${chaveEtapas}-${chavePeriodo}`,
     { manter: true },
   );
 
@@ -626,7 +652,7 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
    */
   useEffect(() => {
     setPagina(1);
-  }, [aplicada, funilId, chaveEtapas]);
+  }, [aplicada, funilId, chaveEtapas, chavePeriodo]);
 
   // Etapa escolhida em outro funil não existe neste — começa sem filtro.
   useEffect(() => {
@@ -637,7 +663,7 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
 
   const itens = dados.itens;
 
-  const filtrando = Boolean(dados.busca) || etapas.length > 0;
+  const filtrando = Boolean(dados.busca) || etapas.length > 0 || Boolean(periodo.de);
   const opcoesEtapa = (dados.por_etapa ?? []).map((e) => [
     e.etapa,
     e.etapa || '(sem etapa)',
@@ -673,6 +699,44 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
                        hover:border-azul-400/50 focus:border-azul-400"
           />
         </label>
+        <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
+          <Select
+            rotulo="Período de chegada"
+            valor={modoPeriodo}
+            aoTrocar={setModoPeriodo}
+            className="w-full sm:w-auto"
+            opcoes={[
+              ...(pag ? [['pagina', `Período da página (${fmtDiaMes(pag.de)} a ${fmtDiaMes(pag.ate)})`]] : []),
+              ['tudo', 'Todo o histórico'],
+              ['7', 'Últimos 7 dias'],
+              ['30', 'Últimos 30 dias'],
+              ['90', 'Últimos 90 dias'],
+              ['livre', 'Escolher datas…'],
+            ]}
+          />
+          {modoPeriodo === 'livre' && (
+            <span className="inline-flex items-center gap-1.5 animate-surgir">
+              <input
+                type="date"
+                aria-label="Chegada a partir de"
+                value={deLivre}
+                max={ateLivre || undefined}
+                onChange={(e) => setDeLivre(e.target.value)}
+                className="bg-superficie text-primario border border-borda-forte rounded-[9px] px-2 py-[5px] text-[13px]"
+              />
+              <span className="text-secundario text-[13px]">até</span>
+              <input
+                type="date"
+                aria-label="Chegada até"
+                value={ateLivre}
+                min={deLivre || undefined}
+                onChange={(e) => setAteLivre(e.target.value)}
+                className="bg-superficie text-primario border border-borda-forte rounded-[9px] px-2 py-[5px] text-[13px]"
+              />
+            </span>
+          )}
+          <InfoDica texto="Filtra pela data em que a pessoa chegou a este funil (o primeiro evento dela aqui) — o mesmo que o 'Período de criação do registro' do Rubeus. A etapa mostrada é sempre a atual." />
+        </div>
         <div className="w-full sm:w-[240px]">
           <MultiSelect
             rotulo="Etapa atual"
@@ -697,7 +761,7 @@ function LeadsDoFunil({ funilId, aoAbrir }) {
             <button
               key={l.quem}
               type="button"
-              onClick={() => aoAbrir(l.contato_id)}
+              onClick={() => aoAbrir({ id: l.contato_id, funilId })}
               className="text-left bg-superficie border border-borda rounded-[12px] p-3 min-w-0
                          transition-colors hover:bg-superficie-hover hover:border-azul-400/40 cursor-pointer
                          focus-visible:outline-2 focus-visible:outline-azul-400"
@@ -1341,13 +1405,17 @@ function DetalheRubeus({ filtro, filtrosCrm, opcoesFiltro }) {
 
       <Secao titulo="Leads deste funil" icone="pessoas" dica="Clique num lead para ver a jornada completa dele.">
         <Cartao>
-          <LeadsDoFunil funilId={funilQs} aoAbrir={setLeadAberto} />
+          <LeadsDoFunil funilId={funilQs} aoAbrir={setLeadAberto} filtroPagina={filtro} />
         </Cartao>
       </Secao>
     </Atualizando>
 
       {leadAberto && (
-        <PainelLead contatoId={leadAberto} aoFechar={() => setLeadAberto(null)} />
+        <PainelLead
+          contatoId={leadAberto.id ?? leadAberto}
+          funilId={leadAberto.funilId ?? ''}
+          aoFechar={() => setLeadAberto(null)}
+        />
       )}
     </>
   );

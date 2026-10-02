@@ -717,17 +717,32 @@ export async function completarEtapasDosRegistros(
   limite = 15,
 ): Promise<{ consultados: number; completados: number }> {
   const { results } = await db.prepare(
+    /*
+     * "Último" olhando o CONTATO no processo, não só o registro.
+     *
+     * Os webhooks de mudança de etapa costumam chegar sem `registro_processo_id`
+     * — só o de criação traz. Particionando pelo registro, o aviso de criação
+     * (sem etapa) parecia ser o último, e o preenchimento gravava de novo uma
+     * etapa que o contato já tinha recebido depois: o MATHEUS do Pós ganhou um
+     * segundo "Matrícula ACADÊMICA concluída". Agora só entra quem não tem
+     * NENHUM evento mais novo no mesmo processo.
+     */
     `WITH ultimo AS (
-       SELECT id, registro_processo_id, etapa, registrado_em,
+       SELECT id, registro_processo_id, etapa, registrado_em, contato_id, processo_id,
               ROW_NUMBER() OVER (PARTITION BY registro_processo_id
                                  ORDER BY registrado_em DESC, id DESC) AS rec
          FROM leads_etapa
         WHERE registro_processo_id IS NOT NULL AND registro_processo_id != ''
           AND registrado_em >= datetime('now', '-120 days')
      )
-     SELECT id, registro_processo_id, registrado_em FROM ultimo
-      WHERE rec = 1 AND etapa = ?
-      ORDER BY registrado_em DESC
+     SELECT u.id, u.registro_processo_id, u.registrado_em FROM ultimo u
+      WHERE u.rec = 1 AND u.etapa = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM leads_etapa n
+           WHERE n.contato_id = u.contato_id
+             AND n.processo_id IS u.processo_id
+             AND n.registrado_em > u.registrado_em)
+      ORDER BY u.registrado_em DESC
       LIMIT ?`,
   ).bind(ETAPA_NAO_INFORMADA, limite).all<{ id: number; registro_processo_id: string; registrado_em: string }>();
 
