@@ -414,7 +414,16 @@ async function gravarEtapa(c: any, funilId: number | null, jaValidado?: any) {
 
   // Funil do payload vence o da URL: com webhook por evento, a URL não sabe.
   const doPayload = await funilDoPayload(c, d);
-  const funilFinal = doPayload ?? funilId;
+  /*
+   * Processo informado e sem funil não herda o funil da URL.
+   *
+   * O Rubeus manda avisos de um processo pela URL de outro. Herdar o funil da
+   * URL foi o que pôs 361 eventos da Qualificação de Leads dentro do Pós e os
+   * "Eventos" (processo 7, sem funil) espalhados por três funis — o Pós de
+   * setembro contava gente em "Iniciou o processo de inscrição", etapa que
+   * nem existe nele. Sem funil próprio, o evento fica em "Sem funil".
+   */
+  const funilFinal = doPayload ?? (d.processo_id != null && d.processo_id !== '' ? null : funilId);
 
   /*
    * O mesmo evento já está gravado?

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { exigirAcesso } from './lib/access';
 import { rodadaDiaria, rodadaLeve } from './lib/conversoes';
-import { completarEtapasDosRegistros } from './lib/rubeus';
+import { completarEtapasDosRegistros, reconciliarFichasRecentes } from './lib/rubeus';
 import { reconciliarRubeus } from './lib/sync';
 import type { AppEnv } from './lib/tipos';
 import ads from './routes/ads';
@@ -118,7 +118,11 @@ export default {
        * conversão ligada.
        */
       ctx.waitUntil(
-        completarEtapasDosRegistros(env, env.DB, 15).catch((e) =>
+        (async () => {
+          await completarEtapasDosRegistros(env, env.DB, 15);
+          // Depois de completar: a conferência compara com a etapa já completada.
+          await reconciliarFichasRecentes(env, env.DB, 25);
+        })().catch((e) =>
           console.error(JSON.stringify({ evento: 'completar_etapas_erro', msg: String(e) })),
         ),
       );

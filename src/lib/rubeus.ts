@@ -779,3 +779,182 @@ export async function completarEtapasDosRegistros(
   console.log(JSON.stringify({ evento: 'etapas_completadas', consultados: results.length, completados }));
   return { consultados: results.length, completados };
 }
+
+/**
+ * Cada evento de um processo atribuído ao REGISTRO dele.
+ *
+ * O kanban do Rubeus conta registros (fichas), não pessoas: a mesma pessoa com
+ * duas fichas no Pós aparece duas vezes lá. Só o aviso de criação traz
+ * `registro_processo_id`; os de mudança de etapa chegam sem. O evento sem
+ * registro vai para a ficha mais recente do mesmo contato, no mesmo processo,
+ * criada até aquele momento — a soma corrida de "eventos com registro" vira o
+ * grupo, e o registro do grupo é o do aviso que o abriu. Uma passada só, sem
+ * subconsulta por linha.
+ *
+ * Evento anterior a qualquer ficha conhecida do contato fica sem registro e
+ * não entra no kanban.
+ *
+ * `?` = processo_id.
+ */
+export const SQL_EVENTOS_POR_REGISTRO = `
+  ev AS (
+    SELECT id, contato_id, contato_nome, email, telefone, etapa, registrado_em,
+           oferta_nome, oferta_codigo, curso_codigo, origem, funil_id,
+           NULLIF(registro_processo_id, '') AS reg,
+           SUM(CASE WHEN NULLIF(registro_processo_id, '') IS NOT NULL THEN 1 ELSE 0 END)
+             OVER (PARTITION BY contato_id ORDER BY registrado_em, id) AS grupo
+      FROM leads_etapa
+     WHERE processo_id = ?
+  ),
+  atrib AS (
+    SELECT ev.*, MAX(reg) OVER (PARTITION BY contato_id, grupo) AS registro
+      FROM ev
+  ),
+  fichas AS (
+    -- Data de criação do Rubeus quando a conferência já a trouxe; senão, o
+    -- primeiro aviso recebido. Ficha que o Rubeus diz não existir fica fora.
+    SELECT a.registro, COALESCE(MAX(fr.criado_em), MIN(a.registrado_em)) AS criado_em
+      FROM atrib a
+      LEFT JOIN fichas_rubeus fr ON fr.registro = a.registro
+     WHERE a.registro IS NOT NULL AND COALESCE(fr.excluida, 0) = 0
+     GROUP BY a.registro
+  ),
+  atual AS (
+    SELECT a.*,
+           ROW_NUMBER() OVER (
+             PARTITION BY registro
+             ORDER BY (etapa = '(etapa não informada)'), registrado_em DESC, id DESC
+           ) AS rn
+      FROM atrib a WHERE registro IS NOT NULL
+  )`;
+
+/**
+ * A ficha como o Rubeus a vê agora — ou a certeza de que ela não existe mais.
+ *
+ * Diferente de `etapaAtualDoRegistro`, separa "excluída" (o Rubeus responde
+ * "Registro inexistente!") de "não deu para saber" (erro de rede, teto de
+ * tempo), que devolve nulo: apagar uma ficha do kanban por causa de um
+ * timeout seria pior que deixá-la mais uma rodada.
+ */
+async function fichaNoRubeus(
+  env: Env,
+  registroId: string,
+): Promise<
+  | { excluida: true }
+  | { excluida: false; etapa: string; etapaId: string | null; desde: string | null; criadoEm: string | null }
+  | null
+> {
+  const consulta = postJson<{ success?: boolean; erros?: string; dados?: Record<string, any> }>(
+    env, '/api/Registro/dados', { id: registroId },
+  ).catch(() => null);
+  const limite = new Promise<null>((ok) => setTimeout(() => ok(null), 4000));
+  const r = await Promise.race([consulta, limite]);
+  if (!r) return null;
+  if (r.success === false && /inexistente/i.test(String(r.erros ?? ''))) return { excluida: true };
+  const d = r.dados;
+  const etapa = typeof d?.etapaNome === 'string' ? d.etapaNome.trim() : '';
+  if (!d || !etapa) return null;
+  const minutos = Number(d.minutosEtapa);
+  // "2026-09-08 16:44:01", horário de Brasília.
+  const m = typeof d.momentoCriacao === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(d.momentoCriacao)
+    ? new Date(`${d.momentoCriacao.replace(' ', 'T')}-03:00`)
+    : null;
+  return {
+    excluida: false,
+    etapa,
+    etapaId: d.etapa != null ? String(d.etapa) : null,
+    desde: Number.isFinite(minutos) && minutos >= 0 ? new Date(Date.now() - minutos * 60_000).toISOString() : null,
+    criadoEm: m && !Number.isNaN(m.getTime()) ? m.toISOString() : null,
+  };
+}
+
+/**
+ * Confere com o Rubeus a etapa das fichas recentes e grava o que faltou.
+ *
+ * Nem toda mudança de etapa vira webhook: a ERYKA estava em "Aptos para a
+ * matrícula" no kanban e o último aviso do painel era "Oportunidade paga". Sem
+ * conferir, o painel nunca fica fiel ao Rubeus. A cada passada, uma amostra
+ * aleatória das fichas criadas nos últimos 60 dias é comparada; se a etapa do
+ * Rubeus difere da atual do painel, entra um evento novo com ela, datado da
+ * entrada na etapa e nunca antes do último evento da ficha. Igual, não grava
+ * nada — é o que evita repetir etapa.
+ */
+export async function reconciliarFichasRecentes(
+  env: Env,
+  db: D1Database,
+  limite = 25,
+  soProcesso: string | null = null,
+): Promise<{ conferidas: number; corrigidas: number }> {
+  const { results } = soProcesso
+    ? { results: [{ processo_id: soProcesso }] }
+    : await db.prepare(
+        `SELECT DISTINCT processo_id FROM leads_etapa
+          WHERE processo_id IS NOT NULL AND registrado_em >= datetime('now', '-60 days')`,
+      ).all<{ processo_id: string }>();
+
+  const fichas: Array<{ processo_id: string; registro: string; etapa: string; registrado_em: string; id: number }> = [];
+  for (const p of results) {
+    const { results: r } = await db.prepare(
+      `WITH ${SQL_EVENTOS_POR_REGISTRO}
+       SELECT ? AS processo_id, a.registro, a.etapa, a.registrado_em, a.id
+         FROM atual a JOIN fichas f ON f.registro = a.registro
+        WHERE a.rn = 1 AND f.criado_em >= datetime('now', '-60 days')`,
+    ).bind(p.processo_id, p.processo_id).all<{ processo_id: string; registro: string; etapa: string; registrado_em: string; id: number }>();
+    fichas.push(...r);
+  }
+
+  // Amostra aleatória: ao longo do dia todas as fichas recentes passam.
+  for (let i = fichas.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = fichas[i]!;
+    fichas[i] = fichas[j]!;
+    fichas[j] = t;
+  }
+
+  let conferidas = 0;
+  let corrigidas = 0;
+  for (const f of fichas.slice(0, limite)) {
+    const real = await fichaNoRubeus(env, f.registro);
+    if (!real) continue;
+    conferidas += 1;
+    await db.prepare(
+      `INSERT INTO fichas_rubeus (registro, processo_id, criado_em, etapa, excluida, conferido_em)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(registro) DO UPDATE SET
+         criado_em = COALESCE(excluded.criado_em, fichas_rubeus.criado_em),
+         etapa = COALESCE(excluded.etapa, fichas_rubeus.etapa),
+         excluida = excluded.excluida,
+         conferido_em = excluded.conferido_em`,
+    ).bind(
+      f.registro, f.processo_id,
+      real.excluida ? null : real.criadoEm,
+      real.excluida ? null : real.etapa,
+      real.excluida ? 1 : 0,
+    ).run();
+    if (real.excluida || real.etapa === f.etapa) continue;
+    const ultimo = Date.parse(f.registrado_em);
+    const desde = real.desde ? Date.parse(real.desde) : NaN;
+    const quando = new Date(Number.isFinite(desde) && desde > ultimo ? desde : ultimo + 1000).toISOString();
+    const { meta } = await db.prepare(
+      `INSERT OR IGNORE INTO leads_etapa (
+         contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, etapa, status,
+         curso_id, curso_codigo, oferta_codigo, oferta_nome,
+         origem, modalidade, unidade, responsavel_comercial, registrado_em,
+         funil_id, email, telefone, gclid, gbraid, wbraid,
+         cep, cidade, estado, valor_curso, url_origem, pessoa_id)
+       SELECT contato_id, contato_nome, ?, processo_id, processo_nome, ?, status,
+              curso_id, curso_codigo, oferta_codigo, oferta_nome,
+              origem, modalidade, unidade, responsavel_comercial, ?,
+              (SELECT fu.id FROM funis fu WHERE fu.processo_id = leads_etapa.processo_id AND fu.ativo = 1 LIMIT 1),
+              email, telefone, gclid, gbraid, wbraid,
+              cep, cidade, estado, valor_curso, url_origem, pessoa_id
+         FROM leads_etapa WHERE id = ?`,
+    ).bind(f.registro, real.etapa, quando, f.id).run();
+    if (meta.changes) {
+      corrigidas += 1;
+      await aprenderEtapaDoEvento(db, f.processo_id, real.etapa, real.etapaId).catch(() => undefined);
+    }
+  }
+  console.log(JSON.stringify({ evento: 'fichas_reconciliadas', candidatas: fichas.length, conferidas, corrigidas }));
+  return { conferidas, corrigidas };
+}

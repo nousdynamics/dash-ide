@@ -175,6 +175,7 @@ function Esteira({
   interativa = true,
   aoAbrirLista = null,
   aoOcultar = null,
+  kanban = false,
 }) {
   const Celula = interativa ? 'button' : 'div';
   const podeAbrir = (e) => aoAbrirLista && e.fonte === 'rubeus' && e.total > 0;
@@ -188,8 +189,9 @@ function Esteira({
         const queda = maiorQueda === e.etapa;
         const anterior = i > 0 ? etapas[i - 1] : null;
         return (
-          <li key={e.etapa}>
-            {anterior && (
+          <li key={e.etapa} className={kanban && anterior ? 'mt-2' : ''}>
+            {/* No kanban as colunas não são passos uma da outra: sem "conversão" entre elas. */}
+            {anterior && !kanban && (
               <div className="flex items-center gap-2 py-1 pl-[17px]">
                 <span aria-hidden="true" className={`w-px h-3 ${queda ? 'bg-atencao/60' : 'bg-borda-forte'}`} />
                 <Dica
@@ -253,6 +255,11 @@ function Esteira({
                   />
                   <div className="flex flex-wrap items-center gap-1.5">
                     {comFonte && e.fonte && <BadgeFonte fonte={e.fonte} />}
+                    {kanban && e.participacao_pct != null && (
+                      <Pill tom="neutro" dica="Fatia desta etapa no total de fichas do período">
+                        {fmtDec(e.participacao_pct)}% do total
+                      </Pill>
+                    )}
                     <Variacao pct={e.delta_pct} abs={e.delta_abs} />
                   </div>
                 </div>
@@ -1218,6 +1225,78 @@ function MacroView({ filtro, filtrosCrm }) {
   );
 }
 
+/**
+ * As fichas da etapa selecionada, ao lado da esteira — a leitura rápida de
+ * "quem são esses 18 em Oportunidade paga" sem descer até a lista completa.
+ * Mesma contagem do kanban: fichas criadas no período, na etapa atual.
+ */
+function FichasDaEtapa({ funilId, etapa, periodoQs, versao, aoAbrir }) {
+  const [pagina, setPagina] = useState(1);
+  // Sem `manter`: trocar de etapa troca de lista, e a anterior seria de outra etapa.
+  const { dados, erro } = useApi(
+    `/api/funil/kanban?funil_id=${encodeURIComponent(funilId)}&${periodoQs}` +
+      `&etapa=${encodeURIComponent(etapa)}&por_pagina=8&pagina=${pagina}`,
+    `fichas-${funilId}-${etapa}-${periodoQs}-${pagina}-${versao}`,
+  );
+
+  return (
+    <Cartao>
+      <TituloSecao
+        titulo={`Fichas em ${etapa}`}
+        icone="pessoas"
+        dica="Fichas criadas no período que estão nesta etapa agora — o mesmo que a coluna do kanban do Rubeus. Clique para ver a jornada."
+        extra={dados && <span className="tnum"><strong className="text-primario font-semibold">{fmtInt(dados.fichas_total)}</strong> ficha(s)</span>}
+      />
+      {erro ? (
+        <Estado tipo="erro" titulo="Não foi possível carregar" mensagem={erro} />
+      ) : !dados ? (
+        <div className="flex flex-col gap-2">
+          {Array.from({ length: 4 }, (_, i) => <Bloco key={i} className="h-11 w-full !rounded-[10px]" />)}
+        </div>
+      ) : !dados.fichas.length ? (
+        <Estado icone="pessoas" mensagem="Nenhuma ficha nesta etapa no período." />
+      ) : (
+        <>
+          <ul className="m-0 p-0 list-none flex flex-col divide-y divide-borda cascata">
+            {dados.fichas.map((f) => (
+              <li key={f.registro}>
+                <button
+                  type="button"
+                  onClick={() => aoAbrir(f.contato_id)}
+                  className="w-full flex items-center gap-3 py-2.5 px-1 text-left bg-transparent border-0 cursor-pointer
+                             rounded-[8px] transition-colors hover:bg-superficie-hover"
+                >
+                  <Avatar nome={f.contato_nome} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13.5px] font-semibold truncate">{f.contato_nome || `Contato ${f.contato_id}`}</span>
+                    <Dica conteudo={f.oferta_nome || 'Oferta não informada'} className="w-full">
+                      <span className="block text-[12.5px] text-secundario truncate">{f.oferta_nome || f.email || '—'}</span>
+                    </Dica>
+                  </span>
+                  <Dica conteudo={`Ficha ${f.registro} · criada em ${fmtDataHora(f.criado_em)} · nesta etapa desde ${fmtDataHora(f.na_etapa_desde)}`}>
+                    <span className="text-[12px] text-tenue tnum whitespace-nowrap">{fmtDataHora(f.na_etapa_desde)}</span>
+                  </Dica>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {dados.paginas > 1 && (
+            <div className="flex items-center justify-between gap-2 mt-3 text-[12.5px] text-secundario tnum">
+              <Botao tamanho="sm" variante="fantasma" icone="chevronEsquerda" disabled={pagina <= 1} onClick={() => setPagina((n) => n - 1)}>
+                Anterior
+              </Botao>
+              <span>página {dados.pagina} de {dados.paginas}</span>
+              <Botao tamanho="sm" variante="fantasma" disabled={pagina >= dados.paginas} onClick={() => setPagina((n) => n + 1)}>
+                Próxima
+              </Botao>
+            </div>
+          )}
+        </>
+      )}
+    </Cartao>
+  );
+}
+
 function DetalheRubeus({ filtro, filtrosCrm, opcoesFiltro }) {
   const [etapaSel, setEtapaSel] = useState(null);
   const [leadAberto, setLeadAberto] = useState(null);
@@ -1249,6 +1328,19 @@ function DetalheRubeus({ filtro, filtrosCrm, opcoesFiltro }) {
       : [];
   const funilAtual = funis.find((f) => funilIds.length === 1 && String(f.id) === funilIds[0]);
   const processoId = dados?.processo_id || funilAtual?.processo_id || null;
+
+  /*
+   * Um processo só: a esteira vira o kanban do Rubeus — fichas criadas no
+   * período, na etapa em que estão agora. É o que permite pôr as duas telas
+   * lado a lado e ver o mesmo número. Com vários processos (ou nenhum), segue a
+   * esteira acumulada, que não tem equivalente no Rubeus.
+   */
+  const umFunil = funilIds.length === 1 ? funilIds[0] : null;
+  const { dados: kanban, atualizando: atualizandoKanban } = useApi(
+    umFunil ? `/api/funil/kanban?funil_id=${encodeURIComponent(umFunil)}&${p}` : null,
+    `kanban-${umFunil}-${p}-${versao}`,
+    { manter: true },
+  );
 
   /*
    * Recorte que a esteira na tela representa.
@@ -1318,18 +1410,22 @@ function DetalheRubeus({ filtro, filtrosCrm, opcoesFiltro }) {
     );
   }
 
-  const comDado = dados.etapas.filter((e) => e.total > 0);
+  const etapasEsteira = umFunil && kanban?.etapas ? kanban.etapas : dados.etapas;
+  const totalFichas = umFunil && kanban ? kanban.total_fichas : dados.total_registros ?? 0;
+  const comDado = etapasEsteira.filter((e) => e.total > 0);
   const etapa = comDado.some((e) => e.etapa === etapaSel) ? etapaSel : comDado[0]?.etapa ?? null;
 
   const dicaEtapas =
-    'Etapa final de cada ficha no período. Só entram fichas com registro de processo no CRM. ' +
+    (umFunil
+      ? 'Como o kanban do Rubeus: fichas criadas no período, na etapa em que estão agora. A etapa é conferida com o Rubeus periodicamente; ficha excluída lá sai daqui. '
+      : 'Etapa final de cada ficha no período. Só entram fichas com registro de processo no CRM. ') +
     'Clique numa etapa para ver a curva dela ao lado. Use o ícone de ocultar para tirar uma etapa ' +
     'da esteira, ou configure tudo em Etapas do processo.' +
     (funilIds.length !== 1 ? ' Para ocultar etapa, selecione um único processo.' : '');
 
   return (
     <>
-    <Atualizando ativo={atualizando} className="flex flex-col gap-4">
+    <Atualizando ativo={atualizando || atualizandoKanban} className="flex flex-col gap-4">
       <Secao
         titulo="Etapas do processo"
         icone="funil"
@@ -1358,7 +1454,7 @@ function DetalheRubeus({ filtro, filtrosCrm, opcoesFiltro }) {
                     </Pill>
                   )}
                   <span className="tnum">
-                    <strong className="text-primario font-semibold">{fmtInt(dados.total_registros ?? 0)}</strong> ficha(s)
+                    <strong className="text-primario font-semibold">{fmtInt(totalFichas)}</strong> ficha(s)
                     {funilIds.length > 1 ? ` · ${funilIds.length} processos` : ''}
                   </span>
                 </span>
@@ -1371,10 +1467,11 @@ function DetalheRubeus({ filtro, filtrosCrm, opcoesFiltro }) {
               </div>
             )}
 
-            {dados.etapas?.length ? (
+            {etapasEsteira?.length ? (
               <Esteira
-                etapas={dados.etapas}
-                maiorQueda={dados.etapa_maior_queda}
+                etapas={etapasEsteira}
+                kanban={Boolean(umFunil && kanban)}
+                maiorQueda={umFunil && kanban ? null : dados.etapa_maior_queda}
                 selecionada={etapa}
                 aoSelecionar={setEtapaSel}
                 comFonte
@@ -1390,7 +1487,7 @@ function DetalheRubeus({ filtro, filtrosCrm, opcoesFiltro }) {
           </Cartao>
 
           {etapa && (
-            <div className="min-w-0 xl:sticky xl:top-4 animate-surgir" key={etapa}>
+            <div className="min-w-0 xl:sticky xl:top-4 flex flex-col gap-4 animate-surgir" key={etapa}>
               <CurvaDaEtapa
                 funilId={recorteCurva.funilQs}
                 etapa={etapa}
@@ -1398,6 +1495,15 @@ function DetalheRubeus({ filtro, filtrosCrm, opcoesFiltro }) {
                 filtrosQs={qsFiltrosCrm({ ...recorteCurva.filtrosCrm, funilId: [] })}
                 chave={recorteCurva.chave}
               />
+              {umFunil && (
+                <FichasDaEtapa
+                  funilId={umFunil}
+                  etapa={etapa}
+                  periodoQs={p}
+                  versao={versao}
+                  aoAbrir={(id) => setLeadAberto({ id, funilId: umFunil })}
+                />
+              )}
             </div>
           )}
         </div>

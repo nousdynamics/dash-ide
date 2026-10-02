@@ -23,7 +23,7 @@ import {
 } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 import { cacheDeBorda, invalidarCacheDeBorda } from '../lib/cacheBorda';
-import { ETAPA_NAO_INFORMADA, completarEtapasDosRegistros } from '../lib/rubeus';
+import { ETAPA_NAO_INFORMADA, SQL_EVENTOS_POR_REGISTRO, completarEtapasDosRegistros, reconciliarFichasRecentes } from '../lib/rubeus';
 
 /**
  * Agregados do D1 — funil Rubeus / Macro (planilha) e conversas Evolution.
@@ -1486,6 +1486,116 @@ api.get('/funil/serie', cacheDeBorda(300), async (c) => {
   });
 });
 
+/**
+ * GET /api/funil/kanban — o funil como o kanban do Rubeus mostra.
+ *
+ * Fichas (registros) do processo CRIADAS no período, cada uma na etapa em que
+ * está AGORA. É a mesma pergunta do kanban com "Período de criação do
+ * registro": a esteira acumulada responde outra (a etapa mais avançada que
+ * cada pessoa tocou no período) e por isso nunca batia com ele — no Pós de
+ * setembro, 36 em Inscrito Parcial contra 26 no Rubeus.
+ *
+ * Filtra pelo processo, não pelo funil gravado no evento: 824 eventos antigos
+ * estão no funil de outro processo, e é o processo que diz a que kanban o
+ * evento pertence.
+ *
+ * `etapa` (opcional) devolve também as fichas dessa etapa, para a lista ao
+ * lado da esteira.
+ */
+api.get('/funil/kanban', cacheDeBorda(300), async (c) => {
+  let processoId = c.req.query('processo_id') || null;
+  const funilId = Number(c.req.query('funil_id'));
+  if (!processoId && Number.isFinite(funilId)) {
+    const f = await c.env.DB.prepare('SELECT processo_id FROM funis WHERE id = ?').bind(funilId)
+      .first<{ processo_id: string | null }>();
+    processoId = f?.processo_id ?? null;
+  }
+  if (!processoId) return c.json({ erro: 'processo_desconhecido' }, 400);
+
+  const iv = intervaloDeQuery({
+    mes: c.req.query('mes'),
+    ano: c.req.query('ano'),
+    de: c.req.query('de'),
+    ate: c.req.query('ate'),
+    dias: Number(c.req.query('dias')) || 30,
+  } as any);
+  if ('erro' in iv) return c.json({ erro: iv.erro }, 400);
+
+  const contar = (de: string, ate: string) => c.env.DB.prepare(
+    `WITH ${SQL_EVENTOS_POR_REGISTRO}
+     SELECT a.etapa, COUNT(*) AS fichas
+       FROM atual a JOIN fichas f ON f.registro = a.registro
+      WHERE a.rn = 1 AND f.criado_em >= ? AND f.criado_em <= ?
+      GROUP BY a.etapa`,
+  ).bind(processoId, de, ate).all<{ etapa: string; fichas: number }>();
+
+  const etapaSel = c.req.query('etapa') || null;
+  const porPagina = Math.min(Math.max(Number(c.req.query('por_pagina') ?? 12) || 12, 3), 50);
+  const pagina = Math.max(Number(c.req.query('pagina') ?? 1) || 1, 1);
+
+  const [atual, anterior, catalogo, lista] = await Promise.all([
+    contar(iv.inicioIso, iv.fimIso),
+    contar(iv.inicioAnteriorIso, iv.fimAnteriorIso),
+    c.env.DB.prepare(
+      'SELECT etapa_nome, ordem, visivel FROM processo_etapas WHERE processo_id = ?',
+    ).bind(processoId).all<{ etapa_nome: string; ordem: number; visivel: number }>(),
+    etapaSel
+      ? c.env.DB.prepare(
+          `WITH ${SQL_EVENTOS_POR_REGISTRO},
+           info AS (
+             SELECT registro, MAX(contato_nome) AS contato_nome, MAX(email) AS email,
+                    MAX(oferta_nome) AS oferta_nome
+               FROM atrib WHERE registro IS NOT NULL GROUP BY registro
+           )
+           SELECT a.registro, a.contato_id, a.registrado_em AS na_etapa_desde, f.criado_em,
+                  i.contato_nome, i.email, i.oferta_nome
+             FROM atual a
+             JOIN fichas f ON f.registro = a.registro
+             JOIN info i ON i.registro = a.registro
+            WHERE a.rn = 1 AND a.etapa = ? AND f.criado_em >= ? AND f.criado_em <= ?
+            ORDER BY a.registrado_em DESC
+            LIMIT ? OFFSET ?`,
+        ).bind(processoId, etapaSel, iv.inicioIso, iv.fimIso, porPagina, (pagina - 1) * porPagina).all()
+      : Promise.resolve(null),
+  ]);
+
+  const meta = new Map(catalogo.results.map((r) => [r.etapa_nome, r]));
+  const ant = new Map(anterior.results.map((r) => [r.etapa, num(r.fichas)]));
+  // Etapa oculta em "Etapas do processo" fica fora da esteira, como no resto do painel.
+  const visivel = (e: string) => num(meta.get(e)?.visivel ?? 1) !== 0;
+  const etapas = atual.results
+    .filter((r) => visivel(r.etapa))
+    .map((r) => {
+      const total = num(r.fichas);
+      const antes = ant.get(r.etapa) ?? 0;
+      return {
+        etapa: r.etapa,
+        total,
+        anterior: antes,
+        delta_pct: delta(total, antes),
+        delta_abs: total - antes,
+        fonte: 'rubeus',
+        ordem: r.etapa === ETAPA_NAO_INFORMADA ? 99999 : num(meta.get(r.etapa)?.ordem ?? 7500),
+      };
+    })
+    .sort((a, b) => a.ordem - b.ordem || a.etapa.localeCompare(b.etapa));
+  const total = etapas.reduce((t, e) => t + e.total, 0);
+  const totalSel = etapas.find((e) => e.etapa === etapaSel)?.total ?? 0;
+
+  return c.json({
+    processo_id: processoId,
+    periodo: { de: iv.de, ate: iv.ate },
+    total_fichas: total,
+    total_anterior: etapas.reduce((t, e) => t + e.anterior, 0),
+    etapas: etapas.map((e) => ({ ...e, participacao_pct: total ? (e.total / total) * 100 : 0 })),
+    etapa: etapaSel,
+    fichas: lista?.results ?? [],
+    fichas_total: totalSel,
+    pagina,
+    paginas: Math.max(1, Math.ceil(totalSel / porPagina)),
+  });
+});
+
 api.get('/funil/leads', async (c) => {
   const funilIds = listaCsv(c.req.query('funil_id'))
     .map(Number)
@@ -1998,6 +2108,23 @@ api.post('/admin/rubeus/resgatar-cursos', exigirAdmin, async (c) => {
  * de quem ficou em "(etapa não informada)". A rodada de 30 minutos faz o mesmo,
  * 15 por vez; isto é para zerar um acúmulo sem esperar um dia inteiro.
  */
+/**
+ * POST /api/admin/rubeus/reconciliar?limite=120&processo_id=3 — confere com o
+ * Rubeus a etapa das fichas dos últimos 60 dias e grava o que faltou. A
+ * rodada de 30 minutos faz 25 por vez; isto é para acertar um processo agora.
+ */
+api.post('/admin/rubeus/reconciliar', exigirAdmin, async (c) => {
+  const limite = Math.min(Math.max(Number(c.req.query('limite') ?? 100) || 100, 1), 300);
+  try {
+    const r = await reconciliarFichasRecentes(c.env, c.env.DB, limite, c.req.query('processo_id') || null);
+    await invalidarCacheDeBorda(c);
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    const status = e instanceof ErroRubeus ? e.status : 502;
+    return c.json({ erro: 'reconciliar_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
+  }
+});
+
 api.post('/admin/rubeus/completar-etapas', exigirAdmin, async (c) => {
   const limite = Math.min(Math.max(Number(c.req.query('limite') ?? 100) || 100, 1), 200);
   try {
