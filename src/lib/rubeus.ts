@@ -658,3 +658,124 @@ export async function gravarCampoDoContato(
     evento: 'rubeus_campo_gravado', contato_id: contatoId, coluna,
   }));
 }
+
+/** Rótulo gravado quando o webhook não diz a etapa — ver src/routes/webhooks.ts. */
+export const ETAPA_NAO_INFORMADA = '(etapa não informada)';
+
+/**
+ * Em que etapa o registro está agora, segundo a API do Rubeus.
+ *
+ * O webhook nativo de registro (o JSON com `processo`, `contatos`,
+ * `resumoAtual`) não traz a etapa: `resumoAtual` é o resumo do ATENDIMENTO
+ * ("Não contactado"), não a coluna do funil. Desde 10/09/2026 cerca de um terço
+ * dos eventos chegou assim, e no Pós de setembro 69 de 106 registros ficaram
+ * sem etapa no painel enquanto o kanban os mostrava em Oportunidade, Inscrito
+ * Parcial, Oportunidade paga. `/api/Registro/dados` tem a resposta:
+ * `etapaNome`, e `minutosEtapa` para saber desde quando.
+ *
+ * Teto de quatro segundos: isto roda dentro do webhook, e o Rubeus não pode
+ * ficar esperando o painel conversar com o próprio Rubeus. Estourou, devolve
+ * nulo e o evento é gravado sem etapa, como antes — a rodada de 30 minutos
+ * tenta de novo depois.
+ */
+export async function etapaAtualDoRegistro(
+  env: Env,
+  registroId: string,
+): Promise<{ etapa: string; etapaId: string | null; desde: string | null } | null> {
+  const consulta = dadosRegistro(env, registroId).catch(() => null);
+  const limite = new Promise<null>((ok) => setTimeout(() => ok(null), 4000));
+  const d = await Promise.race([consulta, limite]);
+  const etapa = typeof d?.etapaNome === 'string' ? d.etapaNome.trim() : '';
+  if (!d || !etapa) return null;
+  const minutos = Number(d.minutosEtapa);
+  return {
+    etapa,
+    etapaId: d.etapa != null ? String(d.etapa) : null,
+    desde: Number.isFinite(minutos) && minutos >= 0
+      ? new Date(Date.now() - minutos * 60_000).toISOString()
+      : null,
+  };
+}
+
+/**
+ * Completa a etapa de quem ficou parado em "(etapa não informada)".
+ *
+ * Pega os registros cujo evento MAIS RECENTE não tem etapa, pergunta ao Rubeus
+ * onde cada um está e grava um evento novo com essa etapa. O evento sem etapa
+ * fica como está — ele aconteceu, só não dizia a coluna.
+ *
+ * A data do evento novo é a de entrada na etapa (`minutosEtapa`), mas nunca
+ * antes do último evento gravado: precisa ser o mais recente para a tela ler a
+ * etapa atual dele, e a lista de leads e o filtro por etapa olham o último.
+ *
+ * Lote pequeno por passada (uma chamada ao Rubeus por registro), mais recentes
+ * primeiro: quem acabou de entrar é quem a equipe está olhando agora.
+ */
+export async function completarEtapasDosRegistros(
+  env: Env,
+  db: D1Database,
+  limite = 15,
+): Promise<{ consultados: number; completados: number }> {
+  const { results } = await db.prepare(
+    /*
+     * "Último" olhando o CONTATO no processo, não só o registro.
+     *
+     * Os webhooks de mudança de etapa costumam chegar sem `registro_processo_id`
+     * — só o de criação traz. Particionando pelo registro, o aviso de criação
+     * (sem etapa) parecia ser o último, e o preenchimento gravava de novo uma
+     * etapa que o contato já tinha recebido depois: o MATHEUS do Pós ganhou um
+     * segundo "Matrícula ACADÊMICA concluída". Agora só entra quem não tem
+     * NENHUM evento mais novo no mesmo processo.
+     */
+    `WITH ultimo AS (
+       SELECT id, registro_processo_id, etapa, registrado_em, contato_id, processo_id,
+              ROW_NUMBER() OVER (PARTITION BY registro_processo_id
+                                 ORDER BY registrado_em DESC, id DESC) AS rec
+         FROM leads_etapa
+        WHERE registro_processo_id IS NOT NULL AND registro_processo_id != ''
+          AND registrado_em >= datetime('now', '-120 days')
+     )
+     SELECT u.id, u.registro_processo_id, u.registrado_em FROM ultimo u
+      WHERE u.rec = 1 AND u.etapa = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM leads_etapa n
+           WHERE n.contato_id = u.contato_id
+             AND n.processo_id IS u.processo_id
+             AND n.registrado_em > u.registrado_em)
+      ORDER BY u.registrado_em DESC
+      LIMIT ?`,
+  ).bind(ETAPA_NAO_INFORMADA, limite).all<{ id: number; registro_processo_id: string; registrado_em: string }>();
+
+  let completados = 0;
+  for (const r of results) {
+    const atual = await etapaAtualDoRegistro(env, r.registro_processo_id);
+    if (!atual) continue;
+    const ultimo = Date.parse(r.registrado_em);
+    const desde = atual.desde ? Date.parse(atual.desde) : NaN;
+    const quando = new Date(
+      Number.isFinite(desde) && desde > ultimo ? desde : ultimo + 1000,
+    ).toISOString();
+    const { meta } = await db.prepare(
+      `INSERT OR IGNORE INTO leads_etapa (
+         contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, etapa, status,
+         curso_id, curso_codigo, oferta_codigo, oferta_nome,
+         origem, modalidade, unidade, responsavel_comercial, registrado_em,
+         funil_id, email, telefone, gclid, gbraid, wbraid,
+         cep, cidade, estado, valor_curso, url_origem, pessoa_id)
+       SELECT contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, ?, status,
+              curso_id, curso_codigo, oferta_codigo, oferta_nome,
+              origem, modalidade, unidade, responsavel_comercial, ?,
+              funil_id, email, telefone, gclid, gbraid, wbraid,
+              cep, cidade, estado, valor_curso, url_origem, pessoa_id
+         FROM leads_etapa WHERE id = ?`,
+    ).bind(atual.etapa, quando, r.id).run();
+    if (meta.changes) {
+      completados += 1;
+      const p = await db.prepare('SELECT processo_id FROM leads_etapa WHERE id = ?').bind(r.id)
+        .first<{ processo_id: string | null }>();
+      await aprenderEtapaDoEvento(db, p?.processo_id, atual.etapa, atual.etapaId).catch(() => undefined);
+    }
+  }
+  console.log(JSON.stringify({ evento: 'etapas_completadas', consultados: results.length, completados }));
+  return { consultados: results.length, completados };
+}

@@ -22,6 +22,8 @@ import {
   reordenarEtapasSchema,
 } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
+import { cacheDeBorda, invalidarCacheDeBorda } from '../lib/cacheBorda';
+import { ETAPA_NAO_INFORMADA, completarEtapasDosRegistros } from '../lib/rubeus';
 
 /**
  * Agregados do D1 — funil Rubeus / Macro (planilha) e conversas Evolution.
@@ -247,7 +249,7 @@ api.get('/me', (c) => c.json({
 }));
 
 /** GET /api/overview?dias=30 — leads captados e conversas, direto do D1. */
-api.get('/overview', async (c) => {
+api.get('/overview', cacheDeBorda(300), async (c) => {
   const q = periodoQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
   const { dias } = q.data;
@@ -332,7 +334,18 @@ api.get('/overview', async (c) => {
  * da tabela e a contagem da gaveta divergiriam, e aí não dá para conferir
  * número nenhum — que é justamente para o que a gaveta serve.
  */
-const CTE_ORIGEM_DA_PESSOA = `
+/*
+ * Só para as pessoas de `conjunto` — um CTE anterior com a coluna `pessoa`.
+ *
+ * A versão sem recorte calculava o último curso e o último funil de TODAS as
+ * pessoas do banco, com duas janelas sobre `leads_etapa` inteira, para depois
+ * usar só as poucas centenas que a tela pedia: ~143 mil linhas lidas por
+ * abertura do Funil, a maior parte da cota diária do D1 no dia em que ela
+ * estourou. Com `pessoa_id IN (...)` o índice `idx_leads_pessoa_em` busca só o
+ * histórico de quem interessa. O resultado é o mesmo: continua sendo o último
+ * curso da pessoa em qualquer data, não só no período.
+ */
+const cteOrigemDaPessoa = (conjunto: string) => `
   pessoa_curso AS (
     SELECT l.pessoa_id AS pessoa,
            l.curso_codigo, l.curso_id, l.oferta_codigo, l.oferta_nome,
@@ -341,10 +354,11 @@ const CTE_ORIGEM_DA_PESSOA = `
              ORDER BY l.registrado_em DESC
            ) AS recencia
       FROM leads_etapa l
-     WHERE (l.curso_codigo IS NOT NULL AND l.curso_codigo != '')
+     WHERE l.pessoa_id IN (SELECT pessoa FROM ${conjunto})
+       AND ((l.curso_codigo IS NOT NULL AND l.curso_codigo != '')
         OR (l.curso_id IS NOT NULL AND l.curso_id != '')
         OR (l.oferta_codigo IS NOT NULL AND l.oferta_codigo != '')
-        OR (l.oferta_nome IS NOT NULL AND l.oferta_nome != '')
+        OR (l.oferta_nome IS NOT NULL AND l.oferta_nome != ''))
   ),
   curso_da_pessoa AS (
     SELECT pessoa, curso_codigo, curso_id, oferta_codigo, oferta_nome
@@ -358,7 +372,8 @@ const CTE_ORIGEM_DA_PESSOA = `
              ORDER BY l.registrado_em DESC
            ) AS recencia
       FROM leads_etapa l
-     WHERE l.funil_id IS NOT NULL
+     WHERE l.pessoa_id IN (SELECT pessoa FROM ${conjunto})
+       AND l.funil_id IS NOT NULL
   ),
   funil_da_pessoa AS (
     SELECT pessoa, funil_id FROM pessoa_funil WHERE recencia = 1
@@ -373,15 +388,43 @@ const CTE_ORIGEM_DA_PESSOA = `
  * categoria: `categoria_fallback` é nulo para "Pós-Graduação", que não separa
  * presencial de EAD de medicina.
  */
+/*
+ * Uma busca por chave, da mais precisa à mais solta — não um OR só.
+ *
+ * `curso_categoria` é view sobre o catálogo inteiro (cursos + ofertas), com
+ * uma subconsulta de regra por linha. Com as quatro chaves num OR, o SQLite
+ * não usa índice e percorre a view toda para cada pessoa: com ~500 pessoas
+ * no mês, eram centenas de milhares de linhas lidas por abertura do Funil.
+ * Separadas, cada busca vira igualdade que desce para dentro da view e usa o
+ * índice da tabela de baixo, e o COALESCE só avalia a seguinte se a anterior
+ * não achou.
+ *
+ * A ordem reproduz a do OR: a view devolve as linhas de `cursos` antes das
+ * de `curso_ofertas`, então qualquer linha de curso vencia qualquer oferta
+ * quando as duas casavam com categorias diferentes. Inverter mudaria a
+ * contagem por categoria — conferido em cópia local com 24 mil eventos.
+ */
 const SQL_CATEGORIA_RESOLVIDA = `COALESCE(
+  -- 1º as linhas de \`cursos\` (na view, as que têm oferta_codigo nulo)
   (SELECT cc.categoria FROM curso_categoria cc
-    WHERE cc.categoria IS NOT NULL
-      AND ((cd.oferta_codigo IS NOT NULL AND cc.oferta_codigo = cd.oferta_codigo)
-        OR (cd.curso_codigo  IS NOT NULL AND cc.curso_codigo  = cd.curso_codigo)
-        OR (cd.curso_id      IS NOT NULL AND cc.curso_id      = cd.curso_id)
-        OR (cd.oferta_nome   IS NOT NULL AND cd.oferta_nome != ''
-            AND cc.nome = cd.oferta_nome))
-    LIMIT 1),
+    WHERE cc.oferta_codigo IS NULL AND cd.curso_codigo IS NOT NULL
+      AND cc.curso_codigo = cd.curso_codigo AND cc.categoria IS NOT NULL LIMIT 1),
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cc.oferta_codigo IS NULL AND cd.curso_id IS NOT NULL
+      AND cc.curso_id = cd.curso_id AND cc.categoria IS NOT NULL LIMIT 1),
+  -- 2º as ofertas
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cd.curso_codigo IS NOT NULL AND cc.curso_codigo = cd.curso_codigo
+      AND cc.categoria IS NOT NULL LIMIT 1),
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cd.curso_id IS NOT NULL AND cc.curso_id = cd.curso_id
+      AND cc.categoria IS NOT NULL LIMIT 1),
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cd.oferta_codigo IS NOT NULL AND cc.oferta_codigo = cd.oferta_codigo
+      AND cc.categoria IS NOT NULL LIMIT 1),
+  (SELECT cc.categoria FROM curso_categoria cc
+    WHERE cd.oferta_nome IS NOT NULL AND cd.oferta_nome != '' AND cc.nome = cd.oferta_nome
+      AND cc.categoria IS NOT NULL LIMIT 1),
   (SELECT f.categoria_fallback FROM funis f WHERE f.id = fd.funil_id),
   ''
 )`;
@@ -390,7 +433,7 @@ const SQL_CATEGORIA_RESOLVIDA = `COALESCE(
  * GET /api/funil/macro — visão principal da planilha.
  * Visitantes/Leads: RD Marketing. Qualificados+: Rubeus.
  */
-api.get('/funil/macro', async (c) => {
+api.get('/funil/macro', cacheDeBorda(300), async (c) => {
   const q = macroQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
@@ -676,7 +719,7 @@ api.get('/funil/macro', async (c) => {
     const fCat = filtrosDaQuery(q.data, 'l');
 
     const linhas = await c.env.DB.prepare(
-      `WITH ${CTE_ORIGEM_DA_PESSOA},
+      `WITH
        /*
         * Acumulado, igual ao funil de cima.
         *
@@ -701,7 +744,8 @@ api.get('/funil/macro', async (c) => {
             ${fCat.sql}
           GROUP BY pessoa
          HAVING nivel >= 3
-       )
+       ),
+       ${cteOrigemDaPessoa('marcos')}
        SELECT ${SQL_CATEGORIA_RESOLVIDA} AS categoria,
               COALESCE(fu.nome, '') AS funil_nome,
               COUNT(*) AS inscricoes,
@@ -890,7 +934,7 @@ api.get('/funil/macro', async (c) => {
  * usarem critérios parecidos-mas-diferentes, a conferência vira mais uma
  * dúvida em vez de resposta.
  */
-api.get('/funil/macro/pessoas', async (c) => {
+api.get('/funil/macro/pessoas', cacheDeBorda(300), async (c) => {
   const q = pessoasDaEtapaQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
@@ -919,7 +963,6 @@ api.get('/funil/macro/pessoas', async (c) => {
     WITH rank_macro(macro, nivel) AS (
       VALUES ('qualificados', 1), ('oportunidade', 2), ('inscricao', 3), ('matricula', 4)
     ),
-    ${CTE_ORIGEM_DA_PESSOA},
     topo AS (
       SELECT l.pessoa_id AS pessoa,
              MAX(rank_macro.nivel) AS nivel
@@ -933,6 +976,7 @@ api.get('/funil/macro/pessoas', async (c) => {
        GROUP BY pessoa
       HAVING nivel >= ?
     ),
+    ${cteOrigemDaPessoa('topo')},
     -- O evento mais recente DENTRO do período dá o nome, a etapa e a data que
     -- a lista mostra. Fora do período seria outra pergunta.
     ultimo AS (
@@ -948,11 +992,18 @@ api.get('/funil/macro/pessoas', async (c) => {
     listagem AS (
       SELECT u.contato_id, u.contato_nome, u.email, u.telefone, u.etapa, u.registrado_em,
              cd.curso_codigo,
-             COALESCE(cd.oferta_nome, (SELECT k.nome FROM curso_catalogo k
-               WHERE (cd.oferta_codigo IS NOT NULL AND k.oferta_codigo = cd.oferta_codigo)
-                  OR (cd.curso_codigo  IS NOT NULL AND k.curso_codigo  = cd.curso_codigo)
-                  OR (cd.curso_id      IS NOT NULL AND k.curso_id      = cd.curso_id)
-               LIMIT 1)) AS curso_nome,
+             -- Mesma troca do OR por buscas separadas de SQL_CATEGORIA_RESOLVIDA.
+             COALESCE(cd.oferta_nome,
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE k.oferta_codigo IS NULL AND cd.curso_codigo IS NOT NULL AND k.curso_codigo = cd.curso_codigo LIMIT 1),
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE k.oferta_codigo IS NULL AND cd.curso_id IS NOT NULL AND k.curso_id = cd.curso_id LIMIT 1),
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE cd.curso_codigo IS NOT NULL AND k.curso_codigo = cd.curso_codigo LIMIT 1),
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE cd.curso_id IS NOT NULL AND k.curso_id = cd.curso_id LIMIT 1),
+               (SELECT k.nome FROM curso_catalogo k
+                 WHERE cd.oferta_codigo IS NOT NULL AND k.oferta_codigo = cd.oferta_codigo LIMIT 1)) AS curso_nome,
              (SELECT f.nome FROM funis f WHERE f.id = fd.funil_id) AS funil_nome,
              ${SQL_CATEGORIA_RESOLVIDA} AS categoria
         FROM topo t
@@ -1009,7 +1060,7 @@ api.get('/funil/macro/pessoas', async (c) => {
  *
  * A esteira sempre lista as etapas visíveis do catálogo, mesmo zeradas.
  */
-api.get('/funil', async (c) => {
+api.get('/funil', cacheDeBorda(300), async (c) => {
   const q = funilQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
@@ -1183,7 +1234,16 @@ api.get('/funil', async (c) => {
     for (const l of linhas) {
       const meta = ordemPorNome.get(l.etapa);
       if ((meta?.visivel ?? 1) === 0) continue;
-      const ordem = meta?.ordem ?? 7500;
+      /*
+       * "(etapa não informada)" perde para qualquer etapa de verdade.
+       *
+       * Ela é cadastrada com ordem 9900 (fim da fila), e "maior ordem vence"
+       * fazia um único aviso sem etapa puxar a pessoa para essa coluna, mesmo
+       * com Oportunidade paga no histórico: no Pós de setembro eram 69 pessoas
+       * ali, que o kanban do Rubeus mostrava distribuídas pelas etapas. Ela só
+       * conta para quem não tem nenhuma outra.
+       */
+      const ordem = l.etapa === ETAPA_NAO_INFORMADA ? -1 : (meta?.ordem ?? 7500);
       const atual = topoPorPessoa.get(l.pessoa);
       if (!atual || ordem > atual.ordem || (ordem === atual.ordem && l.registrado_em > atual.em)) {
         topoPorPessoa.set(l.pessoa, { etapa: l.etapa, ordem, em: l.registrado_em });
@@ -1264,7 +1324,7 @@ api.get('/funil', async (c) => {
   });
 });
 
-api.get('/funil/serie', async (c) => {
+api.get('/funil/serie', cacheDeBorda(300), async (c) => {
   const q = funilQuerySchema.safeParse(c.req.query());
   if (!q.success) return c.json({ erro: 'parametros_invalidos', detalhe: q.error.issues }, 400);
 
@@ -1452,6 +1512,32 @@ api.get('/funil/leads', async (c) => {
   const bindsBusca = busca ? [like, like, like, like] : [];
 
   /*
+   * Filtro pela etapa ATUAL da pessoa — a do evento mais recente, a mesma que
+   * o card mostra. Filtrar por "já passou pela etapa" responderia outra
+   * pergunta, e a lista mostraria gente cujo card diz outra etapa.
+   */
+  const etapas = listaCsv(c.req.query('etapa'));
+
+  /*
+   * Período pela CHEGADA da pessoa ao funil — o primeiro evento dela aqui. É o
+   * que o kanban do Rubeus chama de "Período de criação do registro", e é o
+   * que permite pôr as duas telas lado a lado. A etapa mostrada continua sendo
+   * a atual, mesmo que a pessoa tenha andado depois do período.
+   *
+   * As datas chegam em dia (YYYY-MM-DD, horário de Brasília) e viram instante
+   * UTC: o dia começa às 03:00Z. Fim exclusivo, no começo do dia seguinte.
+   */
+  const diaValido = (v?: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const de = diaValido(c.req.query('de'));
+  const ate = diaValido(c.req.query('ate'));
+  const inicioPeriodo = de ? `${de}T03:00:00.000Z` : null;
+  const fimPeriodo = ate
+    ? new Date(Date.parse(`${ate}T03:00:00.000Z`) + 86_400_000).toISOString()
+    : null;
+  const bindsPeriodo = [inicioPeriodo, inicioPeriodo, fimPeriodo, fimPeriodo];
+  const filtroEtapa = etapas.length ? `WHERE ${inSql('u.etapa', etapas.length)}` : '';
+
+  /*
    * Um card por PESSOA, não por contato_id.
    *
    * O Rubeus emite id de contato diferente conforme o gatilho e, pior, o mesmo
@@ -1521,16 +1607,18 @@ api.get('/funil/leads', async (c) => {
               COUNT(DISTINCT curso_codigo)           AS cursos,
               MAX(registrado_em)                     AS ult
        FROM base GROUP BY quem
+      HAVING (? IS NULL OR MIN(registrado_em) >= ?)
+         AND (? IS NULL OR MIN(registrado_em) <  ?)
+     ),
+     ultimo AS (
+       SELECT b.* FROM base b
+        JOIN agg a ON a.quem = b.quem AND a.ult = b.registrado_em
+        GROUP BY b.quem
      )`;
 
   const [pagRes, totalRes] = await Promise.all([
     c.env.DB.prepare(
-      `${cte},
-       ultimo AS (
-         SELECT b.* FROM base b
-          JOIN agg a ON a.quem = b.quem AND a.ult = b.registrado_em
-          GROUP BY b.quem
-       )
+      `${cte}
        SELECT a.quem, a.eventos, a.ids_no_crm, a.processos, a.cursos,
               a.ult AS registrado_em,
               u.etapa, u.curso_codigo, u.oferta_codigo, u.oferta_nome, u.processo_nome, u.origem,
@@ -1544,18 +1632,35 @@ api.get('/funil/leads', async (c) => {
               COALESCE(u.contato_nome,
                        (SELECT MAX(b2.contato_nome) FROM base b2 WHERE b2.quem = a.quem)) AS contato_nome
        FROM agg a JOIN ultimo u ON u.quem = a.quem
+       ${filtroEtapa}
        ORDER BY a.ult DESC LIMIT ? OFFSET ?`,
     )
-      .bind(...escopoBinds, ...bindsBusca, porPagina, offset)
+      .bind(...escopoBinds, ...bindsBusca, ...bindsPeriodo, ...etapas, porPagina, offset)
       .all(),
 
-    // Total de PESSOAS que casam com o filtro — é o que pagina, não linhas.
-    c.env.DB.prepare(`${cte} SELECT COUNT(*) AS total FROM agg`)
-      .bind(...escopoBinds, ...bindsBusca)
-      .first<{ total: number }>(),
+    /*
+     * Pessoas por etapa atual, sem o filtro de etapa — é o que o seletor mostra
+     * ao lado de cada opção. O total da paginação sai daqui (soma das etapas
+     * escolhidas), e não de uma terceira consulta: cada passada por `bruto`
+     * custa leitura no D1.
+     */
+    c.env.DB.prepare(
+      `${cte}
+       SELECT COALESCE(u.etapa, '') AS etapa, COUNT(*) AS pessoas,
+              (SELECT MIN(pe.ordem) FROM processo_etapas pe WHERE pe.etapa_nome = u.etapa) AS ordem
+         FROM ultimo u
+        GROUP BY u.etapa
+        ORDER BY ordem IS NULL, ordem, etapa`,
+    )
+      .bind(...escopoBinds, ...bindsBusca, ...bindsPeriodo)
+      .all<{ etapa: string; pessoas: number; ordem: number | null }>(),
   ]);
 
-  const total = num(totalRes?.total);
+  const porEtapa = totalRes.results.map((r) => ({ etapa: r.etapa, pessoas: num(r.pessoas) }));
+  const escolhidas = new Set(etapas);
+  const total = porEtapa
+    .filter((r) => !escolhidas.size || escolhidas.has(r.etapa))
+    .reduce((t, r) => t + r.pessoas, 0);
   return c.json({
     funil_id: funilIds.length === 1 ? funilIds[0] : null,
     funil_ids: funilIds,
@@ -1564,6 +1669,9 @@ api.get('/funil/leads', async (c) => {
     por_pagina: porPagina,
     paginas: Math.max(1, Math.ceil(total / porPagina)),
     busca: busca || null,
+    etapas,
+    periodo: { de, ate },
+    por_etapa: porEtapa,
     itens: pagRes.results,
   });
 });
@@ -1625,8 +1733,18 @@ api.get('/funil/lead/:contato_id', async (c) => {
   ]);
 
   const linhas = etapas.results as Array<Record<string, any>>;
-  const primeiro = linhas[0] ?? {};
-  const ultimo = linhas[linhas.length - 1] ?? {};
+  /*
+   * Aberto a partir de um card de funil, o resumo conta a história DAQUELE
+   * funil — a mesma do card. Sem isso, o card do Pós dizia "Matrícula
+   * ACADÊMICA concluída" e a gaveta abria com a Qualificação de Leads como
+   * etapa atual e origem "CRM", porque olhava a jornada inteira. A jornada
+   * completa continua em `funis`, com o funil do card primeiro.
+   */
+  const foco = new Set(listaCsv(c.req.query('funil_id')).map(Number).filter((n) => !Number.isNaN(n)));
+  const doFoco = foco.size ? linhas.filter((l) => foco.has(Number(l.funil_id))) : [];
+  const resumo = doFoco.length ? doFoco : linhas;
+  const primeiro = resumo[0] ?? {};
+  const ultimo = resumo[resumo.length - 1] ?? {};
 
   const porFunil = new Map<string, any>();
   for (const l of linhas) {
@@ -1637,12 +1755,17 @@ api.get('/funil/lead/:contato_id', async (c) => {
     porFunil.get(k).passos.push(l);
   }
   const funis = [...porFunil.values()].map((f) => ({
+    em_foco: foco.has(Number(f.funil_id)),
     ...f,
     etapa_atual: f.passos[f.passos.length - 1]?.etapa ?? null,
     ultimo_em: f.passos[f.passos.length - 1]?.registrado_em ?? null,
-  }));
+  }))
+    // Funil do card primeiro; "Sem funil" (webhook sem processo) por último.
+    .sort((x, y) => Number(y.em_foco) - Number(x.em_foco)
+      || Number(x.funil_id == null) - Number(y.funil_id == null));
 
   return c.json({
+    funil_foco: [...foco],
     contato_id: id,
     contato_nome: ultimo.contato_nome || primeiro.contato_nome || null,
     funis,
@@ -1661,7 +1784,7 @@ api.get('/funil/lead/:contato_id', async (c) => {
   });
 });
 
-api.get('/catalogo/cursos', async (c) => {
+api.get('/catalogo/cursos', cacheDeBorda(1800), async (c) => {
   /*
    * Lista OFERTAS do Rubeus (turma/campus/semestre), não o curso-pai.
    * É o que aparece no kanban e no filtro do Funil.
@@ -1724,7 +1847,7 @@ api.get('/catalogo/etapas', async (c) => {
 });
 
 /** Valores distintos para popular selects do Funil. */
-api.get('/catalogo/filtros', async (c) => {
+api.get('/catalogo/filtros', cacheDeBorda(3600), async (c) => {
   const [modalidades, unidades, origens, funis] = await Promise.all([
     c.env.DB.prepare(
       `SELECT DISTINCT modalidade AS v FROM leads_etapa
@@ -1790,6 +1913,8 @@ api.patch('/catalogo/etapas', exigirAdmin, async (c) => {
   ).bind(...binds).run();
 
   if (!meta.changes) return c.json({ erro: 'etapa_nao_encontrada' }, 404);
+  // Visibilidade e macro mudam a esteira do Funil: a resposta guardada fica velha.
+  await invalidarCacheDeBorda(c);
   return c.json({ ok: true });
 });
 
@@ -1806,6 +1931,7 @@ api.put('/catalogo/etapas/ordem', exigirAdmin, async (c) => {
     ).bind(item.ordem, r.data.processo_id, item.etapa_nome),
   );
   await c.env.DB.batch(stmts);
+  await invalidarCacheDeBorda(c);
   return c.json({ ok: true, atualizados: stmts.length });
 });
 
@@ -1825,6 +1951,7 @@ api.post('/admin/rubeus/sync', exigirAdmin, async (c) => {
      */
     const limite = Math.min(200, Math.max(1, Number(c.req.query('limite')) || 60));
     const enriquecidos = await enriquecerCursoDosLeads(c.env, c.env.DB, limite);
+    await invalidarCacheDeBorda(c);
     return c.json({ ok: true, cursos, etapas, enriquecidos });
   } catch (e) {
     const status = e instanceof ErroRubeus ? e.status : 502;
@@ -1858,10 +1985,28 @@ api.post('/admin/rubeus/resgatar-cursos', exigirAdmin, async (c) => {
           AND curso_consultado_em IS NULL
           AND contato_id IS NOT NULL AND contato_id != ''`,
     ).first();
+    await invalidarCacheDeBorda(c);
     return c.json({ ok: true, ...resultado, restantes: num(restam?.n) });
   } catch (e) {
     const status = e instanceof ErroRubeus ? e.status : 502;
     return c.json({ erro: 'resgate_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
+  }
+});
+
+/**
+ * POST /api/admin/rubeus/completar-etapas?limite=100 — completa em lote a etapa
+ * de quem ficou em "(etapa não informada)". A rodada de 30 minutos faz o mesmo,
+ * 15 por vez; isto é para zerar um acúmulo sem esperar um dia inteiro.
+ */
+api.post('/admin/rubeus/completar-etapas', exigirAdmin, async (c) => {
+  const limite = Math.min(Math.max(Number(c.req.query('limite') ?? 100) || 100, 1), 200);
+  try {
+    const r = await completarEtapasDosRegistros(c.env, c.env.DB, limite);
+    await invalidarCacheDeBorda(c);
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    const status = e instanceof ErroRubeus ? e.status : 502;
+    return c.json({ erro: 'completar_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
   }
 });
 

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { exigirAcesso } from './lib/access';
 import { rodadaDiaria, rodadaLeve } from './lib/conversoes';
+import { completarEtapasDosRegistros } from './lib/rubeus';
 import { reconciliarRubeus } from './lib/sync';
 import type { AppEnv } from './lib/tipos';
 import ads from './routes/ads';
@@ -111,6 +112,16 @@ export default {
      */
     if (event.cron !== '0 9 * * *') {
       ctx.waitUntil(rodadaLeve(env));
+      /*
+       * Fora da rodada de conversões de propósito: ela sai cedo quando o envio
+       * ao Google está desligado, e a etapa faltando estraga o Funil com ou sem
+       * conversão ligada.
+       */
+      ctx.waitUntil(
+        completarEtapasDosRegistros(env, env.DB, 15).catch((e) =>
+          console.error(JSON.stringify({ evento: 'completar_etapas_erro', msg: String(e) })),
+        ),
+      );
       return;
     }
 

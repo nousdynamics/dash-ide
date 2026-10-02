@@ -1,7 +1,10 @@
 import { useCallback, useState } from 'react';
-import { Cartao, Estado, Esqueleto, Pill, Select, Switch } from '../componentes/base';
+import {
+  Atualizando, Botao, CabecalhoPagina, Cartao, CartaoKpi, Dica, Estado, EsqueletoPagina, Icone,
+  InfoDica, Pill, Secao, Select, SetaSanfona, Switch, TituloSecao,
+} from '../componentes/base';
 import { MonitorConversoes } from './MonitorConversoes';
-import { useApi } from '../lib/api';
+import { invalidar, useApi } from '../lib/api';
 import { fmtInt } from '../lib/formato';
 
 /**
@@ -17,8 +20,9 @@ import { fmtInt } from '../lib/formato';
  * preciso rolar por decisões que ninguém ia tomar naquele momento.
  *
  * A ordem aqui segue o caminho do dado: primeiro o que foi enviado e como o
- * Google respondeu (o monitor), depois as duas engrenagens que alimentam a
- * qualidade disso — a captura do clique no site e a cópia na planilha.
+ * Google respondeu (o monitor, nas abas Resumo / Envios / Diagnóstico), depois
+ * as duas engrenagens que alimentam a qualidade disso — a captura do clique no
+ * site e a cópia na planilha —, que ficam numa aba própria.
  */
 
 async function enviar(rota, corpo, metodo = 'POST') {
@@ -29,11 +33,17 @@ async function enviar(rota, corpo, metodo = 'POST') {
   });
   const dados = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(dados.detalhe || dados.erro || `servidor respondeu ${r.status}`);
+  // Gravou: o cache das rotas de conversão já não é verdade.
+  invalidar('/api/conversoes');
   return dados;
 }
 
-/** Botão com estado próprio — o mesmo padrão das outras telas de conversão. */
-function Acao({ children, aoClicar, tom = 'neutro', titulo }) {
+/**
+ * Botão com estado próprio — o mesmo padrão das outras telas de conversão.
+ * O giro do `Botao` desabilita durante o POST: sem isso, o clique duplo criaria
+ * duas planilhas.
+ */
+function Acao({ children, aoClicar, tom = 'neutro', titulo, icone }) {
   const [estado, setEstado] = useState('pronto');
   const [msg, setMsg] = useState('');
 
@@ -51,28 +61,23 @@ function Acao({ children, aoClicar, tom = 'neutro', titulo }) {
     }
   };
 
-  const cor = estado === 'erro'
-    ? 'border-perigo/40 bg-perigo/12 text-perigo'
-    : estado === 'ok'
-      ? 'border-sucesso/40 bg-sucesso/12 text-sucesso'
-      : tom === 'primario'
-        ? 'border-azul-500 bg-azul-600 text-white hover:bg-azul-500'
-        : 'border-borda-forte bg-superficie text-secundario hover:bg-superficie-hover hover:text-primario';
-
   return (
     <span className="inline-flex items-center gap-2 flex-wrap">
-      <button
-        type="button"
-        title={titulo}
-        onClick={rodar}
-        disabled={estado === 'rodando'}
-        className={`text-[11px] px-2 py-[5px] rounded-[8px] border cursor-pointer shrink-0
-                    disabled:opacity-50 disabled:cursor-not-allowed ${cor}`}
-      >
-        {estado === 'rodando' ? 'Aguarde…' : estado === 'ok' ? 'Feito' : children}
-      </button>
+      <Dica conteudo={titulo}>
+        <Botao
+          variante={estado === 'erro' ? 'perigo' : tom === 'primario' ? 'primario' : 'secundario'}
+          icone={estado === 'ok' ? 'check' : icone}
+          carregando={estado === 'rodando'}
+          onClick={rodar}
+        >
+          {estado === 'rodando' ? 'Aguarde…' : estado === 'ok' ? 'Feito' : children}
+        </Botao>
+      </Dica>
       {msg && (
-        <span className={`text-[10px] max-w-[320px] ${estado === 'erro' ? 'text-perigo' : 'text-tenue'}`}>
+        <span
+          className={`text-[12.5px] max-w-[320px] break-all leading-snug animate-aparecer
+            ${estado === 'erro' ? 'text-perigo' : 'text-secundario'}`}
+        >
           {msg}
         </span>
       )}
@@ -107,44 +112,46 @@ function CampoNoRubeus() {
   };
 
   return (
-    <div className="flex flex-col gap-1.5 items-start lg:items-end">
-      <button
-        type="button"
-        onClick={procurar}
-        disabled={estado === 'rodando'}
-        className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte bg-superficie
-                   text-secundario hover:bg-superficie-hover hover:text-primario cursor-pointer
-                   disabled:opacity-50"
-      >
+    <div className="flex flex-col gap-2 items-start">
+      <Botao tamanho="sm" icone="busca" carregando={estado === 'rodando'} onClick={procurar}>
         {estado === 'rodando' ? 'Consultando…' : 'Procurar campo de click id no Rubeus'}
-      </button>
+      </Botao>
 
-      {r?.erro && <span className="text-[10px] text-perigo max-w-[300px]">{r.erro}</span>}
+      {r?.erro && <span className="text-[12.5px] text-perigo max-w-[360px] animate-aparecer">{r.erro}</span>}
 
       {r && !r.erro && (
-        <div className="text-[10px] leading-relaxed lg:text-right max-w-[320px]">
+        <div className="text-[13px] leading-relaxed max-w-[420px] animate-aparecer">
           {r.encontrado ? (
-            <span className="text-sucesso">
-              Encontrado:{' '}
-              {Object.entries(r.colunas).filter(([, v]) => v).map(([k, v]) => `${k} → ${v}`).join(', ')}
+            <span className="inline-flex items-start gap-1.5 text-sucesso">
+              <Icone nome="checkCirculo" className="w-4 h-4 shrink-0 mt-[2px]" />
+              <span>
+                Encontrado:{' '}
+                {Object.entries(r.colunas).filter(([, v]) => v).map(([k, v]) => `${k} → ${v}`).join(', ')}
+              </span>
             </span>
           ) : (
-            <span className="text-tenue">
+            <span className="inline-flex items-center gap-1.5 text-secundario">
               Nenhum campo de click id entre os {r.campos_do_contato?.length ?? 0} campos do Contato.
-              O painel funciona sem ele — só não devolve o clique ao CRM.
+              <InfoDica texto="O painel funciona sem ele — só não devolve o clique ao CRM." />
             </span>
           )}
           {r.campos_do_contato?.length > 0 && (
             <button
               type="button"
               onClick={() => setVerLista((v) => !v)}
-              className="block ml-auto mt-1 text-azul-600 bg-transparent border-0 p-0 cursor-pointer text-[10px]"
+              aria-expanded={verLista}
+              className="flex items-center gap-1 mt-1.5 text-azul-600 hover:text-azul-700 bg-transparent border-0 p-0
+                         cursor-pointer text-[13px] font-medium"
             >
-              {verLista ? 'esconder' : 'ver os campos que existem'}
+              <SetaSanfona aberta={verLista} className="!text-azul-600" />
+              {verLista ? 'Esconder' : 'Ver os campos que existem'}
             </button>
           )}
           {verLista && (
-            <ul className="mt-1 text-tenue lg:text-left border-t border-borda pt-1 max-h-40 overflow-auto">
+            <ul
+              className="mt-1.5 text-secundario border border-borda rounded-[10px] bg-elevado/50 px-3 py-2
+                         max-h-48 overflow-auto m-0 list-none flex flex-col gap-0.5 animate-surgir"
+            >
               {r.campos_do_contato.map((f) => (
                 <li key={f.coluna} className="truncate">{f.nome}</li>
               ))}
@@ -199,39 +206,48 @@ function InstalarNoGtm() {
 
   if (!aberto) {
     return (
-      <button
-        type="button"
-        onClick={() => setAberto(true)}
-        className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500 bg-azul-600
-                   text-white hover:bg-azul-500 cursor-pointer"
-      >
+      <Botao variante="primario" icone="raio" onClick={() => setAberto(true)} className="self-start">
         Adicionar ao GTM automaticamente
-      </button>
+      </Botao>
     );
   }
 
   return (
-    <div className="rounded-[8px] border border-azul-500/40 bg-superficie p-2.5 flex flex-col gap-2">
-      <div className="text-[11px] font-semibold">Instalar no contêiner</div>
+    <div className="rounded-[12px] border border-azul-400/40 bg-superficie p-3 flex flex-col gap-2.5 animate-escala">
+      <div className="text-[13.5px] font-semibold flex items-center gap-1.5">
+        Instalar no contêiner
+        <InfoDica
+          texto="A tag entra como alteração pendente no workspace padrão, com acionamento em todas as páginas. O painel não publica o contêiner — publicar vale para o site inteiro e levaria junto rascunhos de outras pessoas. Você publica no GTM quando quiser."
+          largura={340}
+        />
+      </div>
 
-      {carregando && <div className="text-[11px] text-tenue">Buscando contêineres…</div>}
+      {carregando && (
+        <div className="text-[13px] text-secundario flex items-center gap-2">
+          <span aria-hidden="true" className="w-3.5 h-3.5 rounded-full border-2 border-current border-r-transparent animate-spin" />
+          Buscando contêineres…
+        </div>
+      )}
 
       {erro && (
-        <div className="text-[11px] text-perigo leading-relaxed">
-          {erro}
-          {/*
-            * O 403 aqui é escopo, não permissão de contêiner — e a mensagem crua
-            * do Google manda procurar no lugar errado.
-            */}
-          <div className="text-tenue mt-1">
-            Se for permissão do Google: o consentimento precisa incluir o Tag Manager. Refaça o
-            consentimento local e republique o secret — ver README.
-          </div>
+        <div className="text-[13px] text-perigo leading-relaxed flex items-start gap-2">
+          <Icone nome="alerta" className="w-4 h-4 shrink-0 mt-[2px]" />
+          <span>
+            {erro}
+            {/*
+              * O 403 aqui é escopo, não permissão de contêiner — e a mensagem crua
+              * do Google manda procurar no lugar errado.
+              */}
+            <span className="block text-secundario mt-1">
+              Se for permissão do Google: o consentimento precisa incluir o Tag Manager. Refaça o
+              consentimento local e republique o secret — ver README.
+            </span>
+          </span>
         </div>
       )}
 
       {!carregando && !erro && containers.length === 0 && (
-        <div className="text-[11px] text-tenue">
+        <div className="text-[13px] text-secundario">
           A conta conectada não enxerga nenhum contêiner web do Tag Manager.
         </div>
       )}
@@ -239,9 +255,12 @@ function InstalarNoGtm() {
       {containers.length > 0 && (
         <>
           {containers.some((ct) => !ct.provavel) && (
-            <div className="text-[10px] text-atencao leading-relaxed">
-              A conta Google enxerga contêineres de outras operações. Os marcados com ★ casam com os
-              sites autorizados a mandar captura — confira antes de instalar.
+            <div className="text-[13px] text-atencao leading-relaxed flex items-start gap-2 rounded-[10px] bg-atencao/8 px-2.5 py-2">
+              <Icone nome="alerta" className="w-4 h-4 shrink-0 mt-[2px]" />
+              <span>
+                A conta enxerga contêineres de outras operações. Os marcados com ★ casam com os
+                sites autorizados — confira antes de instalar.
+              </span>
             </div>
           )}
           <Select
@@ -263,57 +282,44 @@ function InstalarNoGtm() {
             className="w-full"
           />
           <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              disabled={estado === 'rodando'}
-              onClick={instalar}
-              className="text-[11px] px-3 py-[6px] rounded-[8px] border border-azul-500 bg-azul-600
-                         text-white hover:bg-azul-500 cursor-pointer
-                         disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            <Botao variante="primario" icone="mais" carregando={estado === 'rodando'} onClick={instalar}>
               {estado === 'rodando' ? 'Instalando…' : 'Criar a tag'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setAberto(false)}
-              className="text-[11px] px-2 py-[5px] rounded-[8px] border border-borda-forte
-                         bg-superficie text-secundario hover:text-primario cursor-pointer"
-            >
+            </Botao>
+            <Botao variante="fantasma" onClick={() => setAberto(false)}>
               Fechar
-            </button>
+            </Botao>
           </div>
         </>
       )}
 
       {msg && (
-        <div className={`text-[11px] leading-relaxed ${estado === 'erro' ? 'text-perigo' : 'text-sucesso'}`}>
-          {msg}
-          {erroEscopo && (
-            <span className="block text-tenue mt-1">
-              Falta o escopo <span className="font-mono">tagmanager</span> na credencial.
-            </span>
-          )}
+        <div
+          className={`text-[13px] leading-relaxed flex items-start gap-2 animate-aparecer
+            ${estado === 'erro' ? 'text-perigo' : 'text-sucesso'}`}
+        >
+          <Icone nome={estado === 'erro' ? 'alerta' : 'checkCirculo'} className="w-4 h-4 shrink-0 mt-[2px]" />
+          <span>
+            {msg}
+            {erroEscopo && (
+              <span className="block text-secundario mt-1">
+                Falta o escopo <span className="font-mono">tagmanager</span> na credencial.
+              </span>
+            )}
+          </span>
         </div>
       )}
 
-      <div className="text-[10px] text-tenue leading-relaxed border-t border-borda pt-2">
-        A tag entra como alteração pendente no <strong className="text-secundario">workspace
-        padrão</strong>, com acionamento em todas as páginas. O painel{' '}
-        <strong className="text-secundario">não publica</strong> o contêiner — publicar vale para o
-        site inteiro e levaria junto rascunhos de outras pessoas. Você publica no GTM quando quiser.
+      {/* O aviso de "não publica" fica curto e visível; o porquê está no "?" acima. */}
+      <div className="text-[12.5px] text-secundario border-t border-borda pt-2 flex items-center gap-1.5">
+        <Icone nome="info" className="w-4 h-4 shrink-0 text-tenue" />
+        O painel <strong className="text-primario font-semibold">não publica</strong> o contêiner — você publica no GTM.
       </div>
     </div>
   );
 }
 
-/**
- * Um caminho de instalação: os passos e o código a colar.
- *
- * "Copiar" em vez de só `select-all` porque o destino é o campo de outra
- * ferramenta — no GTM, colar meio código é um erro que só aparece semanas
- * depois, quando a atribuição não melhora e ninguém lembra da tag.
- */
-function BlocoInstalacao({ titulo, passos, codigo, recomendado = false }) {
+/** Código a colar, com o botão de copiar encostado. */
+function Codigo({ codigo }) {
   const [copiado, setCopiado] = useState(false);
 
   const copiar = async () => {
@@ -327,46 +333,275 @@ function BlocoInstalacao({ titulo, passos, codigo, recomendado = false }) {
   };
 
   return (
-    <div className={`rounded-[10px] border p-3 ${recomendado ? 'border-azul-500/40 bg-azul-600/5' : 'border-borda bg-elevado/50'}`}>
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-[12px] font-semibold">{titulo}</span>
+    <div className="relative">
+      <code
+        className="block text-[12.5px] font-mono bg-superficie border border-borda rounded-[10px]
+                   px-3 py-2 pr-24 break-all select-all leading-relaxed"
+      >
+        {codigo}
+      </code>
+      <Botao
+        tamanho="sm"
+        icone={copiado ? 'check' : 'copiar'}
+        onClick={copiar}
+        className={`absolute top-1.5 right-1.5 ${copiado ? '!text-sucesso !border-sucesso/40' : ''}`}
+      >
+        {copiado ? 'Copiado' : 'Copiar'}
+      </Botao>
+    </div>
+  );
+}
+
+/**
+ * Um caminho de instalação: os passos e o código a colar.
+ *
+ * "Copiar" em vez de só `select-all` porque o destino é o campo de outra
+ * ferramenta — no GTM, colar meio código é um erro que só aparece semanas
+ * depois, quando a atribuição não melhora e ninguém lembra da tag.
+ */
+function BlocoInstalacao({ titulo, passos, codigo, recomendado = false }) {
+  return (
+    <div
+      className={`rounded-[12px] border p-4 flex flex-col gap-3
+        ${recomendado ? 'border-azul-400/40 bg-azul-50/60' : 'border-borda bg-elevado/50'}`}
+    >
+      <div className="flex items-center gap-2">
+        <span className="text-[14px] font-semibold">{titulo}</span>
         {recomendado && <Pill tom="sucesso">recomendado</Pill>}
       </div>
-      <ol className="text-[11px] text-tenue leading-relaxed list-decimal pl-4 mb-2 flex flex-col gap-0.5">
+      <ol className="text-[13px] text-secundario leading-relaxed list-decimal pl-5 m-0 flex flex-col gap-0.5">
         {passos.map((t) => <li key={t}>{t}</li>)}
       </ol>
-      <div className="relative">
-        <code className="block text-[10px] font-mono bg-superficie border border-borda rounded-[8px]
-                         px-2 py-[6px] pr-16 break-all select-all">
-          {codigo}
-        </code>
-        <button
-          type="button"
-          onClick={copiar}
-          className="absolute top-1 right-1 text-[10px] px-2 py-[3px] rounded-[6px] border
-                     border-borda-forte bg-superficie text-secundario hover:text-primario
-                     cursor-pointer"
-        >
-          {copiado ? 'copiado' : 'copiar'}
-        </button>
-      </div>
+      <Codigo codigo={codigo} />
     </div>
+  );
+}
+
+/**
+ * A aba "Captura e planilha": as duas engrenagens que decidem a qualidade do
+ * que o monitor mostra. Recebe os dados de /api/conversoes já carregados.
+ */
+function Configuracao({ config, captura, script_url, trocarConfig, recarregar }) {
+  const [manualAberto, setManualAberto] = useState(false);
+  const tag = `<script src="${script_url}" async></script>`;
+
+  return (
+    <>
+      {/* -------------------------------------------- captura do clique */}
+      <Secao
+        titulo="Captura do clique (gclid / gbraid / wbraid)"
+        icone="clique"
+        dica="É o que decide a coluna Atribuição do monitor. Com click id o Google liga a matrícula ao clique exato; sem ele a conversão sobe por e-mail, telefone ou CEP em hash, e o casamento é probabilístico."
+      >
+        <div className="grid gap-3 grade-kpi cascata">
+          <CartaoKpi
+            compacto
+            rotulo="Cliques capturados"
+            valor={captura?.total ?? 0}
+            fmt={fmtInt}
+            icone="clique"
+            tom={captura?.total > 0 ? 'sucesso' : 'neutro'}
+            dica="Click ids que o script do site capturou nos últimos 30 dias."
+          />
+          <CartaoKpi
+            compacto
+            rotulo="Cruzados com lead"
+            valor={captura?.casados ?? 0}
+            fmt={fmtInt}
+            icone="pessoas"
+            tom={captura?.casados > 0 ? 'sucesso' : 'neutro'}
+            dica="Dos cliques capturados em 30 dias, quantos foram ligados a um lead do Rubeus."
+          />
+          <Cartao className="flex flex-col gap-3 justify-center !p-4">
+            <Switch
+              ligado={config.capturaLigada}
+              aoTrocar={(v) => trocarConfig({ captura_ligada: v })}
+              dica="Liga ou desliga o recebimento de click ids vindos do site."
+            >
+              {config.capturaLigada ? 'Captura ligada' : 'Captura desligada'}
+            </Switch>
+            <Switch
+              ligado={config.escreverNoRubeus}
+              aoTrocar={(v) => trocarConfig({ escrever_no_rubeus: v })}
+              dica="Grava o click id capturado no campo do Contato no Rubeus."
+            >
+              {config.escreverNoRubeus ? 'Gravando no Rubeus' : 'Não grava no Rubeus'}
+            </Switch>
+          </Cartao>
+        </div>
+
+        {/*
+          * A expectativa, dita antes de ensinar a instalar.
+          *
+          * O click id só existe no navegador de quem clicou no anúncio. Lead que
+          * chega por telefone, WhatsApp, indicação ou feira nunca vai ter um — e
+          * isso não é falha da captura, é o desenho. Sem dizer isso aqui, a
+          * primeira leitura da coluna "Atribuição" vira caça a um defeito que
+          * não existe, e o caminho que de fato melhora esses leads — e-mail,
+          * telefone e CEP em hash — parece o plano B quando é o principal.
+          *
+          * Fica visível (curto), com a explicação inteira no "?".
+          */}
+        <div
+          className="flex items-start gap-2.5 rounded-[12px] border border-azul-400/30 bg-azul-50 px-3.5 py-2.5
+                     text-[13.5px] leading-relaxed"
+        >
+          <Icone nome="info" className="w-[18px] h-[18px] shrink-0 mt-[2px] text-azul-600" />
+          <span className="min-w-0">
+            <strong className="font-semibold">Isto cobre só quem chega pelo site.</strong>{' '}
+            <span className="text-secundario">
+              Telefone, WhatsApp, indicação e feira seguem atribuídos por e-mail, telefone e CEP em hash.
+            </span>{' '}
+            <InfoDica
+              largura={360}
+              texto="Lead que entra por telefone, WhatsApp, indicação ou feira nunca teve um click id para capturar — é o desenho, não uma falha. Esses continuam sendo atribuídos por e-mail, telefone e CEP em hash, que é o caminho que já funciona para praticamente toda a base. O click id melhora a precisão de uma fatia; não é pré-requisito de nada."
+            />
+          </span>
+        </div>
+
+        {/* -------------------------------------------------- instalação */}
+        <Cartao>
+          <TituloSecao
+            titulo="Instalar no site"
+            icone="link"
+            dica="Nos dois casos o script é o mesmo e o endereço do painel já vem embutido nele — dá para colar a tag por src sem configurar mais nada. Ele lê gclid, gbraid e wbraid da URL do anúncio, guarda por 90 dias em cookie de primeira parte, e só envia quando alguém preenche um formulário com e-mail ou telefone."
+          />
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {/*
+              * GTM primeiro, porque é o que esta conta já usa.
+              *
+              * Uma tag de HTML personalizado disparando em "All Pages" faz o
+              * mesmo que colar no <head>, e passa pelo controle de versão e
+              * publicação do próprio GTM — que é como o time já mexe no site.
+              */}
+            <div className="rounded-[12px] border border-azul-400/40 bg-azul-50/60 p-4 flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-[14px] font-semibold">Pelo Google Tag Manager</span>
+                <Pill tom="sucesso">recomendado</Pill>
+                <InfoDica texto="O painel cria a tag no workspace padrão, com acionamento em todas as páginas. Você confere e publica o contêiner no GTM." />
+              </div>
+              <InstalarNoGtm />
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setManualAberto((v) => !v)}
+                  aria-expanded={manualAberto}
+                  className="flex items-center gap-1.5 text-[13px] text-secundario hover:text-primario bg-transparent
+                             border-0 p-0 cursor-pointer"
+                >
+                  <SetaSanfona aberta={manualAberto} />
+                  ou fazer à mão
+                </button>
+                {manualAberto && (
+                  <div className="mt-2 flex flex-col gap-2 animate-surgir">
+                    <ol className="text-[13px] text-secundario leading-relaxed list-decimal pl-5 m-0 flex flex-col gap-0.5">
+                      <li>Tags → Nova → HTML personalizado</li>
+                      <li>Cole o código abaixo</li>
+                      <li>Acionamento: All Pages (Todas as páginas)</li>
+                      <li>Salvar e publicar o contêiner</li>
+                    </ol>
+                    <Codigo codigo={tag} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <BlocoInstalacao
+              titulo="Direto no HTML"
+              passos={[
+                'Cole antes de </head> em todas as páginas',
+                'Inclui as landing pages e a página do formulário',
+              ]}
+              codigo={tag}
+            />
+          </div>
+
+          <div className="mt-4 pt-3 border-t border-borda flex items-start justify-between gap-4 flex-wrap">
+            <div className="text-[13px] text-secundario flex items-center gap-1.5 min-w-0">
+              <span className="shrink-0">Origens aceitas:</span>
+              <Dica conteudo={config.origensPermitidas || null} largura={360}>
+                <span className="font-mono text-[12.5px] text-primario truncate">{config.origensPermitidas || '—'}</span>
+              </Dica>
+              <InfoDica texto="Sites autorizados a mandar captura para o painel." />
+            </div>
+            <CampoNoRubeus />
+          </div>
+        </Cartao>
+      </Secao>
+
+      {/* ------------------------------------------- cópia na planilha */}
+      <Secao
+        titulo="Cópia na planilha"
+        icone="lista"
+        dica="Uma linha por conversão, inclusive as que não foram enviadas e o motivo. É a cópia que se cruza com o relatório do Google Ads quando os números não batem — por isso ela espera o veredito antes de escrever a linha."
+      >
+        <Cartao className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3 min-w-0">
+            <span
+              aria-hidden="true"
+              className={`w-9 h-9 rounded-[10px] flex items-center justify-center shrink-0
+                ${config.planilhaId ? 'bg-sucesso/12 text-sucesso' : 'bg-elevado text-tenue'}`}
+            >
+              <Icone nome={config.planilhaId ? 'checkCirculo' : 'lista'} className="w-[18px] h-[18px]" />
+            </span>
+            <div className="min-w-0">
+              <div className="text-[14px] font-semibold">
+                {config.planilhaId ? 'Planilha conectada' : 'Nenhuma planilha ainda'}
+              </div>
+              <div className="text-[13px] text-secundario">
+                {config.planilhaId ? 'Recebe uma linha por conversão.' : 'Crie para guardar a cópia de cada conversão.'}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {config.planilhaUrl && (
+              <a
+                href={config.planilhaUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 text-[13px] font-medium px-3.5 py-[7px] rounded-[10px] border
+                           border-borda-forte bg-superficie text-primario no-underline
+                           hover:bg-superficie-hover hover:border-azul-400/40 transition-colors"
+              >
+                <Icone nome="externo" className="w-4 h-4" />
+                Abrir a planilha
+              </a>
+            )}
+            {!config.planilhaId && (
+              <Acao
+                tom="primario"
+                icone="mais"
+                titulo="Cria a planilha no Drive"
+                aoClicar={async () => {
+                  const r = await enviar('/api/conversoes/planilha');
+                  recarregar();
+                  return r.url;
+                }}
+              >
+                Criar a planilha
+              </Acao>
+            )}
+          </div>
+        </Cartao>
+      </Secao>
+    </>
   );
 }
 
 export function GoogleConversoes() {
   const [versao, setVersao] = useState(0);
   const recarregar = useCallback(() => setVersao((v) => v + 1), []);
-  const { dados, carregando, erro } = useApi('/api/conversoes', `google-conversoes-${versao}`);
+  // `manter`: recarregar depois de mudar a configuração busca a mesma coisa de
+  // novo — o monitor não pode ser desmontado (e perder os filtros) no meio.
+  const { dados, erro, atualizando } = useApi('/api/conversoes', `google-conversoes-${versao}`, { manter: true });
 
   const cabecalho = (
-    <div className="min-w-0">
-      <div className="text-[19px] font-semibold tracking-tight">Google Conversões</div>
-      <div className="text-tenue text-xs mt-[2px] max-w-[760px] leading-relaxed">
-        O que saiu daqui para o Google Ads, e o que o Google fez com aquilo. Para mudar
-        quais etapas viram conversão, veja <strong className="text-secundario">Conversões Ads</strong>.
-      </div>
-    </div>
+    <CabecalhoPagina
+      titulo="Google Conversões"
+      icone="enviar"
+      descricao="O que saiu daqui para o Google Ads, e o que o Google fez com aquilo. Para mudar quais etapas viram conversão, veja Conversões Ads."
+    />
   );
 
   if (erro?.includes('403') || erro?.includes('sem_permissao')) {
@@ -376,6 +611,7 @@ export function GoogleConversoes() {
         <Cartao>
           <Estado
             titulo="Esta tela é restrita"
+            icone="cadeado"
             mensagem="Ela mostra dado de lead e o que foi enviado à conta de anúncios. Fica com quem administra."
           />
         </Cartao>
@@ -390,7 +626,7 @@ export function GoogleConversoes() {
       </>
     );
   }
-  if (carregando || !dados) return <>{cabecalho}<Esqueleto linhas={6} /></>;
+  if (!dados) return <>{cabecalho}<EsqueletoPagina kpis={6} graficos={2} /></>;
 
   const { config, captura, script_url } = dados;
 
@@ -406,163 +642,24 @@ export function GoogleConversoes() {
       {/*
         * O monitor primeiro.
         *
-        * É o motivo de alguém abrir esta tela. As duas engrenagens abaixo —
-        * captura e planilha — explicam a qualidade do que ele mostra, e por isso
-        * vêm depois: só se pergunta "por que a atribuição está baixa" depois de
-        * ver que ela está baixa.
+        * É o motivo de alguém abrir esta tela. As duas engrenagens — captura e
+        * planilha — explicam a qualidade do que ele mostra, e por isso vêm
+        * depois, na última aba: só se pergunta "por que a atribuição está
+        * baixa" depois de ver que ela está baixa.
         */}
-      <MonitorConversoes />
-
-      {/* -------------------------------------------- captura do clique */}
-      <Cartao>
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="min-w-0">
-            <div className="text-[13px] font-semibold">Captura do clique (gclid / gbraid / wbraid)</div>
-            <div className="text-[11px] text-tenue mt-1 max-w-[680px] leading-relaxed">
-              É o que decide a coluna <strong className="text-secundario">Atribuição</strong> acima.
-              Com click id o Google liga a matrícula ao clique exato; sem ele a conversão sobe por
-              e-mail, telefone ou CEP em hash, e o casamento é probabilístico.
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 items-end shrink-0">
-            <Switch ligado={config.capturaLigada} aoTrocar={(v) => trocarConfig({ captura_ligada: v })}>
-              {config.capturaLigada ? 'Captura ligada' : 'Captura desligada'}
-            </Switch>
-            <Switch ligado={config.escreverNoRubeus} aoTrocar={(v) => trocarConfig({ escrever_no_rubeus: v })}>
-              {config.escreverNoRubeus ? 'Gravando no Rubeus' : 'Não grava no Rubeus'}
-            </Switch>
-          </div>
-        </div>
-
-        {/*
-          * A expectativa, dita antes de ensinar a instalar.
-          *
-          * O click id só existe no navegador de quem clicou no anúncio. Lead que
-          * chega por telefone, WhatsApp, indicação ou feira nunca vai ter um — e
-          * isso não é falha da captura, é o desenho. Sem dizer isso aqui, a
-          * primeira leitura da coluna "Atribuição" vira caça a um defeito que
-          * não existe, e o caminho que de fato melhora esses leads — e-mail,
-          * telefone e CEP em hash — parece o plano B quando é o principal.
-          */}
-        <div className="mt-3 pt-3 border-t border-borda text-[11px] text-tenue leading-relaxed max-w-[760px]">
-          <strong className="text-secundario">Isto cobre só quem chega pelo site.</strong>{' '}
-          Lead que entra por telefone, WhatsApp, indicação ou feira nunca teve um click id para
-          capturar — é o desenho, não uma falha. Esses continuam sendo atribuídos por e-mail,
-          telefone e CEP em hash, que é o caminho que já funciona para praticamente toda a base.
-          O click id melhora a precisão de uma fatia; não é pré-requisito de nada.
-        </div>
-
-        {/* -------------------------------------------------- instalação */}
-        <div className="mt-3 pt-3 border-t border-borda">
-          <div className="text-[12px] font-semibold mb-2">Instalar no site</div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {/*
-              * GTM primeiro, porque é o que esta conta já usa.
-              *
-              * Uma tag de HTML personalizado disparando em "All Pages" faz o
-              * mesmo que colar no <head>, e passa pelo controle de versão e
-              * publicação do próprio GTM — que é como o time já mexe no site.
-              */}
-            <div className="rounded-[10px] border border-azul-500/40 bg-azul-600/5 p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-[12px] font-semibold">Pelo Google Tag Manager</span>
-                <Pill tom="sucesso">recomendado</Pill>
-              </div>
-              <div className="text-[11px] text-tenue leading-relaxed mb-2">
-                O painel cria a tag no workspace padrão, com acionamento em todas as páginas.
-                Você confere e publica o contêiner no GTM.
-              </div>
-              <InstalarNoGtm />
-              <details className="mt-2">
-                <summary className="text-[10px] text-tenue cursor-pointer select-none">
-                  ou fazer à mão
-                </summary>
-                <ol className="text-[11px] text-tenue leading-relaxed list-decimal pl-4 mt-1.5 mb-2 flex flex-col gap-0.5">
-                  <li>Tags → Nova → HTML personalizado</li>
-                  <li>Cole o código abaixo</li>
-                  <li>Acionamento: All Pages (Todas as páginas)</li>
-                  <li>Salvar e publicar o contêiner</li>
-                </ol>
-                <code className="block text-[10px] font-mono bg-superficie border border-borda rounded-[8px]
-                                 px-2 py-[6px] break-all select-all">
-                  {`<script src="${script_url}" async></script>`}
-                </code>
-              </details>
-            </div>
-
-            <BlocoInstalacao
-              titulo="Direto no HTML"
-              passos={[
-                'Cole antes de </head> em todas as páginas',
-                'Inclui as landing pages e a página do formulário',
-              ]}
-              codigo={`<script src="${script_url}" async></script>`}
+      <MonitorConversoes
+        configuracao={
+          <Atualizando ativo={atualizando} className="flex flex-col gap-4">
+            <Configuracao
+              config={config}
+              captura={captura}
+              script_url={script_url}
+              trocarConfig={trocarConfig}
+              recarregar={recarregar}
             />
-          </div>
-
-          <div className="text-[11px] text-tenue mt-2 leading-relaxed max-w-[760px]">
-            Nos dois casos o script é o mesmo e o endereço do painel já vem embutido nele — dá para
-            colar a tag por <span className="font-mono">src</span> sem configurar mais nada. Ele lê{' '}
-            <span className="font-mono">gclid</span>, <span className="font-mono">gbraid</span> e{' '}
-            <span className="font-mono">wbraid</span> da URL do anúncio, guarda por 90 dias em cookie
-            de primeira parte, e só envia quando alguém preenche um formulário com e-mail ou telefone.
-          </div>
-
-          <div className="text-[11px] text-tenue mt-2">
-            Origens aceitas: <span className="font-mono">{config.origensPermitidas || '—'}</span>
-          </div>
-        </div>
-
-        <div className="mt-3 pt-3 border-t border-borda flex items-center gap-3 flex-wrap">
-          <Pill tom={captura?.total > 0 ? 'sucesso' : 'neutro'}>
-            {fmtInt(captura?.total ?? 0)} clique(s) capturado(s) / 30d
-          </Pill>
-          <Pill tom={captura?.casados > 0 ? 'sucesso' : 'neutro'}>
-            {fmtInt(captura?.casados ?? 0)} cruzado(s) com lead
-          </Pill>
-          <span className="ml-auto">
-            <CampoNoRubeus />
-          </span>
-        </div>
-      </Cartao>
-
-      {/* ------------------------------------------- cópia na planilha */}
-      <Cartao>
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="min-w-0">
-            <div className="text-[13px] font-semibold">Cópia na planilha</div>
-            <div className="text-[11px] text-tenue mt-1 max-w-[640px] leading-relaxed">
-              Uma linha por conversão, inclusive as que <strong className="text-secundario">não</strong>{' '}
-              foram enviadas e o motivo. É a cópia que se cruza com o relatório do Google Ads quando
-              os números não batem — por isso ela espera o veredito antes de escrever a linha.
-            </div>
-            {config.planilhaUrl && (
-              <a
-                href={config.planilhaUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[11px] text-azul-600 mt-2 inline-block break-all"
-              >
-                Abrir a planilha
-              </a>
-            )}
-          </div>
-          {!config.planilhaId && (
-            <Acao
-              tom="primario"
-              titulo="Cria a planilha no Drive"
-              aoClicar={async () => {
-                const r = await enviar('/api/conversoes/planilha');
-                recarregar();
-                return r.url;
-              }}
-            >
-              Criar a planilha
-            </Acao>
-          )}
-        </div>
-      </Cartao>
+          </Atualizando>
+        }
+      />
     </>
   );
 }

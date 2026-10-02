@@ -19,6 +19,7 @@
   --color-azul-500: #3b74b8;
   --color-azul-400: #4f8fe8;
   --color-azul-300: #3b74b8;
+  --color-azul-50: #eef4fc;
 
   --color-sucesso: #1a9f5c;
   --color-atencao: #c47d0a;
@@ -33,7 +34,98 @@
 
   --font-sans: 'Inter', system-ui, sans-serif;
 
-  --radius-card: 12px;
+  --radius-card: 14px;
+
+  /* Sombra em camadas: a de perto marca a borda, a de longe dá profundidade. */
+  --shadow-cartao: 0 1px 2px rgba(10, 14, 20, 0.04), 0 4px 16px rgba(10, 14, 20, 0.04);
+  --shadow-cartao-hover: 0 2px 4px rgba(10, 14, 20, 0.05), 0 12px 32px rgba(29, 78, 137, 0.1);
+  --shadow-flutuante: 0 8px 28px rgba(10, 14, 20, 0.16), 0 2px 6px rgba(10, 14, 20, 0.08);
+
+  --ease-saida: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /*
+   * `backwards`, não `both`: com `both` o último quadro (`transform: none`
+   * computado como matriz) fica aplicado para sempre, e elemento com transform
+   * vira o bloco de contenção de todo `position: fixed` dentro dele. A gaveta
+   * do lead abria presa ao topo da tela, centenas de pixels acima de quem
+   * tinha rolado até a lista — e parecia não carregar nada.
+   */
+  --animate-surgir: surgir 420ms var(--ease-saida) backwards;
+  --animate-aparecer: aparecer 200ms ease-out backwards;
+  --animate-escala: escala 180ms var(--ease-saida) backwards;
+}
+
+@keyframes surgir {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes aparecer {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes escala {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes brilho {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes progresso {
+  0% {
+    transform: translateX(-100%) scaleX(0.4);
+  }
+  50% {
+    transform: translateX(20%) scaleX(0.6);
+  }
+  100% {
+    transform: translateX(100%) scaleX(0.4);
+  }
+}
+
+@keyframes crescer-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes pulso-ponto {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 currentColor;
+    opacity: 1;
+  }
+  60% {
+    box-shadow: 0 0 0 5px transparent;
+    opacity: 0.85;
+  }
 }
 
 @layer base {
@@ -44,6 +136,10 @@
   body,
   #raiz {
     min-height: 100%;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   body {
     margin: 0;
@@ -62,6 +158,31 @@
   input[type='date'] {
     color-scheme: light;
   }
+  ::selection {
+    background: rgba(79, 143, 232, 0.22);
+  }
+  /* Barra de rolagem discreta — a padrão do sistema pesa ao lado dos cartões. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(10, 14, 20, 0.18) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(10, 14, 20, 0.16);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(10, 14, 20, 0.28);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-azul-400);
+    outline-offset: 2px;
+  }
 }
 
 @layer components {
@@ -72,13 +193,137 @@
   .cartao {
     position: relative;
     background:
-      linear-gradient(155deg, rgba(43, 87, 151, 0.04) 0%, rgba(255, 255, 255, 0) 42%),
+      linear-gradient(155deg, rgba(43, 87, 151, 0.045) 0%, rgba(255, 255, 255, 0) 42%),
       var(--color-superficie);
     border: 1px solid var(--color-borda);
     border-radius: var(--radius-card);
-    padding: 16px;
-    box-shadow: 0 1px 3px rgba(10, 14, 20, 0.04), 0 4px 16px rgba(10, 14, 20, 0.04);
+    padding: 18px;
+    box-shadow: var(--shadow-cartao);
+    transition:
+      box-shadow 220ms ease,
+      transform 220ms var(--ease-saida),
+      border-color 220ms ease;
   }
+  /*
+   * Item de grade e cartão podem encolher abaixo do conteúdo.
+   *
+   * O mínimo padrão de item de grid/flex é o tamanho do conteúdo: um botão com
+   * `whitespace-nowrap` ou uma tabela larga empurrava o cartão para fora da
+   * coluna e abria rolagem horizontal na página inteira no celular. Com o
+   * mínimo zerado, quem é largo rola dentro do próprio contêiner.
+   */
+  .grid > *,
+  .cartao {
+    min-width: 0;
+  }
+
+  /*
+   * Grade de indicadores. No celular, duas colunas fixas: com `auto-fit` e
+   * mínimo de 180px, 390px de tela davam um cartão por linha, e seis KPIs
+   * viravam uma rolagem inteira antes do primeiro gráfico.
+   */
+  .grade-kpi {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+  @media (max-width: 639px) {
+    .grade-kpi {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  /* Só cartão clicável sobe no hover — levantar o que não reage mente. */
+  .cartao-interativo {
+    cursor: pointer;
+  }
+  .cartao-interativo:hover {
+    box-shadow: var(--shadow-cartao-hover);
+    border-color: rgba(43, 87, 151, 0.2);
+    transform: translateY(-2px);
+  }
+
+  /*
+   * Entrada em cascata: cada filho direto surge um pouco depois do anterior.
+   * Limita em 12 passos — depois disso o atraso vira espera, não ritmo.
+   */
+  .cascata > * {
+    animation: var(--animate-surgir);
+  }
+  .cascata > *:nth-child(1) { animation-delay: 0ms; }
+  .cascata > *:nth-child(2) { animation-delay: 40ms; }
+  .cascata > *:nth-child(3) { animation-delay: 80ms; }
+  .cascata > *:nth-child(4) { animation-delay: 120ms; }
+  .cascata > *:nth-child(5) { animation-delay: 160ms; }
+  .cascata > *:nth-child(6) { animation-delay: 200ms; }
+  .cascata > *:nth-child(7) { animation-delay: 240ms; }
+  .cascata > *:nth-child(8) { animation-delay: 280ms; }
+  .cascata > *:nth-child(9) { animation-delay: 320ms; }
+  .cascata > *:nth-child(10) { animation-delay: 360ms; }
+  .cascata > *:nth-child(11) { animation-delay: 400ms; }
+  .cascata > *:nth-child(n + 12) { animation-delay: 440ms; }
+
+  /* Esqueleto com brilho passando — lê como "carregando", não como "vazio". */
+  .brilho {
+    background: linear-gradient(
+      90deg,
+      var(--color-superficie-hover) 0%,
+      #f7f9fb 40%,
+      var(--color-superficie-hover) 80%
+    );
+    background-size: 200% 100%;
+    animation: brilho 1.4s linear infinite;
+  }
+
+  /* Barra proporcional que cresce da esquerda ao montar. */
+  .barra-cresce {
+    transform-origin: left center;
+    animation: crescer-x 700ms var(--ease-saida) both;
+  }
+
+  .ponto-vivo {
+    animation: pulso-ponto 2s ease-out infinite;
+  }
+
+  /* Tabela padrão do painel: cabeçalho fixo discreto, linha com hover. */
+  .tabela {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+  }
+  .tabela th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--color-elevado);
+    color: var(--color-secundario);
+    font-weight: 600;
+    font-size: 12px;
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-borda);
+    white-space: nowrap;
+  }
+  .tabela td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--color-borda);
+  }
+  .tabela tbody tr {
+    transition: background-color 120ms ease;
+  }
+  .tabela tbody tr:hover {
+    background: var(--color-azul-50);
+  }
+  .tabela tbody tr:last-child td {
+    border-bottom: 0;
+  }
+}
+
+/*
+ * Transição de tela: o conteúdo novo surge em vez de trocar de um quadro para
+ * o outro. `key` na rota faz o React remontar o wrapper e reanimar.
+ */
+.tela {
+  animation: var(--animate-surgir);
 }
 
 /*
@@ -87,5 +332,23 @@
  */
 dialog::backdrop {
   background: rgba(10, 14, 20, 0.45);
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(3px);
+  animation: aparecer 180ms ease-out both;
+}
+dialog[open] > * {
+  animation: var(--animate-escala);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+  }
+  .cartao-interativo:hover {
+    transform: none;
+  }
 }
