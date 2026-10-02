@@ -121,7 +121,7 @@ export default {
         (async () => {
           await completarEtapasDosRegistros(env, env.DB, 15);
           // Fichas que não chegaram por webhook, antes de conferir as etapas.
-          await descobrirFichas(env, env.DB, 20);
+          await descobrirFichas(env, env.DB, 40);
           // Depois de completar: a conferência compara com a etapa já completada.
           await reconciliarFichasRecentes(env, env.DB, 25);
         })().catch((e) =>

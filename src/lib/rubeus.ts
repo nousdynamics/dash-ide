@@ -983,14 +983,22 @@ export async function descobrirFichas(
   limite = 20,
 ): Promise<{ contatos: number; fichasNovas: number }> {
   const { results: contatos } = await db.prepare(
-    `SELECT l.contato_id, MAX(l.registrado_em) AS ult
+    /*
+     * Primeiro quem se moveu sem nenhuma ficha conhecida no período — é quem
+     * está faltando no kanban (a SARA tinha quatro avisos de etapa em setembro
+     * e nenhum com ficha). Depois o resto, do movimento mais recente ao mais
+     * antigo. São ~1.600 contatos ativos; sem essa ordem, os que importam
+     * esperariam quase dois dias na fila.
+     */
+    `SELECT l.contato_id, MAX(l.registrado_em) AS ult,
+            MAX(CASE WHEN NULLIF(l.registro_processo_id, '') IS NOT NULL THEN 1 ELSE 0 END) AS tem_ficha
        FROM leads_etapa l
        LEFT JOIN contatos_conferidos cc ON cc.contato_id = l.contato_id
       WHERE l.registrado_em >= datetime('now', '-60 days')
         AND l.processo_id IS NOT NULL
         AND (cc.conferido_em IS NULL OR cc.conferido_em < datetime('now', '-1 day'))
       GROUP BY l.contato_id
-      ORDER BY ult DESC
+      ORDER BY tem_ficha, ult DESC
       LIMIT ?`,
   ).bind(limite).all<{ contato_id: string }>();
 
