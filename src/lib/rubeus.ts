@@ -958,3 +958,91 @@ export async function reconciliarFichasRecentes(
   console.log(JSON.stringify({ evento: 'fichas_reconciliadas', candidatas: fichas.length, conferidas, corrigidas }));
   return { conferidas, corrigidas };
 }
+
+/** "2026-09-16 16:32:22" (Brasília) → ISO UTC. */
+function momentoRubeus(v: unknown): string | null {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v)) return null;
+  const d = new Date(`${v.replace(' ', 'T')}-03:00`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/**
+ * Descobre as fichas que nunca chegaram por webhook.
+ *
+ * Pega contatos com movimento nos últimos 60 dias que não foram conferidos nas
+ * últimas 24 h e lista as fichas de cada um no Rubeus. Ficha desconhecida
+ * ganha um marcador de criação — um evento "(etapa não informada)" com o id
+ * dela, na data de criação do Rubeus (`momento`). É esse marcador que faz os
+ * avisos de etapa seguintes, que chegam sem id, caírem na ficha certa: sem ele,
+ * os eventos de setembro da MARIA LUCIANA iam para a ficha dela de 2023. A
+ * etapa atual vem na passada seguinte da conferência (reconciliarFichasRecentes).
+ */
+export async function descobrirFichas(
+  env: Env,
+  db: D1Database,
+  limite = 20,
+): Promise<{ contatos: number; fichasNovas: number }> {
+  const { results: contatos } = await db.prepare(
+    `SELECT l.contato_id, MAX(l.registrado_em) AS ult
+       FROM leads_etapa l
+       LEFT JOIN contatos_conferidos cc ON cc.contato_id = l.contato_id
+      WHERE l.registrado_em >= datetime('now', '-60 days')
+        AND l.processo_id IS NOT NULL
+        AND (cc.conferido_em IS NULL OR cc.conferido_em < datetime('now', '-1 day'))
+      GROUP BY l.contato_id
+      ORDER BY ult DESC
+      LIMIT ?`,
+  ).bind(limite).all<{ contato_id: string }>();
+
+  let fichasNovas = 0;
+  for (const { contato_id } of contatos) {
+    let opps: OportunidadeRubeus[];
+    try {
+      opps = await listarOportunidades(env, contato_id, ['id', 'etapaNome', 'statusNome', 'processo', 'processoNome', 'momento']);
+    } catch {
+      continue;
+    }
+    for (const o of opps as Array<Record<string, any>>) {
+      const registro = o.id != null ? String(o.id) : '';
+      const processo = o.processo != null ? String(o.processo) : '';
+      if (!registro || !processo) continue;
+      const criado = momentoRubeus(o.momento);
+      await db.prepare(
+        `INSERT INTO fichas_rubeus (registro, processo_id, criado_em, etapa, excluida, conferido_em)
+         VALUES (?, ?, ?, ?, 0, datetime('now'))
+         ON CONFLICT(registro) DO UPDATE SET
+           criado_em = COALESCE(excluded.criado_em, fichas_rubeus.criado_em),
+           etapa = COALESCE(excluded.etapa, fichas_rubeus.etapa),
+           excluida = 0, conferido_em = excluded.conferido_em`,
+      ).bind(registro, processo, criado, o.etapaNome ?? null).run();
+
+      if (!criado) continue;
+      const conhecida = await db.prepare(
+        'SELECT 1 FROM leads_etapa WHERE registro_processo_id = ? LIMIT 1',
+      ).bind(registro).first();
+      if (conhecida) continue;
+
+      // Marcador de criação, copiando a identidade de um evento do contato.
+      const { meta } = await db.prepare(
+        `INSERT OR IGNORE INTO leads_etapa (
+           contato_id, contato_nome, registro_processo_id, processo_id, processo_nome, etapa, status,
+           registrado_em, funil_id, email, telefone, pessoa_id)
+         SELECT contato_id, contato_nome, ?, ?, ?, ?, ?,
+                ?, (SELECT fu.id FROM funis fu WHERE fu.processo_id = ? AND fu.ativo = 1 LIMIT 1),
+                email, telefone, pessoa_id
+           FROM leads_etapa WHERE contato_id = ?
+          ORDER BY (email IS NULL), registrado_em DESC LIMIT 1`,
+      ).bind(
+        registro, processo, o.processoNome ?? null, ETAPA_NAO_INFORMADA, o.statusNome ?? null,
+        criado, processo, contato_id,
+      ).run();
+      if (meta.changes) fichasNovas += 1;
+    }
+    await db.prepare(
+      `INSERT INTO contatos_conferidos (contato_id, conferido_em) VALUES (?, datetime('now'))
+       ON CONFLICT(contato_id) DO UPDATE SET conferido_em = excluded.conferido_em`,
+    ).bind(contato_id).run();
+  }
+  console.log(JSON.stringify({ evento: 'fichas_descobertas', contatos: contatos.length, fichasNovas }));
+  return { contatos: contatos.length, fichasNovas };
+}

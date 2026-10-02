@@ -637,15 +637,50 @@ function LeadsDoFunil({ funilId, aoAbrir, filtroPagina }) {
    * Sem ele, cada letra digitada virava esqueleto — e o campo de busca, que
    * mora dentro deste bloco, sumia e perdia o foco no meio da digitação.
    */
-  const { dados, atualizando } = useApi(
-    `/api/funil/leads?pagina=${pagina}&por_pagina=${POR_PAGINA}` +
-      (funilId ? `&funil_id=${encodeURIComponent(funilId)}` : '') +
-      (aplicada.trim() ? `&busca=${encodeURIComponent(aplicada.trim())}` : '') +
-      (etapas.length ? `&etapa=${etapas.map(encodeURIComponent).join(',')}` : '') +
-      (periodo.de ? `&de=${periodo.de}&ate=${periodo.ate}` : ''),
-    `leads-${funilId}-${pagina}-${aplicada}-${chaveEtapas}-${chavePeriodo}`,
+  /*
+   * Um processo só: a lista vem do kanban — as MESMAS fichas que "Etapas no
+   * Rubeus" conta logo acima. Antes ela agrupava por pessoa e pelo funil
+   * gravado no evento, e as duas divergiam (Aptos para a matrícula: 3 em cima,
+   * 4 embaixo, com pessoas diferentes). Vários processos ou nenhum: a lista
+   * por pessoa de antes, que não tem equivalente no kanban.
+   */
+  const porFicha = Boolean(funilId) && !String(funilId).includes(',');
+  const qsComum =
+    `pagina=${pagina}&por_pagina=${POR_PAGINA}` +
+    (funilId ? `&funil_id=${encodeURIComponent(funilId)}` : '') +
+    (aplicada.trim() ? `&busca=${encodeURIComponent(aplicada.trim())}` : '') +
+    (etapas.length ? `&etapa=${etapas.map(encodeURIComponent).join(',')}` : '');
+  const { dados: bruto, atualizando } = useApi(
+    porFicha
+      ? `/api/funil/kanban?${qsComum}&listar=1` +
+          // "Todo o histórico" no kanban é um intervalo longo — a rota exige período.
+          `&de=${periodo.de ?? '2000-01-01'}&ate=${periodo.ate ?? diaAtras(0)}`
+      : `/api/funil/leads?${qsComum}` + (periodo.de ? `&de=${periodo.de}&ate=${periodo.ate}` : ''),
+    `leads-${porFicha}-${funilId}-${pagina}-${aplicada}-${chaveEtapas}-${chavePeriodo}`,
     { manter: true },
   );
+  // A resposta do kanban no formato dos cards de sempre: uma ficha por card.
+  const dados = bruto && porFicha && bruto.fichas
+    ? {
+        total: bruto.fichas_total,
+        pagina: bruto.pagina,
+        paginas: bruto.paginas,
+        busca: bruto.busca,
+        por_etapa: (bruto.etapas ?? []).map((e) => ({ etapa: e.etapa, pessoas: e.total })),
+        itens: bruto.fichas.map((f) => ({
+          quem: f.registro,
+          contato_id: f.contato_id,
+          contato_nome: f.contato_nome,
+          email: f.email,
+          etapa: f.etapa,
+          oferta_nome: f.oferta_nome,
+          eventos: f.eventos,
+          registrado_em: f.na_etapa_desde,
+          processos: 1,
+          ids_no_crm: 1,
+        })),
+      }
+    : bruto;
 
   useEffect(() => {
     const t = setTimeout(() => setAplicada(busca), 250);
@@ -674,7 +709,7 @@ function LeadsDoFunil({ funilId, aoAbrir, filtroPagina }) {
   const opcoesEtapa = (dados.por_etapa ?? []).map((e) => [
     e.etapa,
     e.etapa || '(sem etapa)',
-    { detalhe: `${fmtInt(e.pessoas)} pessoa${e.pessoas === 1 ? '' : 's'} nesta etapa agora` },
+    { detalhe: `${fmtInt(e.pessoas)} ${porFicha ? 'ficha' : 'pessoa'}${e.pessoas === 1 ? '' : 's'} nesta etapa agora` },
   ]);
 
   if (!dados.total && !filtrando) {
@@ -757,7 +792,13 @@ function LeadsDoFunil({ funilId, aoAbrir, filtroPagina }) {
         <span className="text-[13px] text-secundario tnum flex items-center gap-1">
           <strong className="text-primario font-semibold">{fmtInt(dados.total)}</strong> lead(s)
           {filtrando ? ' encontrados' : ''}
-          <InfoDica texto="O filtro de etapa usa a etapa atual da pessoa — a do evento mais recente, a mesma que aparece no card." />
+          <InfoDica
+            texto={
+              porFicha
+                ? 'Cada card é uma ficha do Rubeus, como no kanban: fichas criadas no período, na etapa em que estão agora — as mesmas que "Etapas no Rubeus" conta acima.'
+                : 'O filtro de etapa usa a etapa atual da pessoa — a do evento mais recente, a mesma que aparece no card.'
+            }
+          />
           {dados.paginas > 1 && ` · página ${dados.pagina} de ${dados.paginas}`}
         </span>
       </div>

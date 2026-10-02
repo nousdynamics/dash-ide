@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { exigirAcesso } from './lib/access';
 import { rodadaDiaria, rodadaLeve } from './lib/conversoes';
-import { completarEtapasDosRegistros, reconciliarFichasRecentes } from './lib/rubeus';
+import { completarEtapasDosRegistros, descobrirFichas, reconciliarFichasRecentes } from './lib/rubeus';
 import { reconciliarRubeus } from './lib/sync';
 import type { AppEnv } from './lib/tipos';
 import ads from './routes/ads';
@@ -120,6 +120,8 @@ export default {
       ctx.waitUntil(
         (async () => {
           await completarEtapasDosRegistros(env, env.DB, 15);
+          // Fichas que não chegaram por webhook, antes de conferir as etapas.
+          await descobrirFichas(env, env.DB, 20);
           // Depois de completar: a conferência compara com a etapa já completada.
           await reconciliarFichasRecentes(env, env.DB, 25);
         })().catch((e) =>

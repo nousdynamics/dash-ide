@@ -23,7 +23,7 @@ import {
 } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
 import { cacheDeBorda, invalidarCacheDeBorda } from '../lib/cacheBorda';
-import { ETAPA_NAO_INFORMADA, SQL_EVENTOS_POR_REGISTRO, completarEtapasDosRegistros, reconciliarFichasRecentes } from '../lib/rubeus';
+import { ETAPA_NAO_INFORMADA, SQL_EVENTOS_POR_REGISTRO, completarEtapasDosRegistros, descobrirFichas, reconciliarFichasRecentes } from '../lib/rubeus';
 
 /**
  * Agregados do D1 — funil Rubeus / Macro (planilha) e conversas Evolution.
@@ -1529,7 +1529,15 @@ api.get('/funil/kanban', cacheDeBorda(300), async (c) => {
       GROUP BY a.etapa`,
   ).bind(processoId, de, ate).all<{ etapa: string; fichas: number }>();
 
-  const etapaSel = c.req.query('etapa') || null;
+  /*
+   * `etapa` (uma ou várias, separadas por vírgula) e/ou `listar=1` devolvem as
+   * fichas — a lista ao lado da esteira e a de "Leads deste funil" saem daqui,
+   * para as duas mostrarem as mesmas fichas que a esteira conta.
+   */
+  const etapasSel = listaCsv(c.req.query('etapa'));
+  const etapaSel = etapasSel.length === 1 ? etapasSel[0] : null;
+  const listar = etapasSel.length > 0 || c.req.query('listar') === '1';
+  const busca = (c.req.query('busca') ?? '').trim().toLowerCase();
   const porPagina = Math.min(Math.max(Number(c.req.query('por_pagina') ?? 12) || 12, 3), 50);
   const pagina = Math.max(Number(c.req.query('pagina') ?? 1) || 1, 1);
 
@@ -1539,23 +1547,34 @@ api.get('/funil/kanban', cacheDeBorda(300), async (c) => {
     c.env.DB.prepare(
       'SELECT etapa_nome, ordem, visivel FROM processo_etapas WHERE processo_id = ?',
     ).bind(processoId).all<{ etapa_nome: string; ordem: number; visivel: number }>(),
-    etapaSel
+    listar
       ? c.env.DB.prepare(
           `WITH ${SQL_EVENTOS_POR_REGISTRO},
            info AS (
              SELECT registro, MAX(contato_nome) AS contato_nome, MAX(email) AS email,
-                    MAX(oferta_nome) AS oferta_nome
+                    MAX(oferta_nome) AS oferta_nome, COUNT(*) AS eventos
                FROM atrib WHERE registro IS NOT NULL GROUP BY registro
+           ),
+           selecao AS (
+             SELECT a.registro, a.contato_id, a.etapa, a.registrado_em AS na_etapa_desde, f.criado_em,
+                    i.contato_nome, i.email, i.oferta_nome, i.eventos
+               FROM atual a
+               JOIN fichas f ON f.registro = a.registro
+               JOIN info i ON i.registro = a.registro
+              WHERE a.rn = 1 AND f.criado_em >= ? AND f.criado_em <= ?
+                ${etapasSel.length ? `AND ${inSql('a.etapa', etapasSel.length)}` : ''}
+                ${busca ? `AND (lower(COALESCE(i.contato_nome,'')) LIKE ? OR lower(COALESCE(i.email,'')) LIKE ?
+                           OR lower(COALESCE(i.oferta_nome,'')) LIKE ? OR a.contato_id LIKE ? OR a.registro LIKE ?)` : ''}
            )
-           SELECT a.registro, a.contato_id, a.registrado_em AS na_etapa_desde, f.criado_em,
-                  i.contato_nome, i.email, i.oferta_nome
-             FROM atual a
-             JOIN fichas f ON f.registro = a.registro
-             JOIN info i ON i.registro = a.registro
-            WHERE a.rn = 1 AND a.etapa = ? AND f.criado_em >= ? AND f.criado_em <= ?
-            ORDER BY a.registrado_em DESC
+           SELECT s.*, (SELECT COUNT(*) FROM selecao) AS total_lista
+             FROM selecao s
+            ORDER BY s.na_etapa_desde DESC
             LIMIT ? OFFSET ?`,
-        ).bind(processoId, etapaSel, iv.inicioIso, iv.fimIso, porPagina, (pagina - 1) * porPagina).all()
+        ).bind(
+          processoId, iv.inicioIso, iv.fimIso, ...etapasSel,
+          ...(busca ? Array(5).fill(`%${busca}%`) : []),
+          porPagina, (pagina - 1) * porPagina,
+        ).all<Record<string, any>>()
       : Promise.resolve(null),
   ]);
 
@@ -1580,7 +1599,7 @@ api.get('/funil/kanban', cacheDeBorda(300), async (c) => {
     })
     .sort((a, b) => a.ordem - b.ordem || a.etapa.localeCompare(b.etapa));
   const total = etapas.reduce((t, e) => t + e.total, 0);
-  const totalSel = etapas.find((e) => e.etapa === etapaSel)?.total ?? 0;
+  const totalSel = listar ? num(lista?.results[0]?.total_lista ?? 0) : 0;
 
   return c.json({
     processo_id: processoId,
@@ -1589,6 +1608,7 @@ api.get('/funil/kanban', cacheDeBorda(300), async (c) => {
     total_anterior: etapas.reduce((t, e) => t + e.anterior, 0),
     etapas: etapas.map((e) => ({ ...e, participacao_pct: total ? (e.total / total) * 100 : 0 })),
     etapa: etapaSel,
+    busca: busca || null,
     fichas: lista?.results ?? [],
     fichas_total: totalSel,
     pagina,
@@ -2108,6 +2128,23 @@ api.post('/admin/rubeus/resgatar-cursos', exigirAdmin, async (c) => {
  * de quem ficou em "(etapa não informada)". A rodada de 30 minutos faz o mesmo,
  * 15 por vez; isto é para zerar um acúmulo sem esperar um dia inteiro.
  */
+/**
+ * POST /api/admin/rubeus/descobrir-fichas?limite=100 — lista no Rubeus as
+ * fichas dos contatos com movimento recente e marca as que nunca chegaram por
+ * webhook. A rodada de 30 minutos faz 20 contatos por vez.
+ */
+api.post('/admin/rubeus/descobrir-fichas', exigirAdmin, async (c) => {
+  const limite = Math.min(Math.max(Number(c.req.query('limite') ?? 100) || 100, 1), 300);
+  try {
+    const r = await descobrirFichas(c.env, c.env.DB, limite);
+    await invalidarCacheDeBorda(c);
+    return c.json({ ok: true, ...r });
+  } catch (e) {
+    const status = e instanceof ErroRubeus ? e.status : 502;
+    return c.json({ erro: 'descobrir_falhou', detalhe: String(e instanceof Error ? e.message : e) }, status as any);
+  }
+});
+
 /**
  * POST /api/admin/rubeus/reconciliar?limite=120&processo_id=3 — confere com o
  * Rubeus a etapa das fichas dos últimos 60 dias e grava o que faltou. A
