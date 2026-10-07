@@ -9,8 +9,11 @@ import api from './routes/api';
 import coleta from './routes/coleta';
 import conversoesRotas from './routes/conversoes';
 import funisRotas from './routes/funis';
+import metaRotas from './routes/meta';
 import metricasRotas from './routes/metricas';
 import oauth from './routes/oauth';
+import origensRotas from './routes/origens';
+import protocolosRotas from './routes/protocolos';
 import webhooks from './routes/webhooks';
 
 const app = new Hono<AppEnv>();
@@ -66,6 +69,12 @@ app.route('/oauth', oauth);
 app.route('/api/funis', funisRotas);
 app.route('/api/metricas', metricasRotas);
 app.route('/api/ads', ads);
+// Meta Ads ao vivo, em canal separado do Google — nada aqui soma com /api/ads.
+app.route('/api/meta', metaRotas);
+// Origem do lead (UTMs capturadas no site via GTM): Google, Meta e links orgânicos.
+app.route('/api/origens', origensRotas);
+// Protocolo do botão de WhatsApp: clique no site → conversa → lead no Rubeus.
+app.route('/api/protocolos', protocolosRotas);
 app.route('/api/conversoes', conversoesRotas);
 app.route('/api', api);
 

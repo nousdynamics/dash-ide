@@ -55,7 +55,7 @@ export function customerId(env: Env): string {
 const TTL_FECHADO_S = 6 * 60 * 60;
 const TTL_ABERTO_S = 15 * 60;
 
-function ttlDaConsulta(query: string): number {
+export function ttlDaConsulta(query: string): number {
   /*
    * Procura a data final do BETWEEN. Sem data na consulta — catálogo de
    * campanha, lista de ação — o dado é estrutural e muda pouco: TTL longo.

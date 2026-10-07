@@ -17,7 +17,7 @@ import {
 import { invalidar, useApi } from '../lib/api';
 import { fmtDataHora, fmtInt } from '../lib/formato';
 
-const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n' };
+const ROTULO_CANAL = { rubeus: 'Rubeus', evolution: 'Evolution API', n8n: 'n8n', whatsapp: 'WhatsApp' };
 
 const ROTULO_EVENTO = {
   geral: 'Geral — recebe tudo',
@@ -27,6 +27,8 @@ const ROTULO_EVENTO = {
   contato_edicao: 'Edição de contato',
   atividade_criacao: 'Criação de atividade',
   atividade_edicao: 'Edição de atividade',
+  // Mensagem recebida no atendimento (Blip): lê o protocolo do botão do site.
+  mensagem: 'Mensagem recebida (protocolo)',
 };
 
 const DESCRICAO_TELA =

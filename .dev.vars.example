@@ -39,3 +39,12 @@ AMBIENTE="dev"
 # Em dev o usuário é sempre dev@local; sem isto, a tela de Funis e webhooks
 # devolve 403 na sua própria máquina.
 ADMINS="dev@local"
+
+# --- Meta Ads ---
+# Token de usuário de sistema do Business Manager (não expira), com ads_read.
+# META_APP_SECRET assina cada chamada (appsecret_proof); opcional, mas recomendado.
+# Em produção: `npx wrangler secret put META_ACCESS_TOKEN` (idem para os outros).
+META_ACCESS_TOKEN=""
+META_APP_SECRET=""
+META_AD_ACCOUNT_ID="act_848063628589919"
+META_API_VERSION="v24.0"

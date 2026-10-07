@@ -11,6 +11,9 @@ import { Dica, EsqueletoPagina, Icone } from './componentes/base';
  */
 const VisaoGeral = lazy(() => import('./paginas/VisaoGeral').then((m) => ({ default: m.VisaoGeral })));
 const Campanhas = lazy(() => import('./paginas/Campanhas').then((m) => ({ default: m.Campanhas })));
+const MetaAds = lazy(() => import('./paginas/MetaAds').then((m) => ({ default: m.MetaAds })));
+const Origens = lazy(() => import('./paginas/Origens').then((m) => ({ default: m.Origens })));
+const Protocolos = lazy(() => import('./paginas/Protocolos').then((m) => ({ default: m.Protocolos })));
 const Funil = lazy(() => import('./paginas/Funil').then((m) => ({ default: m.Funil })));
 const Conversas = lazy(() => import('./paginas/Conversas').then((m) => ({ default: m.Conversas })));
 const Webhooks = lazy(() => import('./paginas/Webhooks').then((m) => ({ default: m.Webhooks })));
@@ -44,6 +47,23 @@ const ICONES = {
   ),
   funil: icone(<path d="M3 4h18l-7 8v7l-4 2v-9L3 4Z" />),
   campanhas: icone(<path d="M3 20h4V10H3v10Zm7 0h4V4h-4v16Zm7 0h4v-6h-4v6Z" />),
+  // Laço do símbolo do Meta, no traço dos outros ícones — sem marca registrada.
+  meta: icone(<path d="M12 12c-1.8-2.6-3.3-5-5.5-5C4.6 7 3 9.3 3 12s1.6 5 3.5 5c2.2 0 3.7-2.4 5.5-5Zm0 0c1.8 2.6 3.3 5 5.5 5 1.9 0 3.5-2.3 3.5-5s-1.6-5-3.5-5c-2.2 0-3.7 2.4-5.5 5Z" />),
+  origens: icone(
+    <>
+      <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" />
+      <circle cx="6" cy="18" r="3" />
+    </>
+  ),
+  protocolos: icone(
+    <>
+      <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.7-.8L3 21l1.9-5.2A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z" />
+      <path d="M10 9 9 15" />
+      <path d="M15 9l-1 6" />
+      <path d="M8 10.5h8" />
+      <path d="M7.5 13.5h8" />
+    </>
+  ),
   conversas: icone(<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.7-.8L3 21l1.9-5.2A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z" />),
   webhooks: icone(
     <>
@@ -79,7 +99,14 @@ const ICONES = {
 const PAGINAS = [
   { id: 'overview', nome: 'Visão geral', curto: 'Visão', dica: 'Investimento, conversões e custo do Google Ads, lado a lado com os leads do Rubeus' },
   { id: 'funil', nome: 'Funil de vendas', curto: 'Funil', dica: 'Quantos leads chegam a cada etapa do processo seletivo e onde eles param' },
-  { id: 'campanhas', nome: 'Campanhas', curto: 'Camp.', dica: 'Desempenho de cada campanha, conjunto e anúncio' },
+  /*
+   * Um item por canal de tráfego, com o nome do canal. Google e Meta não se
+   * somam em tela nenhuma: cada um conta conversão de um jeito.
+   */
+  { id: 'campanhas', nome: 'Google Ads', curto: 'Google', dica: 'Campanhas do Google Ads: desempenho de cada campanha, conjunto e anúncio' },
+  { id: 'meta', nome: 'Meta Ads', curto: 'Meta', dica: 'Facebook e Instagram: investimento, conversões, custo e campanhas do Meta Ads' },
+  { id: 'origens', nome: 'Origens dos leads', curto: 'Origem', dica: 'De que canal veio cada formulário: Google Ads, Meta Ads ou links com UTM divulgados organicamente' },
+  { id: 'protocolos', nome: 'Protocolos do WhatsApp', curto: 'Protoc.', dica: 'Cliques no botão de WhatsApp do site, a conversa que geraram e a etapa do lead no Rubeus' },
   { id: 'conversas', nome: 'Conversas', curto: 'Chat', dica: 'Conversas de WhatsApp e tempo de resposta do atendimento' },
   // Emite credencial de webhook: só aparece para quem administra. Esconder o
   // item é conveniência — quem digitar #/webhooks na mão continua batendo no
@@ -106,7 +133,7 @@ const PAGINAS = [
  * para ver número não precisa atravessar a lista de ajustes para achar a tela.
  */
 const GRUPOS = [
-  { id: 'analise', nome: 'Análise', ids: ['overview', 'funil', 'campanhas', 'conversas'] },
+  { id: 'analise', nome: 'Análise', ids: ['overview', 'funil', 'campanhas', 'meta', 'origens', 'protocolos', 'conversas'] },
   { id: 'config', nome: 'Configuração', ids: ['webhooks', 'conversoes', 'conversoes-google', 'etapas'] },
 ];
 
@@ -379,6 +406,9 @@ export default function App() {
           {rota === 'overview' && <VisaoGeral {...props} />}
           {rota === 'funil' && <Funil {...props} />}
           {rota === 'campanhas' && <Campanhas {...props} />}
+          {rota === 'meta' && <MetaAds {...props} />}
+          {rota === 'origens' && <Origens {...props} />}
+          {rota === 'protocolos' && <Protocolos {...props} />}
           {rota === 'conversas' && <Conversas />}
           {rota === 'webhooks' && <Webhooks />}
           {rota === 'conversoes' && <Conversoes />}

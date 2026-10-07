@@ -30,6 +30,7 @@ os outros.
 |---|---|---|
 | Painel Faculdade IDE | `painel.ide.edu.br` | Allow: `@faculdadeide.edu.br`, `nousdynamicslta@gmail.com`, `mcc@isaacmelo.com` |
 | Webhooks (servidor-a-servidor) | `painel.ide.edu.br/webhook` | Bypass |
+| Coleta de clique do site (navegador) | `painel.ide.edu.br/coleta` | Bypass |
 
 O caminho mais específico vence, então o app de `/webhook` isenta Rubeus e
 Evolution do login — eles se autenticam pelo token do próprio funil, que é o
@@ -93,6 +94,9 @@ Os `GET /api/*` exigem o JWT do Access, verificado no Worker (ver **Acesso**).
 |---|---|---|
 | POST | `/webhook/rubeus/:funil?t=` | Fluxo de automação do Rubeus |
 | POST | `/webhook/evolution/:funil?t=` | Evolution API (upsert por contato+início) |
+| POST | `/webhook/whatsapp/evento/mensagem?t=` | Mensagem recebida no atendimento (Blip): lê o protocolo |
+| POST | `/coleta/protocolo` | Navegador: clique no botão de WhatsApp do site |
+| GET/PUT | `/api/protocolos…` | Protocolos e o interruptor do carimbo |
 | POST | `/webhook/n8n/:funil?t=` | Contingência: reenvio e injeção manual |
 | GET/POST/DELETE | `/api/funis…` | Cadastro de funil e gestão dos tokens |
 | GET | `/api/overview?dias=30` | Leads e conversas (D1) |
@@ -659,6 +663,47 @@ inflando número hoje — por isso a limpeza pode esperar revisão humana.
   altera cadastro real em vez de devolver erro.
 - Teto de cinco tentativas por linha: gclid expirado falha para sempre, e
   reencostar nele todo dia só gastaria cota.
+
+## Protocolo do WhatsApp
+
+Quem chama no WhatsApp pelo site não preenche formulário, então não deixa
+e-mail nem telefone, e nada liga a conversa à origem da visita. O protocolo
+resolve isso pela própria mensagem:
+
+```
+clique no botão  →  script do GTM gera IDE-XXXXXX e põe "[Protocolo: IDE-XXXXXX]"
+                     no fim do texto pronto  →  /coleta/protocolo (com UTM e gclid)
+mensagem chega   →  Blip  →  /webhook/whatsapp/evento/mensagem  →  código + telefone
+cruzamento       →  telefone  →  leads_etapa (etapa atual)  e  cliques_capturados (gclid)
+```
+
+- **O código nasce no navegador**, sem esperar o servidor: o WhatsApp abre na
+  hora, e uma falha de rede custa a medição, nunca a conversa. Alfabeto sem
+  0/O/1/I/L, porque o atendente às vezes digita o código.
+- **Só links de conversa** (`wa.me/<número>`, `api.whatsapp.com/send`,
+  `web.whatsapp.com/send`, `whatsapp://send`). O link curto `wa.me/message/…`
+  não aceita texto e fica como está. Botão que abre o WhatsApp por
+  `window.open` sem ser link não é coberto.
+- **A leitura da mensagem não depende do formato do Blip.** O acesso à ferramenta
+  ainda não saiu, então o código é procurado em qualquer texto do corpo e o
+  telefone nos campos de costume (Blip, Evolution, Meta Cloud API, ou
+  `{ "telefone", "texto" }` vindo de n8n ou de um teste). Mensagem com protocolo
+  e sem telefone reconhecível fica guardada no diário do webhook, para ensinar a
+  leitura. As outras mensagens da conversa não são guardadas.
+- **Nono dígito.** O WhatsApp entrega celular antigo sem o 9, e o Rubeus guarda
+  com ele (05/10/2026: 9.397 telefones de lead com 13 dígitos, 156 com 12). O
+  protocolo grava a forma de 13 e cruza pelas duas.
+- **O primeiro telefone é o dono.** Protocolo que reaparece de outro número é
+  mensagem repassada.
+- **Lead só de WhatsApp ganha gclid.** Se o clique veio de anúncio, o vínculo
+  grava o click id em `cliques_capturados` com o telefone, e a conversão offline
+  o encontra sem saber que existe protocolo.
+- **Interruptor próprio** (`protocolo_ligado`), separado da captura: ligar muda
+  o texto que o aluno vê. Vem desligado. Vale em até 1 hora (cache do script).
+
+Para entrar no ar: `npm run db:remote` (migration 0043) → gerar o link de
+**WhatsApp · Mensagem recebida** em Funis e webhooks → cadastrar no Blip como
+webhook de mensagens recebidas → ligar o interruptor em Protocolos do WhatsApp.
 
 ## Funis e webhooks
 

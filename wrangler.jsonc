@@ -92,6 +92,7 @@
 
   // Secrets (NÃO declarar aqui — usar `npx wrangler secret put <NOME>`):
   //   GOOGLE_ADS_* e RD_STATION_CLIENT_ID / RD_STATION_CLIENT_SECRET.
+  //   META_ACCESS_TOKEN / META_APP_SECRET / META_AD_ACCOUNT_ID / META_API_VERSION.
   //   RUBEUS_ORIGEM / RUBEUS_TOKEN / RUBEUS_BASE_URL (opcional).
   //   Localmente vão em .dev.vars (já ignorado pelo git).
   //

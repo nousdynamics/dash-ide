@@ -502,24 +502,11 @@ async function enriquecer(env: Env, cfg: Config, p: Pendente): Promise<Pendente>
   }
 
   /*
-   * Sem oferta identificada, o curso-pai serve de aproximação.
-   *
-   * Um curso costuma ter várias ofertas — turmas, semestres, campi — com preços
-   * próximos mas não iguais. Pegar a mais recente é melhor do que cair no valor
-   * fixo da tela, e o registro guarda qual preço foi usado para quem quiser
-   * conferir depois.
+   * A oferta vem antes de `cursos`: lá o id do curso e o da oferta dividem a
+   * mesma coluna e colidem (o 354 é "Sexologia" num e a oferta de Disfagia no
+   * outro), e o nível lido do lado errado mandaria a conversão para outra regra.
    */
-  if (!p.oferta_codigo && p.curso_id && (p.valor_total == null || p.valor_inscricao == null)) {
-    const o = await env.DB.prepare(
-      `SELECT valor_total, valor_inscricao FROM curso_ofertas
-        WHERE curso_id = ? AND (valor_total IS NOT NULL OR valor_inscricao IS NOT NULL)
-        ORDER BY atualizado_em DESC LIMIT 1`,
-    ).bind(p.curso_id).first() as { valor_total: number | null; valor_inscricao: number | null } | null;
-    if (o) {
-      p.valor_total = p.valor_total ?? o.valor_total;
-      p.valor_inscricao = p.valor_inscricao ?? o.valor_inscricao;
-    }
-  }
+  await completarPelaOferta(env.DB, p);
 
   // Nível e curso: primeiro o catálogo local, que não custa chamada externa.
   if (!p.nivel_ensino && p.curso_id) {
@@ -729,6 +716,53 @@ type Acao = {
 };
 
 /**
+ * Curso e preço a partir da oferta que o lead escolheu.
+ *
+ * O `curso` da oportunidade do Rubeus não é o curso: é o id da OFERTA (turma,
+ * campus, semestre). Conferido em 30/09/2026 — todos os `curso_id` das
+ * conversões registradas existem como `curso_ofertas.id`, e Medicina de
+ * Emergência aparece com 17 deles. A oferta pertence a um curso só, então dela
+ * saem o código do curso, que é o que a regra do mapa guarda, e os dois preços:
+ * `complemento` (inscrição) e `valor` (total).
+ *
+ * Roda depois do enriquecimento porque o id pode ter vindo do Rubeus ali mesmo.
+ *
+ * Quando a oferta exata está sem preço — no Rubeus, das ofertas de Graduação só
+ * a 706 tem `valor` e `complemento` —, vale a oferta mais nova do MESMO curso
+ * que tenha. É uma aproximação, e `valor_base` no registro diz qual preço foi.
+ */
+async function completarPelaOferta(db: D1Database, p: Pendente): Promise<void> {
+  if (p.curso_id && (!p.curso_codigo || !p.nivel_ensino
+      || p.valor_total == null || p.valor_inscricao == null)) {
+    const o = await db.prepare(
+      `SELECT curso_codigo, oferta_codigo, nome, nivel_ensino, valor_total, valor_inscricao
+         FROM curso_ofertas WHERE id = ?`,
+    ).bind(p.curso_id).first() as {
+      curso_codigo: string | null; oferta_codigo: string | null; nome: string | null;
+      nivel_ensino: string | null; valor_total: number | null; valor_inscricao: number | null;
+    } | null;
+    if (o) {
+      p.curso_codigo = p.curso_codigo ?? o.curso_codigo;
+      p.oferta_codigo = p.oferta_codigo ?? o.oferta_codigo;
+      p.oferta_nome = p.oferta_nome ?? o.nome;
+      p.nivel_ensino = p.nivel_ensino ?? o.nivel_ensino;
+      p.valor_total = p.valor_total ?? o.valor_total;
+      p.valor_inscricao = p.valor_inscricao ?? o.valor_inscricao;
+    }
+  }
+
+  if (p.curso_codigo && (p.valor_total == null || p.valor_inscricao == null)) {
+    const irma = (coluna: 'valor_total' | 'valor_inscricao') => db.prepare(
+      `SELECT ${coluna} AS v FROM curso_ofertas
+        WHERE curso_codigo = ? AND ${coluna} IS NOT NULL
+        ORDER BY CAST(id AS INTEGER) DESC LIMIT 1`,
+    ).bind(p.curso_codigo).first() as Promise<{ v: number } | null>;
+    if (p.valor_total == null) p.valor_total = (await irma('valor_total'))?.v ?? null;
+    if (p.valor_inscricao == null) p.valor_inscricao = (await irma('valor_inscricao'))?.v ?? null;
+  }
+}
+
+/**
  * Qual ação do Google recebe esta conversão — da regra mais específica à mais geral.
  *
  * Quatro escopos, e o primeiro que casar vence: oferta → curso → nível → geral.
@@ -911,7 +945,13 @@ export async function processarPendentes(
              OR (status = 'simulada' AND ? = 'real'))
         AND tentativas < ?
         AND criado_em >= ?
-      ORDER BY criado_em
+      /*
+       * Menos tentadas primeiro. Só por data, as linhas em 'sem_acao' — que
+       * voltam até a quinta tentativa e são as mais antigas — ocupavam as 15
+       * vagas de cada passada: em 01/10/2026, 11 delas reprocessadas às 02:00 e
+       * de novo às 02:30, com 53 pendentes nunca tentadas esperando atrás.
+       */
+      ORDER BY tentativas, criado_em
       LIMIT ?`,
   ).bind(cfg.modo, MAX_TENTATIVAS, corte, limite).all();
 
@@ -925,6 +965,7 @@ export async function processarPendentes(
 
   for (const bruto of fila) {
     const p = await enriquecer(env, cfg, bruto);
+    await completarPelaOferta(env.DB, p);
     const acao = await acaoDoEvento(env.DB, p.evento, {
       oferta: p.oferta_codigo,
       cursoId: p.curso_id,

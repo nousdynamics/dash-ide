@@ -3,6 +3,7 @@ import type { ZodTypeAny, output as ZodOutput } from 'zod';
 import { CorpoInvalido, lerCorpoJson } from '../lib/corpo';
 import { avaliarLead } from '../lib/conversoes';
 import { hashDoToken } from '../lib/credenciais';
+import { lerMensagem, vincular } from '../lib/protocolos';
 import { aprenderEtapaDoEvento, etapaAtualDoRegistro } from '../lib/rubeus';
 import { conversaSchema, etapaSchema, normalizarEtapa } from '../lib/schemas';
 import type { AppEnv } from '../lib/tipos';
@@ -708,6 +709,61 @@ webhooks.post('/rubeus/evento/geral', exigirToken, async (c) => {
     'Recebido pelo webhook geral. Formato ainda não mapeado — o corpo está guardado para análise.',
   );
   return c.json({ ok: true, tratado: false }, 202);
+});
+
+/**
+ * POST /webhook/whatsapp/evento/mensagem — mensagem recebida no atendimento.
+ *
+ * Feito para o Blip, mas sem depender dele: o acesso à ferramenta ainda não
+ * saiu, e o formato exato do evento só vai ser conhecido quando sair. A leitura
+ * (src/lib/protocolos.ts) procura o código do protocolo em qualquer texto do
+ * corpo e o telefone nos campos de costume — Blip, Evolution, Meta Cloud API ou
+ * o formato genérico `{ "telefone": "...", "texto": "..." }`, que é o que um
+ * n8n ou um teste à mão mandam.
+ *
+ * Toda mensagem da conversa passa por aqui, e só a primeira tem protocolo. As
+ * outras recebem 200 e somem: nem diário, nem corpo guardado. Guardar texto de
+ * conversa privada que não serve ao cruzamento seria dado pessoal sem motivo.
+ * O "recebendo eventos" da tela de webhooks já conta todas, pelo token.
+ *
+ * Responde 200 inclusive quando não entende. Ferramenta de atendimento que
+ * recebe erro costuma reenviar em laço, e não há o que ela possa corrigir.
+ */
+webhooks.post('/whatsapp/evento/mensagem', exigirToken, async (c) => {
+  const cru = await c.req.raw.clone().text().catch(() => '');
+  let corpo: unknown;
+  try {
+    corpo = await lerCorpoJson(c.req.raw);
+  } catch {
+    return c.json({ ok: true, tratado: false, motivo: 'corpo_ilegivel' });
+  }
+
+  const m = lerMensagem(corpo);
+  if (!m.codigo) return c.json({ ok: true, tratado: false, motivo: 'sem_protocolo' });
+  if (m.enviadaPorNos) return c.json({ ok: true, tratado: false, motivo: 'mensagem_do_atendimento' });
+
+  if (!m.telefone) {
+    // Tem protocolo e não achou quem mandou: é o formato que ainda não
+    // conhecemos. Guarda o corpo para ensinar a leitura.
+    registrarEvento(c, 'protocolo_sem_telefone', cru,
+      `Protocolo ${m.codigo} recebido, mas nenhum campo de telefone reconhecido no corpo.`);
+    return c.json({ ok: true, tratado: false, motivo: 'sem_telefone', codigo: m.codigo });
+  }
+
+  const fonte = c.req.query('fonte')?.slice(0, 20)
+    || (cru.includes('msging.net') ? 'blip' : 'generico');
+  const v = await vincular(c.env.DB, m.codigo, m.telefone, m.nome, fonte);
+
+  registrarEvento(c, `protocolo_${v.resultado}`, cru,
+    v.resultado === 'vinculado'
+      ? `Protocolo ${v.codigo} ligado ao telefone${v.capturouClique ? '; click id do anúncio registrado' : ''}.`
+      : v.resultado === 'ja_vinculado'
+        ? `Protocolo ${v.codigo} já tinha dono; o primeiro telefone foi mantido.`
+        : `Protocolo ${v.codigo} não existe no painel — gerado com o interruptor desligado ou digitado errado.`,
+    { contato_nome: m.nome });
+
+  console.log(JSON.stringify({ evento: 'protocolo_mensagem', resultado: v.resultado, fonte }));
+  return c.json({ ok: true, tratado: true, resultado: v.resultado, codigo: v.codigo });
 });
 
 webhooks.post('/rubeus/evento/:tipo', exigirToken, (c) => gravarEtapa(c, null));
